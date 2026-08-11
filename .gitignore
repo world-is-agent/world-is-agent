@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+
+# IDE/editor state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Go local artifacts
+*.test
+coverage.out

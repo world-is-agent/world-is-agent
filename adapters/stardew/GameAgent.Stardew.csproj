@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -19,6 +20,16 @@
     <Reference Include="StardewModdingAPI" HintPath="$(GamePath)\StardewModdingAPI.dll" Private="False" />
     <Reference Include="StardewValley.GameData" HintPath="$(GamePath)\StardewValley.GameData.dll" Private="False" />
     <Reference Include="xTile" HintPath="$(GamePath)\xTile.dll" Private="False" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.27.3" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.64.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.64.0" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\protocol\proto\gameagent.proto" GrpcServices="Client" />
   </ItemGroup>
 
   <ItemGroup>

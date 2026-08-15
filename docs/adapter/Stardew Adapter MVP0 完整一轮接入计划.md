@@ -49,6 +49,8 @@ Adapter 作为 SMAPI Mod 内的 gRPC client，直接连接 Runtime 的 `GameAgen
 
 `ActionResult` 失败时必须填 `error` 字段，例如空文本、找不到 NPC、不支持的 capability、主线程执行异常，都返回 `status = FAILED` 并携带错误 code/message。
 
+`ObserveRequest` 失败（world 未就绪、`entity_id` 非法、NPC 找不到）时，Adapter 发送 `AdapterMessage{Error}`，`correlation_id = observe.message_id`。Runtime recvLoop 已能消费 inbound `Error`：按 `correlation_id` 调 `failObservation` 唤醒对应的 `Observe` 等待者并返回错误，避免该 turn 阻塞到连接超时。注意这是 observe 侧的失败通道；action 失败仍走 `ActionResult{status=FAILED}`，由 `action_id` 匹配，两条通道互不干扰。
+
 `ActionResult.status` 和 `error` 在 Runtime MVP0 中暂不触发重试或模型反馈，主要用于日志和手动链路排查。
 
 ## Test Plan

@@ -2,7 +2,7 @@
   "Name": "GameAgent Stardew Adapter Probe",
   "Author": "GameAgent",
   "Version": "0.1.0",
-  "Description": "Capability spike for observing Linus interactions and showing a hardcoded GameAgent dialogue.",
+  "Description": "Runtime-connected adapter for sending Linus interaction events and executing GameAgent speak actions.",
   "UniqueID": "gameagent.StardewAdapterProbe",
   "EntryDll": "GameAgent.Stardew.dll",
   "MinimumApiVersion": "4.0.0",

@@ -1,5 +1,4 @@
-using GameAgent.Stardew.Capabilities;
-using GameAgent.Stardew.State;
+using GameAgent.Stardew.Runtime;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
@@ -11,22 +10,19 @@ namespace GameAgent.Stardew.Events;
 public sealed class PlayerInteractProbe
 {
     private readonly string targetAgentName;
-    private readonly ObservationBuilder observationBuilder;
-    private readonly SpeakCapability speakCapability;
+    private readonly RuntimeClient runtimeClient;
     private readonly IMonitor monitor;
     private readonly IInputHelper input;
 
     public PlayerInteractProbe(
         string targetAgentName,
-        ObservationBuilder observationBuilder,
-        SpeakCapability speakCapability,
+        RuntimeClient runtimeClient,
         IMonitor monitor,
         IInputHelper input
     )
     {
         this.targetAgentName = targetAgentName;
-        this.observationBuilder = observationBuilder;
-        this.speakCapability = speakCapability;
+        this.runtimeClient = runtimeClient;
         this.monitor = monitor;
         this.input = input;
     }
@@ -43,10 +39,15 @@ public sealed class PlayerInteractProbe
         if (target is null)
             return false;
 
-        ProbeObservation observation = this.observationBuilder.Build(target, Game1.player, "player_interact");
-        this.monitor.Log(observation.ToLogLine(), LogLevel.Info);
+        if (!this.runtimeClient.IsReady)
+        {
+            this.monitor.Log("GameAgent Runtime is not ready; letting Stardew handle the click.", LogLevel.Warn);
+            return false;
+        }
+
         this.input.Suppress(e.Button);
-        this.speakCapability.Speak(target, SpeakCapability.ProbeText);
+        this.runtimeClient.SendPlayerInteracted(target, Game1.player, "player_interact");
+        this.monitor.Log($"GameAgent interaction event queued for {target.Name}.", LogLevel.Debug);
 
         return true;
     }

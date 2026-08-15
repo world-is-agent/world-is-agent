@@ -153,6 +153,12 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 				continue
 			}
 			env.resolveActionResult(payload.ActionResult.ActionId, payload.ActionResult)
+
+		case *protocolv1alpha1.AdapterMessage_Error:
+			if payload.Error == nil {
+				continue
+			}
+			env.failObservation(msg.CorrelationId, fmt.Errorf("adapter error %s: %s", payload.Error.Code, payload.Error.Message))
 		}
 	}
 

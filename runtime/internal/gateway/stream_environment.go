@@ -100,6 +100,19 @@ func (e *streamEnvironment) resolveObservation(correlationID string, observation
 	ch <- observeResult{observation: observation}
 }
 
+// failObservation 用 Adapter 返回的 Error 唤醒对应 Observe 调用。
+func (e *streamEnvironment) failObservation(correlationID string, err error) {
+	e.pendingMu.Lock()
+	ch := e.pendingObservations[correlationID]
+	e.pendingMu.Unlock()
+
+	if ch == nil {
+		return
+	}
+
+	ch <- observeResult{err: err}
+}
+
 // SubmitAction 发送 ActionRequest，并等待 Adapter 返回对应 action_id 的 ActionResult。
 func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha1.ActionRequest) (*protocolv1alpha1.ActionResult, error) {
 	if req == nil {

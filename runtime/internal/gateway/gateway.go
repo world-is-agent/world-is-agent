@@ -33,8 +33,9 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		return fmt.Errorf("expected adapter hello as first message")
 	}
 
+	readyMessageID := newMessageID("runtime_ready")
 	readyMessage := &protocolv1alpha1.RuntimeMessage{
-		MessageId: "runtime_ready_1",
+		MessageId: readyMessageID,
 		Payload: &protocolv1alpha1.RuntimeMessage_EnvironmentReady{
 			EnvironmentReady: &protocolv1alpha1.EnvironmentReady{
 				EnvironmentId:    hello.InstanceId,
@@ -47,7 +48,7 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		return err
 	}
 
-	capabilityRequestID := "cap_req_1"
+	capabilityRequestID := newMessageID("cap_req")
 	capabilityRequestMessage := &protocolv1alpha1.RuntimeMessage{
 		MessageId: capabilityRequestID,
 		Payload: &protocolv1alpha1.RuntimeMessage_CapabilityRequest{
@@ -79,5 +80,59 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 
 	s.tools.RegisterEnvironmentCapabilities(names)
 
-	return nil
+	env := newStreamEnvironment(stream)
+	eventCh := make(chan *protocolv1alpha1.GameEvent, 16)
+
+	go func() {
+		for event := range eventCh {
+			if err := s.agentLoop.HandleEvent(stream.Context(), env, event); err != nil {
+				fmt.Printf("agent loop failed: %v\n", err)
+			}
+		}
+	}()
+
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			env.failAllPending(err)
+			close(eventCh)
+			return err
+		}
+
+		switch payload := msg.Payload.(type) {
+		case *protocolv1alpha1.AdapterMessage_Event:
+			if payload.Event == nil {
+				continue
+			}
+			ack := &protocolv1alpha1.RuntimeMessage{
+				MessageId:     newMessageID("event_ack"),
+				CorrelationId: msg.MessageId,
+				Payload: &protocolv1alpha1.RuntimeMessage_EventAck{
+					EventAck: &protocolv1alpha1.EventAck{
+						EventId: payload.Event.EventId,
+						Status:  protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED,
+					},
+				},
+			}
+
+			if err := env.send(ack); err != nil {
+				return err
+			}
+
+			eventCh <- payload.Event
+
+		case *protocolv1alpha1.AdapterMessage_Observation:
+			if payload.Observation == nil {
+				continue
+			}
+			env.resolveObservation(msg.CorrelationId, payload.Observation)
+
+		case *protocolv1alpha1.AdapterMessage_ActionResult:
+			if payload.ActionResult == nil {
+				continue
+			}
+			env.resolveActionResult(payload.ActionResult.ActionId, payload.ActionResult)
+		}
+	}
+
 }

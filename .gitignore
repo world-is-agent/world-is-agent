@@ -21,3 +21,4 @@ Thumbs.db
 # Go local artifacts
 *.test
 coverage.out
+.gocache/

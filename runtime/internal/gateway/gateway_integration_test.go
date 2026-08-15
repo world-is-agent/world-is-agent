@@ -10,7 +10,7 @@ import (
 
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/agent"
-	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/tool"
 
 	"google.golang.org/grpc"
@@ -26,7 +26,7 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	registry := tool.NewRegistry()
-	loop := agent.NewLoop(model.FakeProvider{}, registry)
+	loop := agent.NewLoop(fake.NewProvider(), registry)
 	protocolv1alpha1.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
 
 	serverErrCh := make(chan error, 1)

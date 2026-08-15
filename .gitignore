@@ -17,6 +17,7 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+*.stackdump
 
 # Go local artifacts
 *.test

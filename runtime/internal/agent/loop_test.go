@@ -6,7 +6,7 @@ import (
 
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/agent"
-	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/tool"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -48,7 +48,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	registry.RegisterEnvironmentCapabilities([]string{"speak"})
 
 	env := &fakeEnvironment{}
-	loop := agent.NewLoop(model.FakeProvider{}, registry)
+	loop := agent.NewLoop(fake.NewProvider(), registry)
 
 	event := &protocolv1alpha1.GameEvent{
 		EventType: "player_interacted_with_npc",

@@ -59,15 +59,7 @@ func (l *Loop) HandleEvent(
 
 	// MVP0 先把 Observation 简单放进 prompt；后续可以拆出 prompt builder，
 	// 专门格式化 GameTime、State、NearbyEntities 等字段。
-	prompt := fmt.Sprintf(
-		"You are controlling an NPC in a game.\nObservation: %v",
-		obs,
-	)
-	tools := l.tools.Available()
-	req := model.Request{
-		Prompt: prompt,
-		Tools:  tools,
-	}
+	req := BuildModelRequest(event, obs, l.tools.Available())
 	rep, err := l.model.Generate(ctx, req)
 	if err != nil {
 		return err

@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// Registry 保存 Runtime 当前可暴露给 Agent Loop 的工具。
+//
+// Adapter 上报的是 capability，Runtime 注册后才变成模型可见的 tool。
 type Registry struct {
 	tools map[string]model.ToolDefinition
 }
@@ -17,10 +20,10 @@ func NewRegistry() *Registry {
 	}
 }
 
-// 注册工具
+// RegisterEnvironmentCapabilities 把 Adapter 的 environment-level capability 注册成 tool。
 func (r *Registry) RegisterEnvironmentCapabilities(capabilities []string) {
 	for _, capability := range capabilities {
-		//暂时只注册“speak 能力”
+		// MVP0 只允许 speak，避免模型调用 Adapter 尚未实现的能力。
 		if capability != "speak" {
 			continue
 		}
@@ -33,7 +36,6 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []string) {
 	}
 }
 
-// 查询当前可用工具列表
 func (r *Registry) Available() []model.ToolDefinition {
 	available := make([]model.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
@@ -42,7 +44,6 @@ func (r *Registry) Available() []model.ToolDefinition {
 	return available
 }
 
-// 判断工具name是否合法
 func (r *Registry) HasTool(name string) bool {
 	if _, exists := r.tools[name]; exists {
 		return true
@@ -50,7 +51,7 @@ func (r *Registry) HasTool(name string) bool {
 	return false
 }
 
-// 判断工具param是否合法
+// ValidateToolCall 校验模型返回的 ToolCall 是否能安全转成 ActionRequest。
 func (r *Registry) ValidateToolCall(entityID string, call model.ToolCall) error {
 	if !r.HasTool(call.Name) {
 		return fmt.Errorf("tool %q is not registered", call.Name)

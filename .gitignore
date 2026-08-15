@@ -22,3 +22,6 @@ Thumbs.db
 *.test
 coverage.out
 .gocache/
+
+
+/docs

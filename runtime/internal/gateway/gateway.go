@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// Server 实现 Runtime 侧的 GameAgentGateway gRPC 服务。
 type Server struct {
 	protocolv1alpha1.UnimplementedGameAgentGatewayServer
 
@@ -22,6 +23,10 @@ func NewServer(agentLoop *agent.Loop, tools *tool.Registry) *Server {
 	}
 }
 
+// Connect 管理一条 Adapter stream 的完整生命周期。
+//
+// 它先完成 Environment Bootstrap，发现 Adapter 提供的 capabilities，
+// 然后进入 recvLoop 持续分发 GameEvent / Observation / ActionResult。
 func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer) error {
 	firstMessage, err := stream.Recv()
 	if err != nil {
@@ -33,6 +38,8 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		return fmt.Errorf("expected adapter hello as first message")
 	}
 
+	// EnvironmentReady 只表示协议连接已经建立；Runtime 是否能执行
+	// AgentRun，还要等 capability discovery 完成。
 	readyMessageID := newMessageID("runtime_ready")
 	readyMessage := &protocolv1alpha1.RuntimeMessage{
 		MessageId: readyMessageID,
@@ -48,6 +55,8 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		return err
 	}
 
+	// MVP0 先发现 environment-level capability；未来如果不同 entity
+	// 能力不同，再把 CapabilityRequest 细化到 entity_id 维度。
 	capabilityRequestID := newMessageID("cap_req")
 	capabilityRequestMessage := &protocolv1alpha1.RuntimeMessage{
 		MessageId: capabilityRequestID,
@@ -83,6 +92,8 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 	env := newStreamEnvironment(stream)
 	eventCh := make(chan *protocolv1alpha1.GameEvent, 16)
 
+	// AgentRun 不能直接在 recvLoop 中执行：HandleEvent 会等待
+	// Observation / ActionResult，而这些回复也必须由 recvLoop 接收。
 	go func() {
 		for event := range eventCh {
 			if err := s.agentLoop.HandleEvent(stream.Context(), env, event); err != nil {
@@ -91,6 +102,7 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		}
 	}()
 
+	// recvLoop 只负责接收和分发 AdapterMessage，避免被单次 AgentRun 阻塞。
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
@@ -99,11 +111,15 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 			return err
 		}
 
+		// Event 会启动新的 AgentRun；Observation / ActionResult 用来唤醒
+		// 已经在 streamEnvironment 中等待的同步调用。
 		switch payload := msg.Payload.(type) {
 		case *protocolv1alpha1.AdapterMessage_Event:
 			if payload.Event == nil {
 				continue
 			}
+			// EventAck 表示 Runtime 已接收该 GameEvent；真正的 action
+			// 执行结果会在后续 ActionResult 中体现。
 			ack := &protocolv1alpha1.RuntimeMessage{
 				MessageId:     newMessageID("event_ack"),
 				CorrelationId: msg.MessageId,

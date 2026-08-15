@@ -1,10 +1,12 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/tool"
+	"io"
 	"time"
 )
 
@@ -108,6 +110,9 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		if err != nil {
 			env.failAllPending(err)
 			close(eventCh)
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
 			return err
 		}
 

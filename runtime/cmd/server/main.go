@@ -3,6 +3,9 @@ package main
 import (
 	"log"
 	"net"
+	"os"
+	"os/signal"
+	"syscall"
 
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/agent"
@@ -29,10 +32,18 @@ func main() {
 		log.Fatalf("listen failed: %v", err)
 	}
 
-	log.Println("GameAgent Runtime listening on 127.0.0.1:50051")
+	go func() {
+		log.Println("GameAgent Runtime listening on 127.0.0.1:50051")
+		if err := grpcServer.Serve(listener); err != nil && err != grpc.ErrServerStopped {
+			log.Printf("serve stopped: %v", err)
+		}
+	}()
 
-	if err := grpcServer.Serve(listener); err != nil {
-		log.Fatalf("serve failed: %v", err)
-	}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
+	<-stop
+
+	log.Println("shutting down GameAgent Runtime")
+	grpcServer.GracefulStop()
 }

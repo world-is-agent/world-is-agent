@@ -30,13 +30,14 @@ public static class ProtocolMapper
         return false;
     }
 
-    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string trigger, ulong sequence)
+    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string trigger, ulong sequence, string saveId)
     {
         return new GameEvent
         {
             EventId = NewMessageId("event"),
             EventType = "player_interacted_with_npc",
             GameTime = BuildGameTime(),
+            SaveId = saveId,
             Payload = new Struct
             {
                 Fields =
@@ -54,13 +55,14 @@ public static class ProtocolMapper
         };
     }
 
-    public static Observation BuildObservation(string entityId, ProbeObservation probe)
+    public static Observation BuildObservation(string entityId, ProbeObservation probe, string saveId)
     {
         return new Observation
         {
             EntityId = entityId,
             Revision = 1,
             GameTime = BuildGameTime(),
+            SaveId = saveId,
             State = new Struct
             {
                 Fields =

@@ -1,6 +1,8 @@
 package tool
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
@@ -53,6 +55,31 @@ func TestRegisterEnvironmentCapabilitiesUsesAdapterSchema(t *testing.T) {
 	if got.InputSchema != `{"type":"object","properties":{"emote":{"type":"string"}},"required":["emote"]}` {
 		t.Fatalf("tool schema = %q", got.InputSchema)
 	}
+}
+
+func TestRegistryAllowsConcurrentRegisterAndRead(t *testing.T) {
+	registry := NewRegistry()
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+
+			for i := 0; i < 200; i++ {
+				registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+					{
+						Name:            fmt.Sprintf("tool_%d_%d", worker, i),
+						InputSchemaJson: `{"type":"object"}`,
+					},
+				})
+				_ = registry.Available()
+				_ = registry.HasTool("tool_0_0")
+			}
+		}(worker)
+	}
+
+	wg.Wait()
 }
 
 func TestValidateToolCallOnlyChecksEnvelope(t *testing.T) {

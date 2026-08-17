@@ -43,6 +43,8 @@ public sealed class ModEntry : Mod
         );
 
         helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
+        helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
+        helper.Events.GameLoop.ReturnedToTitle += this.OnReturnedToTitle;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.ConsoleCommands.Add(
@@ -70,6 +72,16 @@ public sealed class ModEntry : Mod
         {
             this.Monitor.Log($"Failed to start GameAgent Runtime client: {ex}", LogLevel.Error);
         }
+    }
+
+    private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
+    {
+        this.runtimeClient?.RefreshSaveContext();
+    }
+
+    private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
+    {
+        this.runtimeClient?.ClearSaveContext();
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)

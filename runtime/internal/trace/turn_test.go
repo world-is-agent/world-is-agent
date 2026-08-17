@@ -21,8 +21,9 @@ func (r *memoryRecorder) Close(ctx context.Context) error {
 func TestTurnTracerEmitsContextAndSequentialEvents(t *testing.T) {
 	recorder := &memoryRecorder{}
 	ctx := TurnContext{
-		GameID:    "stardew-valley",
-		EnvID:     "save-1",
+		GameID:    "fake-game",
+		SaveID:    "save-1",
+		SessionID: "session-1",
 		EventID:   "event-1",
 		EventType: "player_interacted_with_npc",
 		EntityID:  "npc:Linus",
@@ -54,7 +55,7 @@ func TestTurnTracerEmitsContextAndSequentialEvents(t *testing.T) {
 	if first.TraceID != first.TurnID {
 		t.Fatalf("expected trace_id == turn_id, got trace_id=%q turn_id=%q", first.TraceID, first.TurnID)
 	}
-	if first.GameID != ctx.GameID || first.EnvID != ctx.EnvID || first.EventID != ctx.EventID || first.EventType != ctx.EventType || first.EntityID != ctx.EntityID {
+	if first.GameID != ctx.GameID || first.SaveID != ctx.SaveID || first.SessionID != ctx.SessionID || first.EventID != ctx.EventID || first.EventType != ctx.EventType || first.EntityID != ctx.EntityID {
 		t.Fatalf("event context mismatch: got %+v", first)
 	}
 

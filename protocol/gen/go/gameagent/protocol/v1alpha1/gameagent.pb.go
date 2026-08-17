@@ -197,7 +197,7 @@ type AdapterHello struct {
 	ProtocolVersion string                 `protobuf:"bytes,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	GameId          string                 `protobuf:"bytes,4,opt,name=game_id,json=gameId,proto3" json:"game_id,omitempty"`
 	GameVersion     string                 `protobuf:"bytes,5,opt,name=game_version,json=gameVersion,proto3" json:"game_version,omitempty"`
-	InstanceId      string                 `protobuf:"bytes,6,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
+	SessionId       string                 `protobuf:"bytes,6,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	SaveId          string                 `protobuf:"bytes,7,opt,name=save_id,json=saveId,proto3" json:"save_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -268,9 +268,9 @@ func (x *AdapterHello) GetGameVersion() string {
 	return ""
 }
 
-func (x *AdapterHello) GetInstanceId() string {
+func (x *AdapterHello) GetSessionId() string {
 	if x != nil {
-		return x.InstanceId
+		return x.SessionId
 	}
 	return ""
 }
@@ -284,7 +284,7 @@ func (x *AdapterHello) GetSaveId() string {
 
 type EnvironmentReady struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
-	EnvironmentId    string                 `protobuf:"bytes,1,opt,name=environment_id,json=environmentId,proto3" json:"environment_id,omitempty"`
+	SessionId        string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	ServerTimeUnixMs int64                  `protobuf:"varint,2,opt,name=server_time_unix_ms,json=serverTimeUnixMs,proto3" json:"server_time_unix_ms,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
@@ -320,9 +320,9 @@ func (*EnvironmentReady) Descriptor() ([]byte, []int) {
 	return file_gameagent_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *EnvironmentReady) GetEnvironmentId() string {
+func (x *EnvironmentReady) GetSessionId() string {
 	if x != nil {
-		return x.EnvironmentId
+		return x.SessionId
 	}
 	return ""
 }
@@ -486,6 +486,7 @@ type GameEvent struct {
 	GameTime      *GameTime              `protobuf:"bytes,4,opt,name=game_time,json=gameTime,proto3" json:"game_time,omitempty"`
 	Payload       *structpb.Struct       `protobuf:"bytes,5,opt,name=payload,proto3" json:"payload,omitempty"`
 	Sequence      uint64                 `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	SaveId        string                 `protobuf:"bytes,7,opt,name=save_id,json=saveId,proto3" json:"save_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -560,6 +561,13 @@ func (x *GameEvent) GetSequence() uint64 {
 		return x.Sequence
 	}
 	return 0
+}
+
+func (x *GameEvent) GetSaveId() string {
+	if x != nil {
+		return x.SaveId
+	}
+	return ""
 }
 
 type EventAck struct {
@@ -674,6 +682,7 @@ type Observation struct {
 	State          *structpb.Struct       `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
 	NearbyEntities []*EntityRef           `protobuf:"bytes,5,rep,name=nearby_entities,json=nearbyEntities,proto3" json:"nearby_entities,omitempty"`
 	Extensions     *structpb.Struct       `protobuf:"bytes,6,opt,name=extensions,proto3" json:"extensions,omitempty"`
+	SaveId         string                 `protobuf:"bytes,7,opt,name=save_id,json=saveId,proto3" json:"save_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -748,6 +757,13 @@ func (x *Observation) GetExtensions() *structpb.Struct {
 		return x.Extensions
 	}
 	return nil
+}
+
+func (x *Observation) GetSaveId() string {
+	if x != nil {
+		return x.SaveId
+	}
+	return ""
 }
 
 type Capability struct {
@@ -1682,19 +1698,20 @@ var File_gameagent_proto protoreflect.FileDescriptor
 
 const file_gameagent_proto_rawDesc = "" +
 	"\n" +
-	"\x0fgameagent.proto\x12\x1bgameagent.protocol.v1alpha1\x1a\x1cgoogle/protobuf/struct.proto\"\xf7\x01\n" +
+	"\x0fgameagent.proto\x12\x1bgameagent.protocol.v1alpha1\x1a\x1cgoogle/protobuf/struct.proto\"\xf5\x01\n" +
 	"\fAdapterHello\x12\x1d\n" +
 	"\n" +
 	"adapter_id\x18\x01 \x01(\tR\tadapterId\x12'\n" +
 	"\x0fadapter_version\x18\x02 \x01(\tR\x0eadapterVersion\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\tR\x0fprotocolVersion\x12\x17\n" +
 	"\agame_id\x18\x04 \x01(\tR\x06gameId\x12!\n" +
-	"\fgame_version\x18\x05 \x01(\tR\vgameVersion\x12\x1f\n" +
-	"\vinstance_id\x18\x06 \x01(\tR\n" +
-	"instanceId\x12\x17\n" +
-	"\asave_id\x18\a \x01(\tR\x06saveId\"h\n" +
-	"\x10EnvironmentReady\x12%\n" +
-	"\x0eenvironment_id\x18\x01 \x01(\tR\renvironmentId\x12-\n" +
+	"\fgame_version\x18\x05 \x01(\tR\vgameVersion\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x06 \x01(\tR\tsessionId\x12\x17\n" +
+	"\asave_id\x18\a \x01(\tR\x06saveId\"`\n" +
+	"\x10EnvironmentReady\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12-\n" +
 	"\x13server_time_unix_ms\x18\x02 \x01(\x03R\x10serverTimeUnixMs\"l\n" +
 	"\tEntityRef\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\tR\bentityId\x12\x1f\n" +
@@ -1713,7 +1730,7 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x04_dayB\a\n" +
 	"\x05_hourB\t\n" +
 	"\a_minuteB\a\n" +
-	"\x05_tick\"\x9c\x02\n" +
+	"\x05_tick\"\xb5\x02\n" +
 	"\tGameEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -1721,13 +1738,14 @@ const file_gameagent_proto_rawDesc = "" +
 	"\bentities\x18\x03 \x03(\v2&.gameagent.protocol.v1alpha1.EntityRefR\bentities\x12B\n" +
 	"\tgame_time\x18\x04 \x01(\v2%.gameagent.protocol.v1alpha1.GameTimeR\bgameTime\x121\n" +
 	"\apayload\x18\x05 \x01(\v2\x17.google.protobuf.StructR\apayload\x12\x1a\n" +
-	"\bsequence\x18\x06 \x01(\x04R\bsequence\"\xa4\x01\n" +
+	"\bsequence\x18\x06 \x01(\x04R\bsequence\x12\x17\n" +
+	"\asave_id\x18\a \x01(\tR\x06saveId\"\xa4\x01\n" +
 	"\bEventAck\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12C\n" +
 	"\x06status\x18\x02 \x01(\x0e2+.gameagent.protocol.v1alpha1.EventAckStatusR\x06status\x128\n" +
 	"\x05error\x18\x03 \x01(\v2\".gameagent.protocol.v1alpha1.ErrorR\x05error\"-\n" +
 	"\x0eObserveRequest\x12\x1b\n" +
-	"\tentity_id\x18\x01 \x01(\tR\bentityId\"\xc3\x02\n" +
+	"\tentity_id\x18\x01 \x01(\tR\bentityId\"\xdc\x02\n" +
 	"\vObservation\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\tR\bentityId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12B\n" +
@@ -1736,7 +1754,8 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x0fnearby_entities\x18\x05 \x03(\v2&.gameagent.protocol.v1alpha1.EntityRefR\x0enearbyEntities\x127\n" +
 	"\n" +
 	"extensions\x18\x06 \x01(\v2\x17.google.protobuf.StructR\n" +
-	"extensions\"\x94\x02\n" +
+	"extensions\x12\x17\n" +
+	"\asave_id\x18\a \x01(\tR\x06saveId\"\x94\x02\n" +
 	"\n" +
 	"Capability\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +

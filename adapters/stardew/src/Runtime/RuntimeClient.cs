@@ -25,6 +25,9 @@ public sealed class RuntimeClient : IDisposable
     private AsyncDuplexStreamingCall<AdapterMessage, RuntimeMessage>? stream;
     private CancellationTokenSource? cancellation;
     private Task? receiveTask;
+    private readonly string sessionId = Guid.NewGuid().ToString("N");
+    // currentSaveId 由 SMAPI 主线程生命周期事件维护；后台 gRPC 线程不要直接解析游戏状态。
+    private volatile string currentSaveId = string.Empty;
     private long eventSequence;
     private volatile bool isReady;
 
@@ -76,7 +79,7 @@ public sealed class RuntimeClient : IDisposable
         }
 
         ulong sequence = unchecked((ulong)Interlocked.Increment(ref this.eventSequence));
-        GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, trigger, sequence);
+        GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, trigger, sequence, this.currentSaveId);
 
         await this.SendAsync(
             new AdapterMessage
@@ -147,8 +150,8 @@ public sealed class RuntimeClient : IDisposable
             ProtocolVersion = this.config.ProtocolVersion,
             GameId = this.config.GameId,
             GameVersion = "unknown",
-            InstanceId = $"{this.config.AdapterId}:{Environment.MachineName}",
-            SaveId = Context.IsWorldReady ? Game1.player.Name : string.Empty,
+            SessionId = this.sessionId,
+            SaveId = this.currentSaveId,
         };
 
         await this.SendAsync(
@@ -223,7 +226,7 @@ public sealed class RuntimeClient : IDisposable
         {
             NPC npc = this.RequireNpc(request.EntityId);
             ProbeObservation probe = this.observationBuilder.Build(npc, Game1.player, "runtime_observe");
-            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, probe);
+            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, probe, this.currentSaveId);
 
             this.SendFireAndForget(
                 this.SendAsync(
@@ -299,6 +302,28 @@ public sealed class RuntimeClient : IDisposable
         return npc;
     }
 
+    public void RefreshSaveContext()
+    {
+        this.currentSaveId = this.ResolveCurrentSaveId();
+        this.monitor.Log($"GameAgent save context refreshed: save_id={this.currentSaveId}", LogLevel.Debug);
+    }
+
+    public void ClearSaveContext()
+    {
+        this.currentSaveId = string.Empty;
+    }
+
+    private string ResolveCurrentSaveId()
+    {
+        if (!Context.IsWorldReady)
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(Constants.SaveFolderName))
+            return Constants.SaveFolderName;
+
+        return Game1.player?.UniqueMultiplayerID.ToString() ?? string.Empty;
+    }
+
     private async Task SendAsync(AdapterMessage message, CancellationToken cancellationToken)
     {
         if (this.stream is null)
@@ -324,13 +349,13 @@ public sealed class RuntimeClient : IDisposable
         string detail = message.PayloadCase switch
         {
             AdapterMessage.PayloadOneofCase.Hello =>
-                $"AdapterHello message_id={message.MessageId} adapter_id={message.Hello?.AdapterId} game_id={message.Hello?.GameId}",
+                $"AdapterHello message_id={message.MessageId} adapter_id={message.Hello?.AdapterId} game_id={message.Hello?.GameId} session_id={message.Hello?.SessionId} save_id={message.Hello?.SaveId}",
             AdapterMessage.PayloadOneofCase.Capabilities =>
                 $"CapabilityList message_id={message.MessageId} correlation_id={message.CorrelationId} capabilities=[{string.Join(",", message.Capabilities.Capabilities.Select(capability => capability.Name))}]",
             AdapterMessage.PayloadOneofCase.Event =>
-                $"GameEvent message_id={message.MessageId} event_id={message.Event?.EventId} event_type={message.Event?.EventType} entities=[{FormatEntities(message.Event)}]",
+                $"GameEvent message_id={message.MessageId} event_id={message.Event?.EventId} event_type={message.Event?.EventType} save_id={message.Event?.SaveId} entities=[{FormatEntities(message.Event)}]",
             AdapterMessage.PayloadOneofCase.Observation =>
-                $"Observation message_id={message.MessageId} correlation_id={message.CorrelationId} entity_id={message.Observation?.EntityId}",
+                $"Observation message_id={message.MessageId} correlation_id={message.CorrelationId} entity_id={message.Observation?.EntityId} save_id={message.Observation?.SaveId}",
             AdapterMessage.PayloadOneofCase.ActionResult =>
                 $"ActionResult message_id={message.MessageId} action_id={message.ActionResult?.ActionId} status={message.ActionResult?.Status}",
             AdapterMessage.PayloadOneofCase.Error =>
@@ -350,7 +375,7 @@ public sealed class RuntimeClient : IDisposable
         string detail = message.PayloadCase switch
         {
             RuntimeMessage.PayloadOneofCase.EnvironmentReady =>
-                $"EnvironmentReady message_id={message.MessageId} environment_id={message.EnvironmentReady?.EnvironmentId}",
+                $"EnvironmentReady message_id={message.MessageId} session_id={message.EnvironmentReady?.SessionId}",
             RuntimeMessage.PayloadOneofCase.CapabilityRequest =>
                 $"CapabilityRequest message_id={message.MessageId}",
             RuntimeMessage.PayloadOneofCase.EventAck =>

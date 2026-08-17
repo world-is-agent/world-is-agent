@@ -17,12 +17,12 @@ message AdapterHello {
   string protocol_version = 3;
   string game_id = 4;
   string game_version = 5;
-  string instance_id = 6;
+  string session_id = 6;
   string save_id = 7;
 }
 
 message EnvironmentReady {
-  string environment_id = 1;
+  string session_id = 1;
   int64 server_time_unix_ms = 2;
 }
 
@@ -48,6 +48,7 @@ message GameEvent {
   GameTime game_time = 4;
   google.protobuf.Struct payload = 5;
   uint64 sequence = 6;
+  string save_id = 7;
 }
 
 enum EventAckStatus {
@@ -74,6 +75,7 @@ message Observation {
   google.protobuf.Struct state = 4;
   repeated EntityRef nearby_entities = 5;
   google.protobuf.Struct extensions = 6;
+  string save_id = 7;
 }
 
 enum ExecutionMode {

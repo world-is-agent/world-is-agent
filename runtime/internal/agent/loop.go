@@ -25,8 +25,8 @@ type Loop struct {
 }
 
 type ConnectionContext struct {
-	GameID string
-	EnvID  string
+	GameID    string
+	SessionID string
 }
 
 func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.Recorder) *Loop {
@@ -54,7 +54,7 @@ func (l *Loop) HandleEvent(
 		return nil
 	}
 
-	// Agent Loop 只理解 protocol entity，不知道 Stardew / SMAPI 的具体类型。
+	// Agent Loop 只理解 protocol entity，不知道具体游戏 Adapter 的内部类型。
 	entityIDs := []string{}
 	for _, entity := range event.Entities {
 		if entity.EntityType == "npc" {
@@ -68,7 +68,8 @@ func (l *Loop) HandleEvent(
 	// 为本次有效 GameEvent 创建 TurnTracer。
 	turnTracer := trace.NewTurnTracer(l.recorder, trace.TurnContext{
 		GameID:    conn.GameID,
-		EnvID:     conn.EnvID,
+		SaveID:    event.SaveId,
+		SessionID: conn.SessionID,
 		EventID:   event.EventId,
 		EventType: event.EventType,
 		EntityID:  entityIDs[0],

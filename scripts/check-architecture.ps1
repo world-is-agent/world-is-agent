@@ -23,6 +23,7 @@ function Search-Files {
     }
 
     Get-ChildItem -LiteralPath $Path -Recurse -File -Include $Include |
+        Where-Object { $_.FullName -notmatch '\\(\.local|bin|obj)\\' } |
         Select-String -Pattern $Pattern -CaseSensitive:$false
 }
 

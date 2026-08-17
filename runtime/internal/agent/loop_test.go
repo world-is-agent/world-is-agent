@@ -43,6 +43,7 @@ func (f *fakeEnvironment) Observe(ctx context.Context, entityID string) (*protoc
 
 	return &protocolv1alpha1.Observation{
 		EntityId: entityID,
+		SaveId:   "save:test",
 		State:    state,
 	}, nil
 }
@@ -74,6 +75,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	event := &protocolv1alpha1.GameEvent{
 		EventId:   "event_1",
 		EventType: "player_interacted_with_npc",
+		SaveId:    "save:test",
 		Entities: []*protocolv1alpha1.EntityRef{
 			{
 				EntityId:   "player:local",
@@ -87,8 +89,8 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	}
 
 	conn := agent.ConnectionContext{
-		GameID: "fake-game",
-		EnvID:  "env:test",
+		GameID:    "fake-game",
+		SessionID: "session:test",
 	}
 
 	if err := loop.HandleEvent(context.Background(), env, conn, event); err != nil {
@@ -146,7 +148,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		if got.TraceID != got.TurnID {
 			t.Fatalf("trace event[%d] trace_id = %q, want turn_id %q", i, got.TraceID, got.TurnID)
 		}
-		if got.GameID != conn.GameID || got.EnvID != conn.EnvID || got.EventID != event.EventId || got.EventType != event.EventType || got.EntityID != "npc:Linus" {
+		if got.GameID != conn.GameID || got.SessionID != conn.SessionID || got.SaveID != event.SaveId || got.EventID != event.EventId || got.EventType != event.EventType || got.EntityID != "npc:Linus" {
 			t.Fatalf("trace event[%d] context mismatch: %+v", i, got)
 		}
 	}

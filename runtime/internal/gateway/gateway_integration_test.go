@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 
@@ -69,8 +70,8 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 
 	timeline(t, "runtime -> EnvironmentReady")
 	ready := recvRuntimeMessage(t, stream)
-	if got := ready.GetEnvironmentReady(); got == nil || got.EnvironmentId != "env:test" {
-		t.Fatalf("environment ready = %+v, want environment env:test", got)
+	if got := ready.GetEnvironmentReady(); got == nil || got.SessionId != "session:test" {
+		t.Fatalf("environment ready = %+v, want environment session:test", got)
 	}
 
 	timeline(t, "runtime -> CapabilityRequest")
@@ -206,8 +207,8 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 
 	timeline(t, "runtime -> EnvironmentReady")
 	ready := recvRuntimeMessage(t, stream)
-	if got := ready.GetEnvironmentReady(); got == nil || got.EnvironmentId != "env:test" {
-		t.Fatalf("environment ready = %+v, want environment env:test", got)
+	if got := ready.GetEnvironmentReady(); got == nil || got.SessionId != "session:test" {
+		t.Fatalf("environment ready = %+v, want environment session:test", got)
 	}
 
 	timeline(t, "runtime -> CapabilityRequest")
@@ -283,6 +284,92 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	}
 }
 
+func TestConnectRejectsGameEventWhenEventQueueIsFull(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{})
+	protocolv1alpha1.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	defer conn.Close()
+
+	client := protocolv1alpha1.NewGameAgentGatewayClient(conn)
+	stream, err := client.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+
+	if err := stream.Send(adapterHelloMessage()); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	_ = recvRuntimeMessage(t, stream)
+	capabilityRequest := recvRuntimeMessage(t, stream)
+	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
+		t.Fatalf("send capability list: %v", err)
+	}
+	waitForTool(t, registry, "speak")
+
+	const eventCount = 25
+	for i := 0; i < eventCount; i++ {
+		if err := stream.Send(npcInteractionEventMessageWithIDs(i)); err != nil {
+			t.Fatalf("send game event %d: %v", i, err)
+		}
+	}
+
+	ackCount := 0
+	rejectedCount := 0
+	for ackCount < eventCount {
+		msg := recvRuntimeMessage(t, stream)
+		ack := msg.GetEventAck()
+		if ack == nil {
+			continue
+		}
+
+		ackCount++
+		if ack.Status == protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_REJECTED {
+			rejectedCount++
+			if ack.Error == nil || ack.Error.Code != "event_queue_full" {
+				t.Fatalf("rejected ack error = %+v, want event_queue_full", ack.Error)
+			}
+		}
+	}
+
+	if rejectedCount == 0 {
+		t.Fatal("expected at least one rejected event ack when event queue is full")
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
 func timeline(t *testing.T, step string) {
 	t.Helper()
 	t.Logf("[timeline] %s", step)
@@ -328,7 +415,7 @@ func adapterHelloMessage() *protocolv1alpha1.AdapterMessage {
 				ProtocolVersion: "v1alpha1",
 				GameId:          "fake-game",
 				GameVersion:     "0.1.0",
-				InstanceId:      "env:test",
+				SessionId:       "session:test",
 				SaveId:          "save:test",
 			},
 		},
@@ -385,12 +472,17 @@ func capabilityListWithEmoteMessage(correlationID string) *protocolv1alpha1.Adap
 }
 
 func npcInteractionEventMessage() *protocolv1alpha1.AdapterMessage {
+	return npcInteractionEventMessageWithIDs(1)
+}
+
+func npcInteractionEventMessageWithIDs(index int) *protocolv1alpha1.AdapterMessage {
 	return &protocolv1alpha1.AdapterMessage{
-		MessageId: "event_msg_1",
+		MessageId: "event_msg_" + strconv.Itoa(index),
 		Payload: &protocolv1alpha1.AdapterMessage_Event{
 			Event: &protocolv1alpha1.GameEvent{
-				EventId:   "event_1",
+				EventId:   "event_" + strconv.Itoa(index),
 				EventType: "player_interacted_with_npc",
+				SaveId:    "save:test",
 				Entities: []*protocolv1alpha1.EntityRef{
 					{
 						EntityId:    "player:local",
@@ -425,6 +517,7 @@ func observationMessage(correlationID string) *protocolv1alpha1.AdapterMessage {
 		Payload: &protocolv1alpha1.AdapterMessage_Observation{
 			Observation: &protocolv1alpha1.Observation{
 				EntityId: "npc:Linus",
+				SaveId:   "save:test",
 				Revision: 1,
 				State:    state,
 			},

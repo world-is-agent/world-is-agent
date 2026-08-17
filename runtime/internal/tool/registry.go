@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/model"
 )
@@ -12,6 +14,7 @@ import (
 //
 // Adapter 上报的是 capability，Runtime 注册后才变成模型可见的 tool。
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]model.ToolDefinition
 }
 
@@ -41,15 +44,20 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 		description := capability.Description
 		inputSchemaJson := capability.InputSchemaJson
 
+		r.mu.Lock()
 		r.tools[name] = model.ToolDefinition{
 			Name:        name,
 			Description: description,
 			InputSchema: inputSchemaJson,
 		}
+		r.mu.Unlock()
 	}
 }
 
 func (r *Registry) Available() []model.ToolDefinition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
 	available := make([]model.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
 		available = append(available, tool)
@@ -58,10 +66,11 @@ func (r *Registry) Available() []model.ToolDefinition {
 }
 
 func (r *Registry) HasTool(name string) bool {
-	if _, exists := r.tools[name]; exists {
-		return true
-	}
-	return false
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	_, exists := r.tools[name]
+	return exists
 }
 
 // ValidateToolCall 校验模型返回的 ToolCall 是否能安全转成 ActionRequest。

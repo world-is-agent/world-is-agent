@@ -3,8 +3,8 @@ package tool
 import (
 	"fmt"
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	"gameagent/runtime/internal/idgen"
 	"gameagent/runtime/internal/model"
-	"time"
 )
 
 // BuildActionRequest 把模型 ToolCall 转成 Adapter 能执行的 ActionRequest。
@@ -32,5 +32,5 @@ func BuildActionRequest(entityID string, call model.ToolCall) (*protocolv1alpha1
 //
 // action_id 标识一次 Adapter 需要执行的业务动作，不等同于 RuntimeMessage.message_id。
 func newActionID() string {
-	return fmt.Sprintf("act_%d", time.Now().UnixNano())
+	return idgen.New("act")
 }

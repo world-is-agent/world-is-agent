@@ -3,11 +3,13 @@ package gateway
 import (
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"time"
+
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/tool"
-	"io"
-	"time"
 )
 
 // Server 实现 Runtime 侧的 GameAgentGateway gRPC 服务。
@@ -47,15 +49,15 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		MessageId: readyMessageID,
 		Payload: &protocolv1alpha1.RuntimeMessage_EnvironmentReady{
 			EnvironmentReady: &protocolv1alpha1.EnvironmentReady{
-				EnvironmentId:    hello.InstanceId,
+				SessionId:        hello.SessionId,
 				ServerTimeUnixMs: time.Now().UnixMilli(),
 			},
 		},
 	}
 
 	conn := agent.ConnectionContext{
-		GameID: hello.GameId,
-		EnvID:  hello.InstanceId,
+		GameID:    hello.GameId,
+		SessionID: hello.SessionId,
 	}
 
 	if err := stream.Send(readyMessage); err != nil {
@@ -120,24 +122,25 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 			if payload.Event == nil {
 				continue
 			}
-			// EventAck 表示 Runtime 已接收该 GameEvent；真正的 action
-			// 执行结果会在后续 ActionResult 中体现。
-			ack := &protocolv1alpha1.RuntimeMessage{
-				MessageId:     newMessageID("event_ack"),
-				CorrelationId: msg.MessageId,
-				Payload: &protocolv1alpha1.RuntimeMessage_EventAck{
-					EventAck: &protocolv1alpha1.EventAck{
-						EventId: payload.Event.EventId,
-						Status:  protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED,
-					},
-				},
+			status := protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED
+			var ackErr *protocolv1alpha1.Error
+
+			select {
+			case eventCh <- payload.Event:
+			default:
+				status = protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_REJECTED
+				ackErr = &protocolv1alpha1.Error{
+					Code:    "event_queue_full",
+					Message: "Runtime is still processing previous events",
+				}
+				log.Printf("drop game event %q: event queue is full", payload.Event.EventId)
 			}
 
-			if err := env.send(ack); err != nil {
+			// EventAck 表示 Runtime 是否接收该 GameEvent；真正的 action
+			// 执行结果会在后续 ActionResult 中体现。
+			if err := env.send(eventAckMessage(msg.MessageId, payload.Event.EventId, status, ackErr)); err != nil {
 				return err
 			}
-
-			eventCh <- payload.Event
 
 		case *protocolv1alpha1.AdapterMessage_Observation:
 			if payload.Observation == nil {
@@ -159,4 +162,23 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		}
 	}
 
+}
+
+func eventAckMessage(
+	correlationID string,
+	eventID string,
+	status protocolv1alpha1.EventAckStatus,
+	err *protocolv1alpha1.Error,
+) *protocolv1alpha1.RuntimeMessage {
+	return &protocolv1alpha1.RuntimeMessage{
+		MessageId:     newMessageID("event_ack"),
+		CorrelationId: correlationID,
+		Payload: &protocolv1alpha1.RuntimeMessage_EventAck{
+			EventAck: &protocolv1alpha1.EventAck{
+				EventId: eventID,
+				Status:  status,
+				Error:   err,
+			},
+		},
+	}
 }

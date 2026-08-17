@@ -28,6 +28,8 @@ Adapter 作为 SMAPI Mod 内的 gRPC client，直接连接 Runtime 的 `GameAgen
 
 - 新增 Runtime 接入层：
   - `RuntimeClient`：建立 gRPC stream、发送 `AdapterHello`、接收 `RuntimeMessage`、串行发送 `AdapterMessage`。
+  - `AdapterHello` 只携带连接级身份：`adapter_id` 表示 Adapter 实现，`game_id` 表示游戏类型，`session_id` 表示本次 Adapter 运行/连接会话；`save_id` 未加载存档时允许为空。
+  - `GameEvent` / `Observation` 在存档加载后携带当前 `save_id`；Runtime trace 顶层使用 `game_id / save_id / session_id`。
   - `CapabilityCatalog`：返回 `speak` capability；Runtime MVP0 当前只读取 `capability.name`，schema / description / execution_mode 先保持协议完整，不作为注册校验依据。
   - `MainThreadDispatcher`：后台 receive loop 只入队任务并继续接收；`UpdateTicked` 在主线程排干队列。
   - `ProtocolMapper`：集中处理 Stardew 和协议之间的映射，尤其是 `NPC <-> entity_id`。

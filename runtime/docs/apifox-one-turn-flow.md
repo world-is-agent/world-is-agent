@@ -64,7 +64,9 @@ Runtime 会连续返回两条消息：
 ```json
 {
   "message_id": "runtime_ready_...",
-  "environment_ready": {}
+  "environment_ready": {
+    "session_id": "session:test"
+  }
 }
 ```
 

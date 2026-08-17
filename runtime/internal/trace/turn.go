@@ -1,7 +1,7 @@
 package trace
 
 import (
-	"fmt"
+	"gameagent/runtime/internal/idgen"
 	"sync"
 	"time"
 )
@@ -17,7 +17,7 @@ type TurnTracer interface {
 
 // mu       保护 seq / closed
 // recorder 真正消费 Event 的对象
-// ctx      game_id/env_id/event_id/entity_id 等固定上下文
+// ctx      game_id/save_id/session_id/event_id/entity_id 等固定上下文
 // turnID   本轮 turn ID
 // traceID  Phase2 先等于 turnID
 // start    计算 elapsed_ms 的起点
@@ -48,7 +48,7 @@ func NewTurnTracer(recorder Recorder, ctx TurnContext) TurnTracer {
 }
 
 func newTurnID() string {
-	return fmt.Sprintf("turn_%d", time.Now().UnixNano())
+	return idgen.New("turn")
 }
 
 func (t *turnTracer) Emit(name EventName, data EventData) {
@@ -107,7 +107,8 @@ func (t *turnTracer) recordLocked(
 		ElapsedMS:     now.Sub(t.start).Milliseconds(),
 
 		GameID:    t.ctx.GameID,
-		EnvID:     t.ctx.EnvID,
+		SaveID:    t.ctx.SaveID,
+		SessionID: t.ctx.SessionID,
 		EventID:   t.ctx.EventID,
 		EventType: t.ctx.EventType,
 		EntityID:  t.ctx.EntityID,

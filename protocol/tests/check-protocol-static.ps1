@@ -65,8 +65,20 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         Add-Violation 'CapabilityList.entity_id must be optional'
     }
 
+    if ($proto -notmatch 'message\s+AdapterHello\s*\{[^}]*string\s+session_id\s*=\s*6;') {
+        Add-Violation 'AdapterHello.session_id must use field 6'
+    }
+
+    if ($proto -notmatch 'message\s+EnvironmentReady\s*\{[^}]*string\s+session_id\s*=\s*1;') {
+        Add-Violation 'EnvironmentReady.session_id must use field 1'
+    }
+
     if ($proto -match 'ProtocolError') {
         Add-Violation 'proto must use Error, not ProtocolError'
+    }
+
+    if ($proto -match 'instance_id') {
+        Add-Violation 'v1alpha1 must use session_id, not instance_id'
     }
 
     if ($proto -match 'agent_id') {

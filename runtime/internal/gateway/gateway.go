@@ -53,6 +53,11 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		},
 	}
 
+	conn := agent.ConnectionContext{
+		GameID: hello.GameId,
+		EnvID:  hello.InstanceId,
+	}
+
 	if err := stream.Send(readyMessage); err != nil {
 		return err
 	}
@@ -90,7 +95,7 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 	// Observation / ActionResult，而这些回复也必须由 recvLoop 接收。
 	go func() {
 		for event := range eventCh {
-			if err := s.agentLoop.HandleEvent(stream.Context(), env, event); err != nil {
+			if err := s.agentLoop.HandleEvent(stream.Context(), env, conn, event); err != nil {
 				fmt.Printf("agent loop failed: %v\n", err)
 			}
 		}

@@ -8,9 +8,22 @@ import (
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/tool"
+	"gameagent/runtime/internal/trace"
 
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+type recordingTraceRecorder struct {
+	events []trace.Event
+}
+
+func (r *recordingTraceRecorder) Record(event trace.Event) {
+	r.events = append(r.events, event)
+}
+
+func (r *recordingTraceRecorder) Close(ctx context.Context) error {
+	return nil
+}
 
 type fakeEnvironment struct {
 	observedEntityID string
@@ -55,9 +68,11 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	})
 
 	env := &fakeEnvironment{}
-	loop := agent.NewLoop(fake.NewProvider(), registry)
+	recorder := &recordingTraceRecorder{}
+	loop := agent.NewLoop(fake.NewProvider(), registry, recorder)
 
 	event := &protocolv1alpha1.GameEvent{
+		EventId:   "event_1",
 		EventType: "player_interacted_with_npc",
 		Entities: []*protocolv1alpha1.EntityRef{
 			{
@@ -71,7 +86,12 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		},
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, event); err != nil {
+	conn := agent.ConnectionContext{
+		GameID: "fake-game",
+		EnvID:  "env:test",
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
@@ -98,5 +118,44 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	textValue := env.submittedAction.Arguments.Fields["text"]
 	if textValue == nil || textValue.GetStringValue() == "" {
 		t.Fatal("expected submitted speak action to include non-empty text")
+	}
+
+	wantTimeline := []trace.EventName{
+		trace.EventTurnStarted,
+		trace.EventObservationRequested,
+		trace.EventObservationReceived,
+		trace.EventModelRequestStarted,
+		trace.EventModelResponseReceived,
+		trace.EventToolCallSelected,
+		trace.EventActionSubmitStarted,
+		trace.EventActionResultReceived,
+		trace.EventTurnCompleted,
+	}
+	if len(recorder.events) != len(wantTimeline) {
+		t.Fatalf("trace event count = %d, want %d: %+v", len(recorder.events), len(wantTimeline), recorder.events)
+	}
+
+	for i, want := range wantTimeline {
+		got := recorder.events[i]
+		if got.Event != want {
+			t.Fatalf("trace event[%d] = %q, want %q", i, got.Event, want)
+		}
+		if got.Seq != uint32(i+1) {
+			t.Fatalf("trace event[%d] seq = %d, want %d", i, got.Seq, i+1)
+		}
+		if got.TraceID != got.TurnID {
+			t.Fatalf("trace event[%d] trace_id = %q, want turn_id %q", i, got.TraceID, got.TurnID)
+		}
+		if got.GameID != conn.GameID || got.EnvID != conn.EnvID || got.EventID != event.EventId || got.EventType != event.EventType || got.EntityID != "npc:Linus" {
+			t.Fatalf("trace event[%d] context mismatch: %+v", i, got)
+		}
+	}
+
+	terminal := recorder.events[len(recorder.events)-1]
+	if terminal.ActionID == "" {
+		t.Fatal("expected terminal event to include action id")
+	}
+	if terminal.Tool != "speak" {
+		t.Fatalf("terminal tool = %q, want %q", terminal.Tool, "speak")
 	}
 }

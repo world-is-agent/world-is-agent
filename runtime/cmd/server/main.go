@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"gameagent/runtime/internal/gateway"
 	"gameagent/runtime/internal/llm"
 	"gameagent/runtime/internal/tool"
+	"gameagent/runtime/internal/trace"
 
 	"google.golang.org/grpc"
 )
@@ -25,7 +27,20 @@ func main() {
 
 	toolRegistry := tool.NewRegistry()
 
-	agentLoop := agent.NewLoop(modelProvider, toolRegistry)
+	// 初始化 trace recorder。
+	var traceRecorder trace.Recorder
+	traceRecorder, err = trace.NewJSONLRecorder(
+		// MVP0 trace path 依赖从 npcore/ 作为 cwd 启动；后续由 agent.json 的 trace.path 接管。
+		"runtime/.local/traces.jsonl",
+		trace.JSONLRecorderOptions{},
+	)
+	if err != nil {
+		log.Printf("create trace recorder failed: %v, fallback to noop", err)
+		traceRecorder = trace.NoopRecorder{}
+	}
+	defer traceRecorder.Close(context.Background())
+
+	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder)
 	gatewayServer := gateway.NewServer(agentLoop, toolRegistry)
 
 	grpcServer := grpc.NewServer()

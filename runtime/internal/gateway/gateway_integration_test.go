@@ -12,6 +12,7 @@ import (
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/llm/fake"
 	"gameagent/runtime/internal/tool"
+	"gameagent/runtime/internal/trace"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,7 +27,7 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry)
+	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{})
 	protocolv1alpha1.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
 
 	serverErrCh := make(chan error, 1)
@@ -163,7 +164,7 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	registry := tool.NewRegistry()
-	loop := agent.NewLoop(fake.NewProvider(), registry)
+	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{})
 	protocolv1alpha1.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
 
 	serverErrCh := make(chan error, 1)

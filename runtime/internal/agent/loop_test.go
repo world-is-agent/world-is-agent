@@ -45,7 +45,14 @@ func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha
 
 func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]string{"speak"})
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+		{
+			Name:            "speak",
+			Description:     "Make the NPC speak.",
+			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+			ExecutionMode:   protocolv1alpha1.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+	})
 
 	env := &fakeEnvironment{}
 	loop := agent.NewLoop(fake.NewProvider(), registry)

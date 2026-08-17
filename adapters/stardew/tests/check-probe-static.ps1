@@ -11,7 +11,8 @@ $requiredFiles = @(
     'src/Events/PlayerInteractProbe.cs',
     'src/State/ProbeObservation.cs',
     'src/State/ObservationBuilder.cs',
-    'src/Capabilities/SpeakCapability.cs'
+    'src/Capabilities/SpeakCapability.cs',
+    'src/Capabilities/EmoteCapability.cs'
 )
 
 $failures = New-Object System.Collections.Generic.List[string]
@@ -45,6 +46,11 @@ Require-Content 'manifest.json' 'Linus' 'Manifest should describe the Linus prob
 Require-Content 'src/State/ObservationBuilder.cs' 'getFriendshipLevelForNPC' 'Observation must read player friendship with the NPC.'
 Require-Content 'src/Capabilities/SpeakCapability.cs' 'DrawDialogue' 'Speak capability must use Stardew dialogue display.'
 Require-Content 'src/Capabilities/SpeakCapability.cs' 'Hello from GameAgent' 'Spike must keep the hardcoded probe text.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'Name = "emote"' 'CapabilityCatalog must advertise the emote capability.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'happy.*sad.*surprised.*neutral' 'Emote capability schema must expose the supported emote names.'
+Require-Content 'src/Runtime/RuntimeClient.cs' '"emote" => this\.HandleEmoteAction' 'RuntimeClient must route emote ActionRequest messages.'
+Require-Content 'src/Runtime/ProtocolMapper.cs' 'RequireEmoteArgument' 'ProtocolMapper must parse emote ActionRequest arguments.'
+Require-Content 'src/Capabilities/EmoteCapability.cs' 'doEmote' 'Emote capability must use Stardew NPC.doEmote.'
 
 if ($failures.Count -gt 0) {
     Write-Host 'Stardew adapter probe static check failed:'

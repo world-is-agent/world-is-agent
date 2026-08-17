@@ -24,5 +24,8 @@ Thumbs.db
 coverage.out
 .gocache/
 
+# Local private config overrides
+runtime/config/*.local.json
+
 
 /docs

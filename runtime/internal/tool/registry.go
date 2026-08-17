@@ -1,10 +1,11 @@
 package tool
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/model"
-	"strings"
 )
 
 // Registry 保存 Runtime 当前可暴露给 Agent Loop 的工具。
@@ -21,17 +22,29 @@ func NewRegistry() *Registry {
 }
 
 // RegisterEnvironmentCapabilities 把 Adapter 的 environment-level capability 注册成 tool。
-func (r *Registry) RegisterEnvironmentCapabilities(capabilities []string) {
+func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alpha1.Capability) {
 	for _, capability := range capabilities {
-		// MVP0 只允许 speak，避免模型调用 Adapter 尚未实现的能力。
-		if capability != "speak" {
+
+		if capability == nil {
+			continue
+		}
+		if capability.Name == "" {
+			continue
+		}
+		var raw json.RawMessage
+		if err := json.Unmarshal([]byte(capability.InputSchemaJson), &raw); err != nil {
+			fmt.Printf("skip capability %q: invalid input_schema_json: %v\n", capability.Name, err)
 			continue
 		}
 
-		r.tools["speak"] = model.ToolDefinition{
-			Name:        "speak",
-			Description: "Make the NPC say a short line of dialogue.",
-			InputSchema: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+		name := capability.Name
+		description := capability.Description
+		inputSchemaJson := capability.InputSchemaJson
+
+		r.tools[name] = model.ToolDefinition{
+			Name:        name,
+			Description: description,
+			InputSchema: inputSchemaJson,
 		}
 	}
 }
@@ -57,21 +70,7 @@ func (r *Registry) ValidateToolCall(entityID string, call model.ToolCall) error 
 		return fmt.Errorf("tool %q is not registered", call.Name)
 	}
 	if call.Arguments == nil {
-		return errors.New("speak arguments are missing")
-	}
-
-	value := call.Arguments.Fields["text"]
-	if value == nil {
-		return errors.New("speak text is missing")
-	}
-
-	text := strings.TrimSpace(value.GetStringValue())
-	if text == "" {
-		return errors.New("speak text is empty")
-	}
-
-	if len(text) > 300 {
-		return errors.New("speak text is too long")
+		return errors.New("tool arguments are missing")
 	}
 
 	return nil

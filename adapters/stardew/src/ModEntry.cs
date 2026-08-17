@@ -16,6 +16,7 @@ public sealed class ModEntry : Mod
     private MainThreadDispatcher? dispatcher;
     private ObservationBuilder? observationBuilder;
     private SpeakCapability? speakCapability;
+    private EmoteCapability? emoteCapability;
     private PlayerInteractProbe? playerInteractProbe;
     private RuntimeClient? runtimeClient;
 
@@ -25,11 +26,13 @@ public sealed class ModEntry : Mod
         this.dispatcher = new MainThreadDispatcher(this.Monitor);
         this.observationBuilder = new ObservationBuilder();
         this.speakCapability = new SpeakCapability();
+        this.emoteCapability = new EmoteCapability();
         this.runtimeClient = new RuntimeClient(
             this.config,
             this.dispatcher,
             this.observationBuilder,
             this.speakCapability,
+            this.emoteCapability,
             this.Monitor
         );
         this.playerInteractProbe = new PlayerInteractProbe(

@@ -81,15 +81,7 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		return fmt.Errorf("expected capability list")
 	}
 
-	names := make([]string, 0, len(capabilityList.Capabilities))
-	for _, capability := range capabilityList.Capabilities {
-		if capability.Name == "" {
-			continue
-		}
-		names = append(names, capability.Name)
-	}
-
-	s.tools.RegisterEnvironmentCapabilities(names)
+	s.tools.RegisterEnvironmentCapabilities(capabilityList.Capabilities)
 
 	env := newStreamEnvironment(stream)
 	eventCh := make(chan *protocolv1alpha1.GameEvent, 16)

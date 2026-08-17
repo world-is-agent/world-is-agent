@@ -103,7 +103,24 @@ public static class ProtocolMapper
         return text;
     }
 
+    public static string RequireEmoteArgument(ActionRequest request)
+    {
+        if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("emote", out Value? value))
+            throw new ArgumentException("missing required emote argument: emote");
+
+        string emote = value.StringValue;
+        if (string.IsNullOrWhiteSpace(emote))
+            throw new ArgumentException("emote argument must not be empty");
+
+        return emote;
+    }
+
     public static ActionResult BuildSucceededActionResult(ActionRequest request, string displayedText)
+    {
+        return BuildSucceededActionResult(request, "displayed_text", displayedText);
+    }
+
+    public static ActionResult BuildSucceededActionResult(ActionRequest request, string outputFieldName, string outputValue)
     {
         return new ActionResult
         {
@@ -113,7 +130,7 @@ public static class ProtocolMapper
             {
                 Fields =
                 {
-                    ["displayed_text"] = Value.ForString(displayedText),
+                    [outputFieldName] = Value.ForString(outputValue),
                 },
             },
         };

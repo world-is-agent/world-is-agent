@@ -17,6 +17,7 @@ public sealed class RuntimeClient : IDisposable
     private readonly MainThreadDispatcher dispatcher;
     private readonly ObservationBuilder observationBuilder;
     private readonly SpeakCapability speakCapability;
+    private readonly EmoteCapability emoteCapability;
     private readonly IMonitor monitor;
     private readonly SemaphoreSlim sendMu = new(1, 1);
 
@@ -32,6 +33,7 @@ public sealed class RuntimeClient : IDisposable
         MainThreadDispatcher dispatcher,
         ObservationBuilder observationBuilder,
         SpeakCapability speakCapability,
+        EmoteCapability emoteCapability,
         IMonitor monitor
     )
     {
@@ -39,6 +41,7 @@ public sealed class RuntimeClient : IDisposable
         this.dispatcher = dispatcher;
         this.observationBuilder = observationBuilder;
         this.speakCapability = speakCapability;
+        this.emoteCapability = emoteCapability;
         this.monitor = monitor;
     }
 
@@ -211,7 +214,7 @@ public sealed class RuntimeClient : IDisposable
         );
 
         this.isReady = true;
-        this.monitor.Log("GameAgent CapabilityList sent: speak.", LogLevel.Info);
+        this.monitor.Log($"GameAgent CapabilityList sent: {string.Join(", ", capabilities.Capabilities.Select(capability => capability.Name))}.", LogLevel.Info);
     }
 
     private void HandleObserveOnMainThread(string correlationId, ObserveRequest request)
@@ -253,14 +256,12 @@ public sealed class RuntimeClient : IDisposable
 
         try
         {
-            if (request.Capability != "speak")
-                throw new InvalidOperationException($"unsupported capability: {request.Capability}");
-
-            NPC npc = this.RequireNpc(request.EntityId);
-            string text = ProtocolMapper.RequireTextArgument(request);
-
-            this.speakCapability.Speak(npc, text);
-            result = ProtocolMapper.BuildSucceededActionResult(request, text);
+            result = request.Capability switch
+            {
+                "speak" => this.HandleSpeakAction(request),
+                "emote" => this.HandleEmoteAction(request),
+                _ => throw new InvalidOperationException($"unsupported capability: {request.Capability}"),
+            };
         }
         catch (Exception ex)
         {
@@ -357,7 +358,7 @@ public sealed class RuntimeClient : IDisposable
             RuntimeMessage.PayloadOneofCase.Observe =>
                 $"ObserveRequest message_id={message.MessageId} entity_id={message.Observe?.EntityId}",
             RuntimeMessage.PayloadOneofCase.Action =>
-                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} capability={message.Action?.Capability} text=\"{FormatSpeakText(message.Action)}\"",
+                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} capability={message.Action?.Capability} {FormatActionArguments(message.Action)}",
             RuntimeMessage.PayloadOneofCase.CancelAction =>
                 $"CancelActionRequest message_id={message.MessageId} action_id={message.CancelAction?.ActionId} reason={message.CancelAction?.Reason}",
             RuntimeMessage.PayloadOneofCase.Error =>
@@ -369,6 +370,24 @@ public sealed class RuntimeClient : IDisposable
         this.monitor.Log($"[GameAgent][recv] {detail}", LogLevel.Info);
     }
 
+    private ActionResult HandleSpeakAction(ActionRequest request)
+    {
+        NPC npc = this.RequireNpc(request.EntityId);
+        string text = ProtocolMapper.RequireTextArgument(request);
+
+        this.speakCapability.Speak(npc, text);
+        return ProtocolMapper.BuildSucceededActionResult(request, text);
+    }
+
+    private ActionResult HandleEmoteAction(ActionRequest request)
+    {
+        NPC npc = this.RequireNpc(request.EntityId);
+        string emote = ProtocolMapper.RequireEmoteArgument(request);
+
+        string appliedEmote = this.emoteCapability.Emote(npc, emote);
+        return ProtocolMapper.BuildSucceededActionResult(request, "emote", appliedEmote);
+    }
+
     private static string FormatEntities(GameEvent? gameEvent)
     {
         if (gameEvent is null)
@@ -377,9 +396,19 @@ public sealed class RuntimeClient : IDisposable
         return string.Join(",", gameEvent.Entities.Select(entity => $"{entity.EntityType}:{entity.EntityId}"));
     }
 
-    private static string FormatSpeakText(ActionRequest? request)
+    private static string FormatActionArguments(ActionRequest? request)
     {
-        if (request?.Arguments is null || !request.Arguments.Fields.TryGetValue("text", out var value))
+        return request?.Capability switch
+        {
+            "speak" => $"text=\"{FormatStringArgument(request, "text")}\"",
+            "emote" => $"emote=\"{FormatStringArgument(request, "emote")}\"",
+            _ => string.Empty,
+        };
+    }
+
+    private static string FormatStringArgument(ActionRequest? request, string name)
+    {
+        if (request?.Arguments is null || !request.Arguments.Fields.TryGetValue(name, out var value))
             return string.Empty;
 
         string text = value.StringValue ?? string.Empty;

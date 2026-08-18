@@ -1,7 +1,8 @@
 # GameAgent MVP0 Phase2 技术开发与验收方案
 
-> Status: Draft
+> Status: Accepted
 > Date: 2026-08-15
+> Accepted: 2026-08-18
 > Scope: Turn observability + prompt/config + failure stability + second simple tool
 
 ------
@@ -42,7 +43,7 @@ Phase2:
 
 Memory 很重要，但现在不是最优先。
 
-当前更基础的问题是：
+Phase2 开始前更基础的问题是：
 
 ```text
 一轮 Agent Turn 没有统一 turn_id / trace_id。
@@ -102,7 +103,7 @@ Web Debug UI
 
 # 4. Phase2 验收标准
 
-Phase2 完成时，应满足：
+Phase2 Accepted 状态下，已满足：
 
 ```text
 1. 每次进入 Agent Turn 的 GameEvent 都会创建一个 turn_id；被事件类型过滤忽略的 GameEvent 不创建 turn_id，可只记录 event_ignored 日志。
@@ -136,6 +137,12 @@ Phase2 完成时，应满足：
 ```
 
 其中 `ToolCall -> ActionRequest` 的通用转发在 Phase1 代码中已经基本成立：`BuildActionRequest` 已经使用 `ToolCall.name` 作为 `ActionRequest.capability`，并原样透传 `ToolCall.arguments`。Phase2 P0 不需要重写这部分，只需要确认测试覆盖。
+
+验收记录与学习复盘见：
+
+```text
+docs/phase2/GameAgent MVP0 Phase2 学习回顾与自测手册.md
+```
 
 ------
 
@@ -209,7 +216,7 @@ Trace 描述 Runtime 内部 Agent Turn 的执行过程。
 二者职责不同，不应混在一起。
 ```
 
-建议新增包：
+Phase2 已新增包：
 
 ```text
 runtime/internal/trace
@@ -309,7 +316,7 @@ session_id = AdapterHello.SessionId
 save_id    = GameEvent.SaveId
 ```
 
-之后 gateway 调用 AgentLoop 时应传入该 connection context，或通过 EnvironmentSession 注入。AgentLoop 创建 TurnTracer 时绑定 `game_id / save_id / session_id / event_id / event_type / entity_id` 等固定上下文，`Emit / Complete / Fail` 只传阶段动态字段。
+gateway 调用 AgentLoop 时会传入 connection context。AgentLoop 创建 TurnTracer 时绑定 `game_id / save_id / session_id / event_id / event_type / entity_id` 等固定上下文，`Emit / Complete / Fail` 只传阶段动态字段。
 
 协议兼容性说明：
 
@@ -421,11 +428,11 @@ Phase2 目标是让常见行为通过配置调整：
 输出语言
 NPC 说话风格
 回复长度
-是否强制使用 tool
+tool 使用提示
 LLM timeout
 ```
 
-建议新增配置文件：
+Phase2 已新增配置文件：
 
 ```text
 runtime/config/agent.json
@@ -478,9 +485,9 @@ Phase1 已知缺口：
 LLM Provider 暂无独立 HTTP timeout。
 ```
 
-Phase2 需要为 turn 的关键阶段增加 timeout。
+Phase2 已为 turn 的关键阶段增加 timeout。
 
-建议分层：
+落地分层：
 
 ```text
 turn_timeout_ms
@@ -539,7 +546,7 @@ Action
     ActionRequest 已经发送给 Adapter，可能改变游戏状态；超时后需要额外发送 CancelActionRequest。
 ```
 
-因此 Phase2 后续需要补齐 Action timeout 的取消传播：
+因此 Phase2 补齐了 Action timeout 的取消传播：
 
 ```text
 Runtime 侧：
@@ -572,9 +579,11 @@ Adapter 侧负责 best-effort 安全取消：
 2. cancelled action_id 必须记录在并发安全结构中，例如 ConcurrentDictionary。
 3. 不要把“记录 cancelled action_id”丢进 dispatcher。
 4. SMAPI 主线程执行 ActionRequest 前检查 action_id 是否已取消。
-5. 如果已取消，不执行游戏动作，并返回或记录 ACTION_STATUS_CANCELLED。
-6. gate 命中后应删除该 action_id，避免 cancelled-set 长期增长。
-7. 如果动作已经执行或不可撤销，不做回滚，只记录日志。
+5. 如果已取消，不执行游戏动作。
+6. gate 命中后删除该 action_id，避免 cancelled-set 长期增长。
+7. 返回 ActionResult(action_id = 原 action_id, status = ACTION_STATUS_CANCELLED)。
+8. Runtime 若已删除 pending waiter，可以忽略该迟到结果。
+9. 如果动作已经执行或不可撤销，不做回滚，只记录日志。
 ```
 
 `TryRemove` 只能清理 gate 命中的 action_id。若动作已经执行，只是 ActionResult 慢了或丢了，Runtime 超时后再发来的 cancel 可能永远不会被 gate 消费，cancelled-set 会残留该 action_id。MVP0 可接受这个残留，因为 action_id 不复用且 timeout 低频；后续如需要硬上界，再增加 TTL 或容量上限。
@@ -646,41 +655,52 @@ MVP0 还需要接受两个残留语义：
 
 MVP0 中 action 阶段收到 `context deadline exceeded` 时统一记为 `action_timeout`。其中可能包含 turn_timeout 在 action 阶段耗尽的情况；如需严格区分，后续再引入 `context.WithTimeoutCause`。
 
+当前 Runtime 的 CancelActionRequest 发送使用连接级 `stream.Send`，并且不使用已经过期的 actionCtx；发送失败不改变 `turn_failed(action_timeout)` 的结果。需要注意的是，Phase2 还没有实现独立 sendLoop 或有界异步 cancel send；如果底层 gRPC `Send` 异常阻塞，理论上仍可能延迟 `SubmitAction` 返回。这是 Phase2 之后的 transport 层优化项，不改变 MVP0 的 best-effort cancel 语义。
+
 ------
 
 # 10. Failure Semantics
 
 Phase1 的 happy path 已经跑通。
 
-Phase2 要明确失败如何收敛。
-
-失败类型：
+Phase2 明确了两类失败边界：
 
 ```text
-no_target_entity
-observe_timeout
-observe_failed
-llm_timeout
-llm_failed
-invalid_tool_call
-unknown_tool
-action_timeout
-action_failed
-stream_closed
+pre-turn rejected
+    event type 不支持、找不到 target NPC 等发生在 TurnTracer 创建之前。
+    这类情况不创建 turn_id，也不写 turn_failed。
+
+turn failed
+    已经创建 TurnTracer 后发生的失败。
+    AgentLoop 必须调用 TurnTracer.Fail，Recorder 持久化仍然是 best-effort。
 ```
+
+当前 Runtime 实际使用的 `stage / reason` 表：
+
+| Stage | Reason | 明确语义 |
+| --- | --- | --- |
+| observation | observe_timeout | 等待 Observation 超时。 |
+| observation | observation_failed | 非超时环境读取失败，例如 Adapter Error 或 stream 断开导致 pending 被唤醒。 |
+| model | provider_timeout | Provider.Generate 超时。 |
+| model | provider_failed | Provider 返回非超时技术错误。 |
+| tool | tool_call_invalid | ToolCall envelope 不合法，例如 tool 未注册或 arguments 为空。 |
+| action | action_request_build_failed | ToolCall 转 ActionRequest 失败。 |
+| action | submit_action_failed | SubmitAction 非超时失败，例如 stream 发送失败或 pending 被连接断开唤醒。 |
+| action | action_timeout | 等待 ActionResult 超时，Runtime 会 best-effort 发送 CancelActionRequest。 |
+| action | action_result_failed | 收到非 SUCCEEDED ActionResult 终态。 |
 
 要求：
 
 ```text
-每一种失败都要写 trace。
-
 AgentLoop.HandleEvent 的错误不能静默丢弃。
 
-turn_failed 必须记录 stage / reason。error 只在存在底层技术错误时记录，业务失败不伪造 error。
+turn_failed 必须记录 stage / reason。
+
+error 只在存在底层技术错误时记录，业务失败不伪造 error。
 
 ActionResult.status != SUCCEEDED 时记录 action_result_failed，并把 action_status / action_reason 等业务失败细节放入 fields。
 
-沿用 Phase1 已有的 inbound Error -> fail pending 机制，Observe 失败不应再阻塞到连接断开；Phase2 要把这类失败写入 turn trace。
+沿用 Phase1 已有的 inbound Error -> fail pending 机制，Observe 失败不应再阻塞到连接断开；如果 TurnTracer 已创建，这类失败进入 turn_failed。
 
 LLM timeout 不应导致 Runtime 无法处理下一次 GameEvent。
 ```
@@ -691,9 +711,9 @@ Phase2 不要求把失败反馈回游戏内 UI，但应在 Runtime / SMAPI 日�
 
 # 11. 第二个 Tool：emote
 
-Phase2 需要从单工具 `speak` 进入多工具。
+Phase2 已从单工具 `speak` 进入多工具。
 
-建议新增：
+Phase2 已新增：
 
 ```text
 emote
@@ -785,9 +805,9 @@ Phase2 要把 Capability schema 权威交还给 Adapter。
 核心结论：
 
 ```text
-Runtime 无条件信任 Adapter 上报的 Capability schema，并原样注册成 tool。
+Phase2 假设 Stardew Adapter 是受信任的第一方 Adapter。
 
-schema 的正确性由 Adapter 负责，不由 Runtime 判断。
+Runtime 信任 Adapter 的 Capability schema 业务语义，并在解析通过后按语义不改写的方式注册成 tool。
 ```
 
 原因：
@@ -802,7 +822,7 @@ Runtime 对 Stardew 一无所知，也必须一无所知。
 谁执行，谁定义 schema。
 ```
 
-Phase2 修改目标：
+Phase2 实际落地：
 
 ```text
 1. gateway 把完整 Capability 透传给 ToolRegistry。
@@ -822,7 +842,6 @@ Runtime 只做解析健壮性，不做 schema 语义判断：
 做：
     input_schema_json 必须能 json.Unmarshal。
     name 必须非空。
-    schema 字符串不能超过合理大小。
     解析失败时跳过该 capability，并写普通 warning log。
 
 不做：
@@ -834,7 +853,21 @@ Runtime 只做解析健壮性，不做 schema 语义判断：
     不判断 emote 到底有哪些合法值。
 ```
 
-这不是 Runtime 在审 Adapter，而是 Runtime 解析字符串时必要的错误处理。
+这不是 Runtime 在审 Adapter 的业务语义，而是 Runtime 解析协议消息时必要的 envelope / 解析健壮性处理。
+
+Phase2 当前未实现 `maxCapabilitySchemaBytes` 这类大小上限；如果后续开放第三方 Adapter，应补充明确常量和对应测试。
+
+`Capability != Permission != Tool` 的长期原则仍然成立。Phase2 只是采用了一个最小策略：
+
+```text
+所有解析成功的第一方 environment Capability
+    ↓
+1:1 暴露为模型 Tool
+```
+
+这不等于永久取消 Runtime permission / policy 层。未来第三方 Adapter、危险能力或玩家授权场景仍需要单独的 permission / policy 设计。
+
+Phase2 的动态注册只承诺支持简单、短时、同步或可在阶段 timeout 内结束的 capability。`move_to` 这类长任务不能简单理解为“Adapter 一上报，Runtime 就可以安全暴露给模型”。
 
 Provider 层为了适配具体模型 API 可以做自己的格式转换。例如 OpenAI strict 模式可能需要在发送给 OpenAI 的 schema copy 上补 `additionalProperties:false`，这是 Provider 对 OpenAI API 的适配，不是 Runtime 对 Adapter schema 的不信任。
 
@@ -871,9 +904,9 @@ Adapter 执行；失败由 Adapter 返回 ActionResult(FAILED)
 
 ------
 
-# 13. Runtime 修改范围
+# 13. Runtime 落地范围
 
-建议新增：
+Phase2 已新增：
 
 ```text
 runtime/internal/trace
@@ -881,7 +914,7 @@ runtime/internal/agent/config.go
 runtime/config/agent.json
 ```
 
-建议修改：
+Phase2 已修改：
 
 ```text
 runtime/internal/agent/loop.go
@@ -909,22 +942,22 @@ runtime/internal/gateway/stream_environment.go
     CancelActionRequest 发送不能依赖已过期的 actionCtx；发送失败只作为 best-effort 失败处理。
     Runtime 超时后会删除 pending action waiter；迟到的 ActionResult 当前会被丢弃，不回写已终态 trace。
 
-runtime/internal/llm/factory.go
-    读取 timeout 相关配置，或让 AgentLoop 包装 timeout context。
+runtime/internal/agent/config.go
+    读取 turn / observe / llm / action timeout 和 prompt config。
 ```
 
 ------
 
-# 14. Adapter 修改范围
+# 14. Adapter 落地范围
 
-建议新增：
+Phase2 已新增：
 
 ```text
 adapters/stardew/src/Capabilities/EmoteCapability.cs
 adapters/stardew/src/Runtime/ActionCancellationRegistry.cs
 ```
 
-建议修改：
+Phase2 已修改：
 
 ```text
 CapabilityCatalog
@@ -961,9 +994,9 @@ emote 的具体游戏表现可以先选择简单实现：
 
 ------
 
-# 15. 测试计划
+# 15. 测试覆盖与验收结果
 
-Runtime 单元测试：
+Runtime 单元测试覆盖：
 
 ```text
 TraceRecorder writes JSONL event with schema_version and snake_case fields
@@ -995,7 +1028,7 @@ ValidateToolCall only checks registered tool name and non-nil arguments
 Malformed capability schema is skipped and logged
 ```
 
-Runtime 集成测试：
+Runtime 集成测试覆盖：
 
 ```text
 fake adapter connects
@@ -1008,7 +1041,7 @@ adapter returns ActionResult
 trace contains full timeline in normal no-drop path
 ```
 
-Adapter 单元测试：
+Adapter 单元测试覆盖：
 
 ```text
 ActionCancellationRegistry MarkCancelled 后 TryConsumeCancelled 返回 true
@@ -1017,7 +1050,7 @@ TryConsumeCancelled 命中后再次调用返回 false
 后台线程 MarkCancelled、主线程 TryConsumeCancelled 的并发访问不需要 dispatcher
 ```
 
-Adapter 手工测试：
+Adapter 手工验收：
 
 ```text
 SMAPI 启动并连接 Runtime
@@ -1028,18 +1061,20 @@ Runtime 返回中文 speak 或 emote
 游戏内能看到效果
 SMAPI 日志能看到完整 send/recv
 Runtime trace 能按 turn_id 查到整轮执行
-将 action_timeout_ms 临时调小，确认 SMAPI 日志能看到 CancelActionRequest
-制造主线程延迟或短超时场景，确认已取消 action 在执行前被 gate 跳过
+低 action_timeout_ms 场景确认 SMAPI 日志能看到 CancelActionRequest
+ActionCancellationRegistry 单元测试确认 cancelled action_id 能被 TryConsumeCancelled 消费
 ```
+
+主线程延迟后 gate 命中并跳过尚未执行 ActionRequest 的场景，是 CancelAction 语义最强的专项手工回归项。Phase2 代码已经具备该 gate：命中后返回 `ActionResult(ACTION_STATUS_CANCELLED)`；归档验收时如果需要展示完整取消链路，应保留对应 SMAPI 日志。
 
 ------
 
-# 16. 实施顺序
+# 16. 实际交付分层与历史实施顺序
 
-Phase2 分层交付：
+Phase2 实际分层交付：
 
 ```text
-P0 必须完成：
+P0 已完成：
     动态 Capability -> ToolDefinition
     通用 ToolCall envelope 校验
     确认 BuildActionRequest 通用转发测试覆盖
@@ -1048,7 +1083,7 @@ P0 必须完成：
     TurnTracer 终态唯一且 terminal final
     llm_timeout
 
-P1 建议完成：
+P1 已完成：
     prompt language config
     observe_timeout
     action_timeout
@@ -1062,7 +1097,9 @@ P2 可延后：
     更复杂 capability
 ```
 
-推荐开发顺序：
+截至 2026-08-18，P0 / P1 已完成并通过代码级测试与真机 smoke test；P2 作为后续优化保留。
+
+历史实施顺序：
 
 ```text
 1. gateway 将完整 Capability 透传给 ToolRegistry。
@@ -1094,15 +1131,15 @@ P2 可延后：
 14. 真实 Stardew smoke test。
 ```
 
-每一步都应该能独立验证。
+每一步都已按可独立验证的方式推进。
 
-不要等所有功能写完才进游戏测试。
+Phase2 的经验是不要等所有功能写完才进游戏测试。
 
 ------
 
-# 17. Phase2 完成后的状态
+# 17. Phase2 验收后的状态
 
-Phase2 完成后，GameAgent 应该从：
+Phase2 验收后，GameAgent 已从：
 
 ```text
 能跑通 one-turn demo

@@ -18,13 +18,22 @@ type Config struct {
 	LLMTimeout     time.Duration
 	ObserveTimeout time.Duration
 	ActionTimeout  time.Duration
+	Prompt         PromptConfig
 }
 
 type fileConfig struct {
-	TurnTimeoutMS    int64 `json:"turn_timeout_ms"`
-	LLMTimeoutMS     int64 `json:"llm_timeout_ms"`
-	ObserveTimeoutMS int64 `json:"observe_timeout_ms"`
-	ActionTimeoutMS  int64 `json:"action_timeout_ms"`
+	TurnTimeoutMS    int64        `json:"turn_timeout_ms"`
+	LLMTimeoutMS     int64        `json:"llm_timeout_ms"`
+	ObserveTimeoutMS int64        `json:"observe_timeout_ms"`
+	ActionTimeoutMS  int64        `json:"action_timeout_ms"`
+	Prompt           PromptConfig `json:"prompt"`
+}
+
+type PromptConfig struct {
+	Language        string `json:"language"`
+	NPCStyle        string `json:"npc_style"`
+	MaxSpeakChars   int    `json:"max_speak_chars"`
+	ToolInstruction string `json:"tool_instruction"`
 }
 
 func DefaultConfig() Config {
@@ -33,6 +42,12 @@ func DefaultConfig() Config {
 		LLMTimeout:     8 * time.Second,
 		ObserveTimeout: 3 * time.Second,
 		ActionTimeout:  3 * time.Second,
+		Prompt: PromptConfig{
+			Language:        "Simplified Chinese",
+			NPCStyle:        "自然、简短、符合当前游戏 NPC 的语气",
+			MaxSpeakChars:   60,
+			ToolInstruction: "Use exactly one available tool. Prefer speak for dialogue; use emote only for clear emotional reactions.",
+		},
 	}
 }
 
@@ -62,7 +77,27 @@ func LoadConfigFile(path string) (Config, error) {
 		LLMTimeout:     durationMS(raw.LLMTimeoutMS),
 		ObserveTimeout: durationMS(raw.ObserveTimeoutMS),
 		ActionTimeout:  durationMS(raw.ActionTimeoutMS),
+		Prompt:         raw.Prompt,
 	}.WithDefaults(), nil
+}
+
+func (p PromptConfig) WithDefaults() PromptConfig {
+	defaults := DefaultConfig().Prompt
+
+	if p.Language == "" {
+		p.Language = defaults.Language
+	}
+	if p.NPCStyle == "" {
+		p.NPCStyle = defaults.NPCStyle
+	}
+	if p.MaxSpeakChars <= 0 {
+		p.MaxSpeakChars = defaults.MaxSpeakChars
+	}
+	if p.ToolInstruction == "" {
+		p.ToolInstruction = defaults.ToolInstruction
+	}
+
+	return p
 }
 
 func (c Config) WithDefaults() Config {
@@ -80,7 +115,7 @@ func (c Config) WithDefaults() Config {
 	if c.ActionTimeout <= 0 {
 		c.ActionTimeout = defaults.ActionTimeout
 	}
-
+	c.Prompt = c.Prompt.WithDefaults()
 	return c
 }
 

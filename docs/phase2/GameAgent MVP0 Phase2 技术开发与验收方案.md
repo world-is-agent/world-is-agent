@@ -120,7 +120,7 @@ Phase2 完成时，应满足：
    action_result_received
    turn_completed / turn_failed
 
-4. Prompt 可以通过配置控制输出语言，例如 zh-CN。
+4. Prompt 可以通过配置控制输出语言，例如 Simplified Chinese。
 
 5. Prompt 可以通过配置控制 NPC 说话风格。
 
@@ -435,18 +435,20 @@ runtime/config/agent.json
 
 ```json
 {
-  "language": "zh-CN",
-  "npc_style": "自然、简短、符合 Stardew Valley NPC 的语气",
-  "max_reply_chars": 80,
-  "tool_policy": "best_effort_hint",
   "turn_timeout_ms": 15000,
   "llm_timeout_ms": 8000,
   "observe_timeout_ms": 3000,
-  "action_timeout_ms": 3000
+  "action_timeout_ms": 3000,
+  "prompt": {
+    "language": "Simplified Chinese",
+    "npc_style": "自然、简短、符合 Stardew Valley NPC 的语气",
+    "max_speak_chars": 60,
+    "tool_instruction": "Use exactly one available tool. Prefer speak for dialogue; use emote only for clear emotional reactions."
+  }
 }
 ```
 
-`tool_policy` 在 Phase2 只作为 prompt hint。OpenAI Provider 后续可以把它映射成 `tool_choice=required`，但 DeepSeek `deepseek-v4-flash` 当前不支持强制 `tool_choice=required`，因此不能承诺 provider 层强制执行。
+`tool_instruction` 在 Phase2 只作为 prompt hint，是写给模型看的自然语言指令。Provider 层如果后续需要映射 `tool_choice=required`，应另行引入机器可读的 `tool_policy` 枚举字段，不复用自然语言 instruction。
 
 `turn_timeout_ms` 是整轮 turn 的全局硬上限，应大于常见阶段耗时组合。阶段 timeout 控制局部等待，turn timeout 控制整轮兜底。
 

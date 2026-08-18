@@ -14,9 +14,10 @@ func BuildModelRequest(
 	event *protocolv1alpha1.GameEvent,
 	observation *protocolv1alpha1.Observation,
 	tools []model.ToolDefinition,
+	promptConfig PromptConfig,
 ) model.Request {
 	return model.Request{
-		System: BuildSystemPrompt(),
+		System: BuildSystemPrompt(promptConfig),
 		Messages: []model.Message{
 			BuildTurnMessage(event, observation),
 		},
@@ -24,16 +25,21 @@ func BuildModelRequest(
 	}
 }
 
-func BuildSystemPrompt() string {
-	return `You are controlling an NPC in a game.
+func BuildSystemPrompt(cfg PromptConfig) string {
+	return fmt.Sprintf(`You are controlling an NPC in a game.
 
 Your job:
 - Stay in character.
-- Use exactly one available tool.
-- For MVP, prefer speak unless there is no useful response.
-- Speak in Simplified Chinese.
-- The speak text must be no more than 60 Chinese characters.
-- Keep dialogue short and natural.`
+- %s
+- Language: %s.
+- Style: %s.
+- The speak text must be no more than %d characters.
+- Keep dialogue short and natural.`,
+		cfg.ToolInstruction,
+		cfg.Language,
+		cfg.NPCStyle,
+		cfg.MaxSpeakChars,
+	)
 }
 
 func BuildTurnMessage(

@@ -2,5 +2,11 @@
   "turn_timeout_ms": 15000,
   "llm_timeout_ms": 8000,
   "observe_timeout_ms": 3000,
-  "action_timeout_ms": 3000
+  "action_timeout_ms": 3000,
+  "prompt": {
+    "language": "Simplified Chinese",
+    "npc_style": "自然、简短、符合 Stardew Valley NPC 的语气",
+    "max_speak_chars": 60,
+    "tool_instruction": "Use exactly one available tool. Prefer speak for dialogue; use emote only for clear emotional reactions."
+  }
 }

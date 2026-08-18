@@ -98,7 +98,7 @@ func (l *Loop) HandleEvent(
 
 	// MVP0 先把 Observation 简单放进 prompt；后续可以拆出 prompt builder，
 	// 专门格式化 GameTime、State、NearbyEntities 等字段。
-	req := BuildModelRequest(event, obs, l.tools.Available())
+	req := BuildModelRequest(event, obs, l.tools.Available(), l.config.Prompt)
 	turnTracer.Emit(trace.EventModelRequestStarted, trace.EventData{
 		Fields: trace.Fields{
 			"tool_count": len(req.Tools),

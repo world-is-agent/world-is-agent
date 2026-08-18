@@ -121,6 +121,9 @@ func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alp
 	if req.ActionId == "" {
 		return nil, fmt.Errorf("action id is empty")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	messageID := newMessageID("action")
 
@@ -153,8 +156,25 @@ func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alp
 	case result := <-ch:
 		return result.result, result.err
 	case <-ctx.Done():
+		e.sendCancelActionBestEffort(req.ActionId, "action_timeout")
 		return nil, ctx.Err()
 	}
+}
+
+func (e *streamEnvironment) sendCancelActionBestEffort(actionID string, reason string) {
+	msg := &protocolv1alpha1.RuntimeMessage{
+		MessageId: newMessageID("cancel_action"),
+		Payload: &protocolv1alpha1.RuntimeMessage_CancelAction{
+			CancelAction: &protocolv1alpha1.CancelActionRequest{
+				ActionId: actionID,
+				Reason:   reason,
+			},
+		},
+	}
+
+	// Cancel 是 best-effort：action ctx 已经过期，但 cancel 仍要尽量通过连接级 stream 发出去。
+	// 发送失败不改变 SubmitAction 已经超时的结果。
+	_ = e.send(msg)
 }
 
 // resolveActionResult 唤醒正在等待指定 action_id 的 SubmitAction 调用。

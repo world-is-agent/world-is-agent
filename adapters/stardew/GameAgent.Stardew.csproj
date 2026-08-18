@@ -35,4 +35,8 @@
   <ItemGroup>
     <None Update="manifest.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+  </ItemGroup>
 </Project>

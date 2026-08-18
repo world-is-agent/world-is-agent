@@ -18,6 +18,7 @@ public sealed class RuntimeClient : IDisposable
     private readonly ObservationBuilder observationBuilder;
     private readonly SpeakCapability speakCapability;
     private readonly EmoteCapability emoteCapability;
+    private readonly ActionCancellationRegistry actionCancellationRegistry = new();
     private readonly IMonitor monitor;
     private readonly SemaphoreSlim sendMu = new(1, 1);
 
@@ -192,6 +193,11 @@ public sealed class RuntimeClient : IDisposable
                     this.dispatcher.Enqueue(() => this.HandleActionOnMainThread(message.Action));
                 break;
 
+            case RuntimeMessage.PayloadOneofCase.CancelAction:
+                if (message.CancelAction is not null)
+                    this.HandleCancelAction(message.CancelAction);
+                break;
+
             case RuntimeMessage.PayloadOneofCase.Error:
                 this.monitor.Log($"GameAgent Runtime error: {message.Error?.Code} {message.Error?.Message}", LogLevel.Warn);
                 break;
@@ -218,6 +224,12 @@ public sealed class RuntimeClient : IDisposable
 
         this.isReady = true;
         this.monitor.Log($"GameAgent CapabilityList sent: {string.Join(", ", capabilities.Capabilities.Select(capability => capability.Name))}.", LogLevel.Info);
+    }
+
+    private void HandleCancelAction(CancelActionRequest request)
+    {
+        this.actionCancellationRegistry.MarkCancelled(request.ActionId);
+        this.monitor.Log($"GameAgent CancelAction recorded: {request.ActionId} reason={request.Reason}", LogLevel.Debug);
     }
 
     private void HandleObserveOnMainThread(string correlationId, ObserveRequest request)
@@ -257,19 +269,27 @@ public sealed class RuntimeClient : IDisposable
     {
         ActionResult result;
 
-        try
+        if (this.actionCancellationRegistry.TryConsumeCancelled(request.ActionId))
         {
-            result = request.Capability switch
-            {
-                "speak" => this.HandleSpeakAction(request),
-                "emote" => this.HandleEmoteAction(request),
-                _ => throw new InvalidOperationException($"unsupported capability: {request.Capability}"),
-            };
+            result = ProtocolMapper.BuildCancelledActionResult(request, "action cancelled before execution");
+            this.monitor.Log($"GameAgent ActionRequest skipped because it was cancelled: {request.ActionId}", LogLevel.Debug);
         }
-        catch (Exception ex)
+        else
         {
-            this.monitor.Log($"GameAgent ActionRequest failed: {ex.Message}", LogLevel.Error);
-            result = ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex);
+            try
+            {
+                result = request.Capability switch
+                {
+                    "speak" => this.HandleSpeakAction(request),
+                    "emote" => this.HandleEmoteAction(request),
+                    _ => throw new InvalidOperationException($"unsupported capability: {request.Capability}"),
+                };
+            }
+            catch (Exception ex)
+            {
+                this.monitor.Log($"GameAgent ActionRequest failed: {ex.Message}", LogLevel.Error);
+                result = ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex);
+            }
         }
 
         this.SendFireAndForget(

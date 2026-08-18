@@ -152,6 +152,20 @@ public static class ProtocolMapper
         };
     }
 
+    public static ActionResult BuildCancelledActionResult(ActionRequest request, string reason)
+    {
+        return new ActionResult
+        {
+            ActionId = request.ActionId,
+            Status = ActionStatus.Cancelled,
+            Error = new Error
+            {
+                Code = "action_cancelled",
+                Message = reason,
+            },
+        };
+    }
+
     public static AdapterMessage BuildErrorMessage(string correlationId, string code, Exception ex)
     {
         return new AdapterMessage

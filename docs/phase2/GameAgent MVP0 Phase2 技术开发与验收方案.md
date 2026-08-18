@@ -406,7 +406,7 @@ terminal event is final event
 ```text
 stage=action
 reason=action_result_failed
-fields.action_status=FAILED / REJECTED / CANCELED
+fields.action_status=ACTION_STATUS_FAILED / ACTION_STATUS_REJECTED / ACTION_STATUS_CANCELLED
 ```
 
 ------
@@ -548,16 +548,66 @@ Runtime 侧：
 5. SubmitAction 返回 ctx.Err()，AgentLoop 写 turn_failed(action_timeout)。
 ```
 
+CancelActionRequest 的发送必须使用连接级 stream.Send 语义，不能使用已经过期的 actionCtx：
+
+```text
+actionCtx 已经 Done
+    说明 SubmitAction 不再等待 ActionResult。
+
+CancelActionRequest 仍然要尽量发出去
+    因此不能把已过期的 actionCtx 传给 cancel send。
+
+cancel send 是 best-effort
+    发送失败不改变 turn_failed(action_timeout) 的结果。
+```
+
 如果 turn_timeout 发生在 action 阶段，本质上也是 action 等待被父 context 取消，也应触发同一条 CancelActionRequest。
 
 Adapter 侧负责 best-effort 安全取消：
 
 ```text
-1. 收到 CancelActionRequest 后记录 cancelled action_id。
-2. 执行 ActionRequest 前检查 action_id 是否已取消。
-3. 如果已取消，不执行游戏动作，并返回或记录 ACTION_STATUS_CANCELLED。
-4. 如果动作已经执行或不可撤销，不做回滚，只记录日志。
+1. gRPC 接收线程收到 CancelActionRequest 后，直接记录 cancelled action_id。
+2. cancelled action_id 必须记录在并发安全结构中，例如 ConcurrentDictionary。
+3. 不要把“记录 cancelled action_id”丢进 dispatcher。
+4. SMAPI 主线程执行 ActionRequest 前检查 action_id 是否已取消。
+5. 如果已取消，不执行游戏动作，并返回或记录 ACTION_STATUS_CANCELLED。
+6. gate 命中后应删除该 action_id，避免 cancelled-set 长期增长。
+7. 如果动作已经执行或不可撤销，不做回滚，只记录日志。
 ```
+
+`TryRemove` 只能清理 gate 命中的 action_id。若动作已经执行，只是 ActionResult 慢了或丢了，Runtime 超时后再发来的 cancel 可能永远不会被 gate 消费，cancelled-set 会残留该 action_id。MVP0 可接受这个残留，因为 action_id 不复用且 timeout 低频；后续如需要硬上界，再增加 TTL 或容量上限。
+
+这个 gate 的主要价值不是拦截正常 ticking 下的 action。正常情况下 ActionRequest 入队后通常很快在下一次 UpdateTicked 执行，3s action_timeout 到达时动作大概率已经执行完。
+
+它真正要防的是：
+
+```text
+主线程停摆 / 加载画面 / 非 ticking 状态 / 游戏卡顿
+    ActionRequest 已经进入 dispatcher 队列，但尚未执行。
+
+Runtime action_timeout
+    Runtime 发出 CancelActionRequest。
+
+gRPC 接收线程直接记录 cancelled action_id
+    不依赖停摆的主线程 dispatcher。
+
+主线程恢复后 drain 队列
+    执行 action 前 gate 命中，跳过陈旧动作。
+```
+
+如果 cancel 记录也走 dispatcher，会出现 FIFO 失效：
+
+```text
+dispatcher 队列：
+    ActionRequest
+    CancelActionRequest
+
+主线程恢复后：
+    先执行 ActionRequest
+    再记录 cancelled action_id
+```
+
+这会让 cancel 在唯一真正有价值的场景里失效。因此 Adapter 必须在 gRPC 后台线程直接写并发 cancelled-set，由主线程在执行前读取并 TryRemove。
 
 CancelActionRequest 不是事务回滚机制，而是：
 
@@ -579,6 +629,20 @@ Adapter fallback
 ```
 
 MVP0 不实现复杂动作事务、重试、补偿或执行中强制中断；只实现 action 执行前的 best-effort cancel gate。
+
+MVP0 还需要接受两个残留语义：
+
+```text
+1. action_timeout 后，Runtime 会删除 pending action waiter。
+   如果 Adapter 之后返回 ACTION_STATUS_CANCELLED，Runtime 当前不会再消费这个迟到结果，
+   也不会修改已经终态的 turn_failed trace。
+
+2. 如果 action 已经执行，只是 ActionResult 慢了或丢了，
+   trace 可能记录 turn_failed(action_timeout)，但游戏里动作已经发生。
+   这是 best-effort cancel 的天然限制，不是回滚失败。
+```
+
+MVP0 中 action 阶段收到 `context deadline exceeded` 时统一记为 `action_timeout`。其中可能包含 turn_timeout 在 action 阶段耗尽的情况；如需严格区分，后续再引入 `context.WithTimeoutCause`。
 
 ------
 
@@ -837,6 +901,12 @@ runtime/internal/gateway/gateway.go
     CapabilityList 不再裁剪成 []string，而是把完整 Capability 透传给 registry，并确保 turn 失败有日志。
     从 AdapterHello 保存 game_id / session_id，并传给 AgentLoop / TurnTracer；save_id 来自 GameEvent。
 
+runtime/internal/gateway/stream_environment.go
+    SubmitAction 在 ctx.Done() 分支发送 CancelActionRequest。
+    CancelActionRequest 使用原 ActionRequest.action_id，不新建业务动作 ID。
+    CancelActionRequest 发送不能依赖已过期的 actionCtx；发送失败只作为 best-effort 失败处理。
+    Runtime 超时后会删除 pending action waiter；迟到的 ActionResult 当前会被丢弃，不回写已终态 trace。
+
 runtime/internal/llm/factory.go
     读取 timeout 相关配置，或让 AgentLoop 包装 timeout context。
 ```
@@ -849,6 +919,7 @@ runtime/internal/llm/factory.go
 
 ```text
 adapters/stardew/src/Capabilities/EmoteCapability.cs
+adapters/stardew/src/Runtime/ActionCancellationRegistry.cs
 ```
 
 建议修改：
@@ -859,12 +930,23 @@ CapabilityCatalog
 
 RuntimeClient
     处理 ActionRequest(capability=emote)。
+    增加 CancelAction 分支。
+    在 gRPC 接收线程直接记录 cancelled action_id，不经 dispatcher。
+    通过 ActionCancellationRegistry 保存 cancelled action_id。
+    HandleActionOnMainThread 执行 action 前做 cancel gate；命中后 TryConsumeCancelled 并跳过动作。
+
+ActionCancellationRegistry
+    使用 ConcurrentDictionary 或等价并发安全结构保存 cancelled action_id。
+    提供 MarkCancelled(action_id) 和 TryConsumeCancelled(action_id)。
+    作为纯 C# 小类，不依赖 SMAPI，方便单元测试后台线程写 / 主线程读的并发语义。
 
 ProtocolMapper
     保持 entity_id 映射集中管理。
+    构造 ACTION_STATUS_CANCELLED 的 ActionResult 或日志字段时，必须回显原 action_id。
 
 SMAPI 日志
     打印 tool/capability/action_id/status。
+    打印 CancelActionRequest 的 action_id 和 reason。
 ```
 
 emote 的具体游戏表现可以先选择简单实现：
@@ -902,6 +984,8 @@ AgentLoop records exactly one terminal event per turn
 AgentLoop records turn_failed when ActionResult status is not SUCCEEDED
 AgentLoop does not fabricate error for business ActionResult failure
 AgentLoop times out slow provider
+streamEnvironment action ctx timeout sends CancelActionRequest with original action_id
+Late ActionResult after action_timeout is ignored by Runtime pending waiter
 Prompt config controls language
 ToolRegistry registers tools from Capability.input_schema_json
 EnvironmentTool forwards generic ToolCall as ActionRequest without tool-specific branches
@@ -922,6 +1006,15 @@ adapter returns ActionResult
 trace contains full timeline in normal no-drop path
 ```
 
+Adapter 单元测试：
+
+```text
+ActionCancellationRegistry MarkCancelled 后 TryConsumeCancelled 返回 true
+TryConsumeCancelled 命中后再次调用返回 false
+未取消 action_id 返回 false
+后台线程 MarkCancelled、主线程 TryConsumeCancelled 的并发访问不需要 dispatcher
+```
+
 Adapter 手工测试：
 
 ```text
@@ -933,6 +1026,8 @@ Runtime 返回中文 speak 或 emote
 游戏内能看到效果
 SMAPI 日志能看到完整 send/recv
 Runtime trace 能按 turn_id 查到整轮执行
+将 action_timeout_ms 临时调小，确认 SMAPI 日志能看到 CancelActionRequest
+制造主线程延迟或短超时场景，确认已取消 action 在执行前被 gate 跳过
 ```
 
 ------
@@ -955,6 +1050,7 @@ P1 建议完成：
     prompt language config
     observe_timeout
     action_timeout
+    action_timeout -> CancelActionRequest best-effort cancel
     turn_failed trace 完整化
 
 P2 可延后：

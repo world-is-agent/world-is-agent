@@ -12,7 +12,8 @@ $requiredFiles = @(
     'src/State/ProbeObservation.cs',
     'src/State/ObservationBuilder.cs',
     'src/Capabilities/SpeakCapability.cs',
-    'src/Capabilities/EmoteCapability.cs'
+    'src/Capabilities/EmoteCapability.cs',
+    'src/Runtime/ActionCancellationRegistry.cs'
 )
 
 $failures = New-Object System.Collections.Generic.List[string]
@@ -51,6 +52,16 @@ Require-Content 'src/Runtime/CapabilityCatalog.cs' 'happy.*sad.*surprised.*neutr
 Require-Content 'src/Runtime/RuntimeClient.cs' '"emote" => this\.HandleEmoteAction' 'RuntimeClient must route emote ActionRequest messages.'
 Require-Content 'src/Runtime/ProtocolMapper.cs' 'RequireEmoteArgument' 'ProtocolMapper must parse emote ActionRequest arguments.'
 Require-Content 'src/Capabilities/EmoteCapability.cs' 'doEmote' 'Emote capability must use Stardew NPC.doEmote.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'ConcurrentDictionary' 'ActionCancellationRegistry must use a concurrent collection.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'MarkCancelled' 'ActionCancellationRegistry must expose MarkCancelled.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'TryConsumeCancelled' 'ActionCancellationRegistry must expose TryConsumeCancelled.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'TryRemove' 'ActionCancellationRegistry must remove consumed cancel markers.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'case RuntimeMessage\.PayloadOneofCase\.CancelAction' 'RuntimeClient must handle CancelAction messages.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'HandleCancelAction\(message\.CancelAction\)' 'RuntimeClient must handle cancellation on the gRPC receive thread.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'MarkCancelled\(request\.ActionId\)' 'RuntimeClient must record cancelled action IDs.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId' 'RuntimeClient must check cancellation before executing actions.'
+Require-Content 'src/Runtime/ProtocolMapper.cs' 'BuildCancelledActionResult' 'ProtocolMapper must build cancelled ActionResult messages.'
+Require-Content 'src/Runtime/ProtocolMapper.cs' 'ActionStatus\.Cancelled' 'Cancelled ActionResult must use ACTION_STATUS_CANCELLED.'
 
 if ($failures.Count -gt 0) {
     Write-Host 'Stardew adapter probe static check failed:'

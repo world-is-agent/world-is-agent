@@ -70,7 +70,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
-	loop := agent.NewLoop(fake.NewProvider(), registry, recorder)
+	loop := agent.NewLoop(fake.NewProvider(), registry, recorder, agent.DefaultConfig())
 
 	event := &protocolv1alpha1.GameEvent{
 		EventId:   "event_1",

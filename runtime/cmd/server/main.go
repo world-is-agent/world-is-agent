@@ -40,7 +40,19 @@ func main() {
 	}
 	defer traceRecorder.Close(context.Background())
 
-	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder)
+	agentConfig, err := agent.LoadConfigFile(agent.ConfigPathFromEnv())
+	if err != nil {
+		log.Fatalf("load agent config failed: %v", err)
+	}
+	log.Printf(
+		"GameAgent agent config: turn=%s llm=%s observe=%s action=%s",
+		agentConfig.TurnTimeout,
+		agentConfig.LLMTimeout,
+		agentConfig.ObserveTimeout,
+		agentConfig.ActionTimeout,
+	)
+	agentLoop := agent.NewLoop(modelProvider, toolRegistry, traceRecorder, agentConfig)
+
 	gatewayServer := gateway.NewServer(agentLoop, toolRegistry)
 
 	grpcServer := grpc.NewServer()

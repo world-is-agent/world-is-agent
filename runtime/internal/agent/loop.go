@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
 	"gameagent/runtime/internal/model"
@@ -22,6 +23,7 @@ type Loop struct {
 	model    model.Provider
 	tools    *tool.Registry
 	recorder trace.Recorder
+	config   Config
 }
 
 type ConnectionContext struct {
@@ -29,7 +31,7 @@ type ConnectionContext struct {
 	SessionID string
 }
 
-func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.Recorder) *Loop {
+func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.Recorder, config Config) *Loop {
 	if recorder == nil {
 		recorder = trace.NoopRecorder{}
 	}
@@ -38,6 +40,7 @@ func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.
 		model:    modelProvider,
 		tools:    tools,
 		recorder: recorder,
+		config:   config.WithDefaults(),
 	}
 }
 
@@ -64,6 +67,8 @@ func (l *Loop) HandleEvent(
 	if len(entityIDs) == 0 {
 		return fmt.Errorf("npc entity not found in game event")
 	}
+	ctx, cancelTurn := context.WithTimeout(ctx, l.config.TurnTimeout)
+	defer cancelTurn()
 
 	// 为本次有效 GameEvent 创建 TurnTracer。
 	turnTracer := trace.NewTurnTracer(l.recorder, trace.TurnContext{
@@ -76,9 +81,17 @@ func (l *Loop) HandleEvent(
 	})
 	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
-	obs, err := env.Observe(ctx, entityIDs[0])
+
+	observeCtx, cancelObserve := context.WithTimeout(ctx, l.config.ObserveTimeout)
+	obs, err := env.Observe(observeCtx, entityIDs[0])
+	cancelObserve()
+
 	if err != nil {
-		turnTracer.Fail("observation", "observation_failed", err, trace.EventData{})
+		reason := "observation_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "observe_timeout"
+		}
+		turnTracer.Fail("observation", reason, err, trace.EventData{})
 		return err
 	}
 	turnTracer.Emit(trace.EventObservationReceived, trace.EventData{})
@@ -91,9 +104,15 @@ func (l *Loop) HandleEvent(
 			"tool_count": len(req.Tools),
 		},
 	})
-	rep, err := l.model.Generate(ctx, req)
+	modelCtx, cancelLLM := context.WithTimeout(ctx, l.config.LLMTimeout)
+	rep, err := l.model.Generate(modelCtx, req)
+	cancelLLM()
 	if err != nil {
-		turnTracer.Fail("model", "provider_failed", err, trace.EventData{})
+		reason := "provider_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "provider_timeout"
+		}
+		turnTracer.Fail("model", reason, err, trace.EventData{})
 		return err
 	}
 
@@ -123,9 +142,16 @@ func (l *Loop) HandleEvent(
 		Tool:     actReq.Capability,
 	})
 
-	actRep, err := env.SubmitAction(ctx, actReq)
+	actionCtx, cancelAction := context.WithTimeout(ctx, l.config.ActionTimeout)
+	actRep, err := env.SubmitAction(actionCtx, actReq)
+	cancelAction()
+
 	if err != nil {
-		turnTracer.Fail("action", "submit_action_failed", err, trace.EventData{
+		reason := "submit_action_failed"
+		if errors.Is(err, context.DeadlineExceeded) {
+			reason = "action_timeout"
+		}
+		turnTracer.Fail("action", reason, err, trace.EventData{
 			ActionID: actReq.ActionId,
 			Tool:     actReq.Capability,
 		})

@@ -14,6 +14,17 @@ if (-not (Test-Path -LiteralPath $protoFile)) {
     throw "Missing proto file: $protoFile"
 }
 
+$go = Get-Command go -ErrorAction SilentlyContinue
+if ($go) {
+    $goPath = (& $go.Source env GOPATH 2>$null)
+    if (-not [string]::IsNullOrWhiteSpace($goPath)) {
+        $goBin = Join-Path $goPath 'bin'
+        if ((Test-Path -LiteralPath $goBin) -and ($env:PATH -notlike "*$goBin*")) {
+            $env:PATH = "$goBin;$env:PATH"
+        }
+    }
+}
+
 $protoc = Get-Command protoc -ErrorAction Stop
 Get-Command protoc-gen-go -ErrorAction Stop | Out-Null
 Get-Command protoc-gen-go-grpc -ErrorAction Stop | Out-Null
@@ -43,5 +54,5 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$generatedPath = Join-Path $protocolRootPath 'gen\go\gameagent\protocol\v1alpha1'
+$generatedPath = Join-Path $protocolRootPath 'gen\go\gameagent\protocol\v1alpha2'
 Write-Host "Generated Go protocol files under: $generatedPath"

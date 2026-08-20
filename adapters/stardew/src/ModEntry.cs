@@ -36,7 +36,7 @@ public sealed class ModEntry : Mod
             this.Monitor
         );
         this.playerInteractProbe = new PlayerInteractProbe(
-            this.config.TargetAgentName,
+            this.config.AgentTargets,
             this.runtimeClient,
             this.Monitor,
             helper.Input
@@ -48,8 +48,8 @@ public sealed class ModEntry : Mod
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
         helper.ConsoleCommands.Add(
-            "gameagent_probe_linus",
-            "Run the GameAgent Linus probe without clicking.",
+            "gameagent_probe_npc",
+            "Run the GameAgent NPC probe without clicking. Usage: gameagent_probe_npc [NPC name]",
             this.RunProbeCommand
         );
 
@@ -76,12 +76,12 @@ public sealed class ModEntry : Mod
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
-        this.runtimeClient?.RefreshSaveContext();
+        this.runtimeClient?.RefreshWorldContext();
     }
 
     private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
     {
-        this.runtimeClient?.ClearSaveContext();
+        this.runtimeClient?.ClearWorldContext();
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -109,9 +109,11 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        string targetAgentName = this.config?.TargetAgentName ?? "Linus";
-        NPC? linus = Game1.getCharacterFromName(targetAgentName, mustBeVillager: true);
-        if (linus is null)
+        string targetAgentName = args.Length > 0
+            ? string.Join(" ", args).Trim()
+            : this.config?.AgentTargets?.FirstOrDefault(name => !string.IsNullOrWhiteSpace(name)) ?? "Linus";
+        NPC? target = Game1.getCharacterFromName(targetAgentName, mustBeVillager: true);
+        if (target is null)
         {
             this.Monitor.Log($"Could not find {targetAgentName} in this save.", LogLevel.Warn);
             return;
@@ -123,6 +125,6 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        this.runtimeClient.SendPlayerInteracted(linus, Game1.player, "console_probe");
+        this.runtimeClient.SendPlayerInteracted(target, Game1.player, "console_probe");
     }
 }

@@ -19,10 +19,10 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
 
     $requiredPatterns = @(
         'syntax\s*=\s*"proto3";',
-        'package\s+gameagent\.protocol\.v1alpha1;',
+        'package\s+gameagent\.protocol\.v1alpha2;',
         'import\s+"google/protobuf/struct\.proto";',
-        'option\s+csharp_namespace\s*=\s*"GameAgent\.Protocol\.V1Alpha1";',
-        'option\s+go_package\s*=\s*"gameagent/protocol/gen/go/gameagent/protocol/v1alpha1;protocolv1alpha1";',
+        'option\s+csharp_namespace\s*=\s*"GameAgent\.Protocol\.V1Alpha2";',
+        'option\s+go_package\s*=\s*"gameagent/protocol/gen/go/gameagent/protocol/v1alpha2;protocolv1alpha2";',
         'service\s+GameAgentGateway\s*\{',
         'rpc\s+Connect\s*\(\s*stream\s+AdapterMessage\s*\)\s+returns\s*\(\s*stream\s+RuntimeMessage\s*\);',
         'message\s+AdapterHello\s*\{',
@@ -48,6 +48,8 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         'message\s+CancelActionRequest\s*\{',
         'message\s+Error\s*\{',
         'message\s+Heartbeat\s*\{',
+        'message\s+AdapterMessage\s*\{',
+        'message\s+RuntimeMessage\s*\{',
         'oneof\s+payload\s*\{'
     )
 
@@ -69,20 +71,68 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         Add-Violation 'AdapterHello.session_id must use field 6'
     }
 
+    if ($proto -match 'message\s+AdapterHello\s*\{[^}]*save_id') {
+        Add-Violation 'AdapterHello must not include save_id in v1alpha2'
+    }
+
+    if ($proto -match 'message\s+AdapterHello\s*\{[^}]*world_id') {
+        Add-Violation 'AdapterHello must not include world_id in v1alpha2'
+    }
+
     if ($proto -notmatch 'message\s+EnvironmentReady\s*\{[^}]*string\s+session_id\s*=\s*1;') {
         Add-Violation 'EnvironmentReady.session_id must use field 1'
+    }
+
+    if ($proto -notmatch 'message\s+GameEvent\s*\{[^}]*string\s+world_id\s*=\s*7;') {
+        Add-Violation 'GameEvent.world_id must use field 7'
+    }
+
+    if ($proto -notmatch 'message\s+GameEvent\s*\{[^}]*string\s+target_entity_id\s*=\s*8;') {
+        Add-Violation 'GameEvent.target_entity_id must use field 8'
+    }
+
+    if ($proto -notmatch 'message\s+ObserveRequest\s*\{[^}]*string\s+world_id\s*=\s*2;') {
+        Add-Violation 'ObserveRequest.world_id must use field 2'
+    }
+
+    if ($proto -notmatch 'message\s+Observation\s*\{[^}]*string\s+world_id\s*=\s*7;') {
+        Add-Violation 'Observation.world_id must use field 7'
+    }
+
+    if ($proto -notmatch 'message\s+ActionRequest\s*\{[^}]*string\s+world_id\s*=\s*6;') {
+        Add-Violation 'ActionRequest.world_id must use field 6'
+    }
+
+    if ($proto -notmatch 'EVENT_ACK_STATUS_DUPLICATE\s*=\s*2;') {
+        Add-Violation 'EventAckStatus must keep DUPLICATE at field value 2'
+    }
+
+    if ($proto -notmatch 'message\s+Heartbeat\s*\{[^}]*uint64\s+last_event_sequence\s*=\s*2;') {
+        Add-Violation 'Heartbeat.last_event_sequence must use field 2'
+    }
+
+    if ($proto -notmatch 'message\s+AdapterMessage\s*\{[^}]*AdapterHello\s+hello\s*=\s*10;[^}]*GameEvent\s+event\s*=\s*11;[^}]*Observation\s+observation\s*=\s*12;[^}]*CapabilityList\s+capabilities\s*=\s*13;[^}]*ActionStatusUpdate\s+action_status\s*=\s*14;[^}]*ActionResult\s+action_result\s*=\s*15;[^}]*Heartbeat\s+heartbeat\s*=\s*16;[^}]*Error\s+error\s*=\s*17;') {
+        Add-Violation 'AdapterMessage envelope oneof must match v1alpha2 contract'
+    }
+
+    if ($proto -notmatch 'message\s+RuntimeMessage\s*\{[^}]*EnvironmentReady\s+environment_ready\s*=\s*10;[^}]*ObserveRequest\s+observe\s*=\s*11;[^}]*CapabilityRequest\s+capability_request\s*=\s*12;[^}]*ActionRequest\s+action\s*=\s*13;[^}]*CancelActionRequest\s+cancel_action\s*=\s*14;[^}]*EventAck\s+event_ack\s*=\s*15;[^}]*Error\s+error\s*=\s*16;') {
+        Add-Violation 'RuntimeMessage envelope oneof must match v1alpha2 contract'
     }
 
     if ($proto -match 'ProtocolError') {
         Add-Violation 'proto must use Error, not ProtocolError'
     }
 
+    if ($proto -match 'save_id') {
+        Add-Violation 'v1alpha2 must use world_id, not save_id'
+    }
+
     if ($proto -match 'instance_id') {
-        Add-Violation 'v1alpha1 must use session_id, not instance_id'
+        Add-Violation 'v1alpha2 must use session_id, not instance_id'
     }
 
     if ($proto -match 'agent_id') {
-        Add-Violation 'v1alpha1 must not expose agent_id to adapters'
+        Add-Violation 'v1alpha2 must not expose agent_id to adapters'
     }
 }
 

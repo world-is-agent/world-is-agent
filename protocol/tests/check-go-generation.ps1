@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $scriptPath = Join-Path $ProtocolRoot 'scripts\gen-go.ps1'
-$generatedPath = Join-Path $ProtocolRoot 'gen\go\gameagent\protocol\v1alpha1'
+$generatedPath = Join-Path $ProtocolRoot 'gen\go\gameagent\protocol\v1alpha2'
 $pbGo = Join-Path $generatedPath 'gameagent.pb.go'
 $grpcGo = Join-Path $generatedPath 'gameagent_grpc.pb.go'
 $violations = New-Object System.Collections.Generic.List[string]
@@ -38,8 +38,8 @@ foreach ($file in @($pbGo, $grpcGo)) {
 
 if (Test-Path -LiteralPath $pbGo) {
     $pbSource = Get-Content -LiteralPath $pbGo -Raw -Encoding UTF8
-    if ($pbSource -notmatch 'package\s+protocolv1alpha1') {
-        Add-Violation 'generated Go protobuf package must be protocolv1alpha1'
+    if ($pbSource -notmatch 'package\s+protocolv1alpha2') {
+        Add-Violation 'generated Go protobuf package must be protocolv1alpha2'
     }
 }
 

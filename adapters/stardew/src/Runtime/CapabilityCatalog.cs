@@ -1,4 +1,4 @@
-using GameAgent.Protocol.V1Alpha1;
+using GameAgent.Protocol.V1Alpha2;
 
 namespace GameAgent.Stardew.Runtime;
 

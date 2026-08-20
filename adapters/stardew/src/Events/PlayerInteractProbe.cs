@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using GameAgent.Stardew.Runtime;
 using Microsoft.Xna.Framework;
 using StardewModdingAPI;
@@ -9,19 +11,22 @@ namespace GameAgent.Stardew.Events;
 /// <summary>Detects the first spike event: player action-button interaction with the target NPC.</summary>
 public sealed class PlayerInteractProbe
 {
-    private readonly string targetAgentName;
+    private readonly IReadOnlyCollection<string> agentTargets;
     private readonly RuntimeClient runtimeClient;
     private readonly IMonitor monitor;
     private readonly IInputHelper input;
 
     public PlayerInteractProbe(
-        string targetAgentName,
+        IEnumerable<string> agentTargets,
         RuntimeClient runtimeClient,
         IMonitor monitor,
         IInputHelper input
     )
     {
-        this.targetAgentName = targetAgentName;
+        this.agentTargets = (agentTargets ?? Enumerable.Empty<string>())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name.Trim())
+            .ToArray();
         this.runtimeClient = runtimeClient;
         this.monitor = monitor;
         this.input = input;
@@ -35,7 +40,7 @@ public sealed class PlayerInteractProbe
         if (!this.IsCandidateInteractionButton(e.Button))
             return false;
 
-        NPC? target = this.FindClickedTarget(e.Cursor);
+        NPC? target = this.FindClickedTarget(e.Cursor, allowAdjacentTile: e.Button != SButton.MouseLeft);
         if (target is null)
             return false;
 
@@ -57,23 +62,52 @@ public sealed class PlayerInteractProbe
         return button.IsActionButton() || button is SButton.MouseLeft or SButton.MouseRight;
     }
 
-    private NPC? FindClickedTarget(ICursorPosition cursor)
+    private NPC? FindClickedTarget(ICursorPosition cursor, bool allowAdjacentTile)
     {
-        NPC? target = Game1.getCharacterFromName(this.targetAgentName, mustBeVillager: true);
-        if (target?.currentLocation is null)
-            return null;
-
-        if (!ReferenceEquals(target.currentLocation, Game1.currentLocation))
+        if (Game1.currentLocation is null)
             return null;
 
         Vector2 absolutePixels = cursor.AbsolutePixels;
-        if (target.GetBoundingBox().Contains((int)absolutePixels.X, (int)absolutePixels.Y))
-            return target;
-
         Vector2 grabTile = cursor.GrabTile;
-        if (Vector2.Distance(target.Tile, grabTile) <= 1.25f)
-            return target;
+        var candidatesByName = new Dictionary<string, NPC>(StringComparer.Ordinal);
+        var candidates = new List<InteractCandidate>();
 
-        return null;
+        foreach (NPC npc in Game1.currentLocation.characters)
+        {
+            if (npc.currentLocation is null || !ReferenceEquals(npc.currentLocation, Game1.currentLocation))
+                continue;
+
+            if (!npc.IsVillager)
+                continue;
+
+            Rectangle bounds = npc.GetBoundingBox();
+            candidatesByName[npc.Name] = npc;
+            candidates.Add(
+                new InteractCandidate(
+                    npc.Name,
+                    bounds.Left,
+                    bounds.Top,
+                    bounds.Right,
+                    bounds.Bottom,
+                    npc.Tile.X,
+                    npc.Tile.Y
+                )
+            );
+        }
+
+        InteractCandidate? selected = PlayerInteractTargetSelector.Select(
+            candidates,
+            this.agentTargets,
+            absolutePixels.X,
+            absolutePixels.Y,
+            grabTile.X,
+            grabTile.Y,
+            allowAdjacentTile
+        );
+
+        if (selected is null)
+            return null;
+
+        return candidatesByName.TryGetValue(selected.Name, out NPC? target) ? target : null;
     }
 }

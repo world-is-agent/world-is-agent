@@ -1,209 +1,33 @@
-using System;
-using System.Threading;
-using GameAgent.Protocol.V1Alpha1;
+using GameAgent.Protocol.V1Alpha2;
 using GameAgent.Stardew.State;
-using Google.Protobuf.WellKnownTypes;
 using StardewValley;
 
 namespace GameAgent.Stardew.Runtime;
 
-public static class ProtocolMapper
+public static partial class ProtocolMapper
 {
-    private const string NpcEntityPrefix = "npc:";
-    private const string PlayerEntityId = "player:local";
-    private static long messageSequence;
-
     public static string ToNpcEntityId(NPC npc)
     {
-        return $"{NpcEntityPrefix}{npc.Name}";
+        return ToNpcEntityId(npc.Name);
     }
 
-    public static bool TryParseNpcEntityId(string entityId, out string npcName)
+    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string trigger, ulong sequence, string worldId)
     {
-        if (entityId.StartsWith(NpcEntityPrefix, StringComparison.Ordinal) && entityId.Length > NpcEntityPrefix.Length)
-        {
-            npcName = entityId[NpcEntityPrefix.Length..];
-            return true;
-        }
-
-        npcName = string.Empty;
-        return false;
+        return BuildPlayerInteractedWithNpcEvent(
+            npcEntityId: ToNpcEntityId(npc),
+            npcDisplayName: npc.displayName,
+            playerEntityId: PlayerEntityId,
+            playerDisplayName: player.Name,
+            trigger: trigger,
+            sequence: sequence,
+            worldId: worldId,
+            gameTime: BuildGameTime()
+        );
     }
 
-    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string trigger, ulong sequence, string saveId)
+    public static Observation BuildObservation(string entityId, ProbeObservation probe, string worldId)
     {
-        return new GameEvent
-        {
-            EventId = NewMessageId("event"),
-            EventType = "player_interacted_with_npc",
-            GameTime = BuildGameTime(),
-            SaveId = saveId,
-            Payload = new Struct
-            {
-                Fields =
-                {
-                    ["trigger"] = Value.ForString(trigger),
-                    ["source"] = Value.ForString("stardew-smapi"),
-                },
-            },
-            Sequence = sequence,
-            Entities =
-            {
-                BuildPlayerEntity(player),
-                BuildNpcEntity(npc),
-            },
-        };
-    }
-
-    public static Observation BuildObservation(string entityId, ProbeObservation probe, string saveId)
-    {
-        return new Observation
-        {
-            EntityId = entityId,
-            Revision = 1,
-            GameTime = BuildGameTime(),
-            SaveId = saveId,
-            State = new Struct
-            {
-                Fields =
-                {
-                    ["agent_id"] = Value.ForString(probe.AgentId),
-                    ["agent_name"] = Value.ForString(probe.AgentName),
-                    ["agent_location"] = Value.ForString(probe.AgentLocation),
-                    ["agent_tile_x"] = Value.ForNumber(probe.AgentTileX),
-                    ["agent_tile_y"] = Value.ForNumber(probe.AgentTileY),
-                    ["game_time"] = Value.ForNumber(probe.GameTime),
-                    ["player_name"] = Value.ForString(probe.PlayerName),
-                    ["player_location"] = Value.ForString(probe.PlayerLocation),
-                    ["player_tile_x"] = Value.ForNumber(probe.PlayerTileX),
-                    ["player_tile_y"] = Value.ForNumber(probe.PlayerTileY),
-                    ["friendship"] = Value.ForNumber(probe.Friendship),
-                    ["trigger"] = Value.ForString(probe.Trigger),
-                },
-            },
-            NearbyEntities =
-            {
-                new EntityRef
-                {
-                    EntityId = PlayerEntityId,
-                    EntityType = "player",
-                    DisplayName = probe.PlayerName,
-                },
-            },
-        };
-    }
-
-    public static string RequireTextArgument(ActionRequest request)
-    {
-        if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("text", out Value? value))
-            throw new ArgumentException("missing required speak argument: text");
-
-        string text = value.StringValue;
-        if (string.IsNullOrWhiteSpace(text))
-            throw new ArgumentException("speak argument text must not be empty");
-
-        return text;
-    }
-
-    public static string RequireEmoteArgument(ActionRequest request)
-    {
-        if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("emote", out Value? value))
-            throw new ArgumentException("missing required emote argument: emote");
-
-        string emote = value.StringValue;
-        if (string.IsNullOrWhiteSpace(emote))
-            throw new ArgumentException("emote argument must not be empty");
-
-        return emote;
-    }
-
-    public static ActionResult BuildSucceededActionResult(ActionRequest request, string displayedText)
-    {
-        return BuildSucceededActionResult(request, "displayed_text", displayedText);
-    }
-
-    public static ActionResult BuildSucceededActionResult(ActionRequest request, string outputFieldName, string outputValue)
-    {
-        return new ActionResult
-        {
-            ActionId = request.ActionId,
-            Status = ActionStatus.Succeeded,
-            Output = new Struct
-            {
-                Fields =
-                {
-                    [outputFieldName] = Value.ForString(outputValue),
-                },
-            },
-        };
-    }
-
-    public static ActionResult BuildFailedActionResult(ActionRequest request, string code, Exception ex)
-    {
-        return new ActionResult
-        {
-            ActionId = request.ActionId,
-            Status = ActionStatus.Failed,
-            Error = new Error
-            {
-                Code = code,
-                Message = ex.Message,
-            },
-        };
-    }
-
-    public static ActionResult BuildCancelledActionResult(ActionRequest request, string reason)
-    {
-        return new ActionResult
-        {
-            ActionId = request.ActionId,
-            Status = ActionStatus.Cancelled,
-            Error = new Error
-            {
-                Code = "action_cancelled",
-                Message = reason,
-            },
-        };
-    }
-
-    public static AdapterMessage BuildErrorMessage(string correlationId, string code, Exception ex)
-    {
-        return new AdapterMessage
-        {
-            MessageId = NewMessageId("error"),
-            CorrelationId = correlationId,
-            Error = new Error
-            {
-                Code = code,
-                Message = ex.Message,
-            },
-        };
-    }
-
-    public static string NewMessageId(string prefix)
-    {
-        long sequence = Interlocked.Increment(ref messageSequence);
-        return $"{prefix}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{sequence}";
-    }
-
-    private static EntityRef BuildPlayerEntity(Farmer player)
-    {
-        return new EntityRef
-        {
-            EntityId = PlayerEntityId,
-            EntityType = "player",
-            DisplayName = player.Name,
-        };
-    }
-
-    private static EntityRef BuildNpcEntity(NPC npc)
-    {
-        return new EntityRef
-        {
-            EntityId = ToNpcEntityId(npc),
-            EntityType = "npc",
-            DisplayName = npc.displayName,
-        };
+        return BuildObservation(entityId, probe, worldId, BuildGameTime());
     }
 
     private static GameTime BuildGameTime()

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
 )
 
@@ -25,7 +25,7 @@ func NewRegistry() *Registry {
 }
 
 // RegisterEnvironmentCapabilities 把 Adapter 的 environment-level capability 注册成 tool。
-func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alpha1.Capability) {
+func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alpha2.Capability) {
 	for _, capability := range capabilities {
 
 		if capability == nil {

@@ -4,7 +4,7 @@
 // - protoc             v6.33.0
 // source: gameagent.proto
 
-package protocolv1alpha1
+package protocolv1alpha2
 
 import (
 	context "context"
@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GameAgentGateway_Connect_FullMethodName = "/gameagent.protocol.v1alpha1.GameAgentGateway/Connect"
+	GameAgentGateway_Connect_FullMethodName = "/gameagent.protocol.v1alpha2.GameAgentGateway/Connect"
 )
 
 // GameAgentGatewayClient is the client API for GameAgentGateway service.
@@ -100,7 +100,7 @@ type GameAgentGateway_ConnectServer = grpc.BidiStreamingServer[AdapterMessage, R
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var GameAgentGateway_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "gameagent.protocol.v1alpha1.GameAgentGateway",
+	ServiceName: "gameagent.protocol.v1alpha2.GameAgentGateway",
 	HandlerType: (*GameAgentGatewayServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

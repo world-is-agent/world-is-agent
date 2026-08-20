@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace GameAgent.Stardew.Runtime;
 
 public sealed class AdapterConfig
@@ -8,11 +10,9 @@ public sealed class AdapterConfig
 
     public string AdapterVersion { get; set; } = "0.1.0";
 
-    public string ProtocolVersion { get; set; } = "v1alpha1";
-
     public string GameId { get; set; } = "stardew-valley";
 
-    public string TargetAgentName { get; set; } = "Linus";
+    public List<string> AgentTargets { get; set; } = new();
 
     public bool EnableProtocolTrace { get; set; } = true;
 }

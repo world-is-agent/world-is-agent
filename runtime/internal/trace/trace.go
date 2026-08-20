@@ -30,7 +30,7 @@ type EventData struct {
 
 type TurnContext struct {
 	GameID    string
-	SaveID    string
+	WorldID   string
 	SessionID string
 	EventID   string
 	EventType string
@@ -47,7 +47,7 @@ type Event struct {
 	ElapsedMS     int64     `json:"elapsed_ms"`
 
 	GameID    string `json:"game_id,omitempty"`
-	SaveID    string `json:"save_id,omitempty"`
+	WorldID   string `json:"world_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	EventID   string `json:"event_id,omitempty"`
 	EventType string `json:"event_type,omitempty"`

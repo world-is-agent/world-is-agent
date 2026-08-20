@@ -5,7 +5,7 @@ import (
 	"sync"
 	"testing"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -14,7 +14,7 @@ import (
 func TestRegisterEnvironmentCapabilitiesUsesAdapterSchema(t *testing.T) {
 	registry := NewRegistry()
 
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 		nil,
 		{
 			Name:            "",
@@ -67,7 +67,7 @@ func TestRegistryAllowsConcurrentRegisterAndRead(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < 200; i++ {
-				registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+				registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 					{
 						Name:            fmt.Sprintf("tool_%d_%d", worker, i),
 						InputSchemaJson: `{"type":"object"}`,
@@ -84,7 +84,7 @@ func TestRegistryAllowsConcurrentRegisterAndRead(t *testing.T) {
 
 func TestValidateToolCallOnlyChecksEnvelope(t *testing.T) {
 	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "emote",
 			InputSchemaJson: `{"type":"object","properties":{"emote":{"type":"string"}},"required":["emote"]}`,

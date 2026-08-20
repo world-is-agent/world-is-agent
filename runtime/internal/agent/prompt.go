@@ -2,7 +2,7 @@ package agent
 
 import (
 	"fmt"
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -11,8 +11,8 @@ import (
 
 // BuildModelRequest 构建当前 Agent Turn 的模型输入。
 func BuildModelRequest(
-	event *protocolv1alpha1.GameEvent,
-	observation *protocolv1alpha1.Observation,
+	event *protocolv1alpha2.GameEvent,
+	observation *protocolv1alpha2.Observation,
 	tools []model.ToolDefinition,
 	promptConfig PromptConfig,
 ) model.Request {
@@ -43,8 +43,8 @@ Your job:
 }
 
 func BuildTurnMessage(
-	event *protocolv1alpha1.GameEvent,
-	observation *protocolv1alpha1.Observation,
+	event *protocolv1alpha2.GameEvent,
+	observation *protocolv1alpha2.Observation,
 ) model.Message {
 	return model.Message{
 		Role: model.RoleUser,

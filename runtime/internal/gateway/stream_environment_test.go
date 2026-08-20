@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -28,7 +28,7 @@ func TestStreamEnvironmentSubmitActionRejectsNilRequest(t *testing.T) {
 func TestStreamEnvironmentSubmitActionRejectsEmptyActionID(t *testing.T) {
 	env := newStreamEnvironment(nil)
 
-	_, err := env.SubmitAction(context.Background(), &protocolv1alpha1.ActionRequest{})
+	_, err := env.SubmitAction(context.Background(), &protocolv1alpha2.ActionRequest{})
 
 	if err == nil {
 		t.Fatal("expected error for empty action id")
@@ -39,13 +39,13 @@ func TestStreamEnvironmentSubmitActionRejectsEmptyActionID(t *testing.T) {
 }
 
 func TestStreamEnvironmentSubmitActionDoesNotSendExpiredAction(t *testing.T) {
-	stream := &captureStream{sent: make(chan *protocolv1alpha1.RuntimeMessage, 2)}
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
 	env := newStreamEnvironment(stream)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := env.SubmitAction(ctx, &protocolv1alpha1.ActionRequest{
+	_, err := env.SubmitAction(ctx, &protocolv1alpha2.ActionRequest{
 		ActionId:   "act_expired",
 		EntityId:   "npc:Linus",
 		Capability: "speak",
@@ -69,7 +69,7 @@ func TestStreamEnvironmentSubmitActionDoesNotSendExpiredAction(t *testing.T) {
 }
 
 func TestStreamEnvironmentSubmitActionSendsCancelOnContextDone(t *testing.T) {
-	stream := &captureStream{sent: make(chan *protocolv1alpha1.RuntimeMessage, 2)}
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
 	env := newStreamEnvironment(stream)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -77,7 +77,7 @@ func TestStreamEnvironmentSubmitActionSendsCancelOnContextDone(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := env.SubmitAction(ctx, &protocolv1alpha1.ActionRequest{
+		_, err := env.SubmitAction(ctx, &protocolv1alpha2.ActionRequest{
 			ActionId:   "act_1",
 			EntityId:   "npc:Linus",
 			Capability: "speak",
@@ -113,7 +113,7 @@ func TestStreamEnvironmentSubmitActionSendsCancelOnContextDone(t *testing.T) {
 }
 
 func TestStreamEnvironmentLateActionResultAfterTimeoutIsIgnored(t *testing.T) {
-	stream := &captureStream{sent: make(chan *protocolv1alpha1.RuntimeMessage, 2)}
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
 	env := newStreamEnvironment(stream)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -121,7 +121,7 @@ func TestStreamEnvironmentLateActionResultAfterTimeoutIsIgnored(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := env.SubmitAction(ctx, &protocolv1alpha1.ActionRequest{
+		_, err := env.SubmitAction(ctx, &protocolv1alpha2.ActionRequest{
 			ActionId:   "act_late",
 			EntityId:   "npc:Linus",
 			Capability: "speak",
@@ -147,9 +147,9 @@ func TestStreamEnvironmentLateActionResultAfterTimeoutIsIgnored(t *testing.T) {
 		t.Fatal("SubmitAction did not return after context deadline")
 	}
 
-	env.resolveActionResult("act_late", &protocolv1alpha1.ActionResult{
+	env.resolveActionResult("act_late", &protocolv1alpha2.ActionResult{
 		ActionId: "act_late",
-		Status:   protocolv1alpha1.ActionStatus_ACTION_STATUS_CANCELLED,
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_CANCELLED,
 	})
 
 	env.pendingMu.Lock()
@@ -160,17 +160,28 @@ func TestStreamEnvironmentLateActionResultAfterTimeoutIsIgnored(t *testing.T) {
 }
 
 func TestStreamEnvironmentFailObservationUnblocksObserve(t *testing.T) {
-	stream := &captureStream{sent: make(chan *protocolv1alpha1.RuntimeMessage, 1)}
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
 	env := newStreamEnvironment(stream)
 	wantErr := fmt.Errorf("adapter observe failed")
 
 	resultCh := make(chan error, 1)
 	go func() {
-		_, err := env.Observe(context.Background(), "npc:Linus")
+		_, err := env.Observe(context.Background(), "world:test", "npc:Linus")
 		resultCh <- err
 	}()
 
 	sent := stream.recvSent(t)
+	observe := sent.GetObserve()
+	if observe == nil {
+		t.Fatalf("expected ObserveRequest, got %T", sent.Payload)
+	}
+	if observe.WorldId != "world:test" {
+		t.Fatalf("observe world id = %q, want %q", observe.WorldId, "world:test")
+	}
+	if observe.EntityId != "npc:Linus" {
+		t.Fatalf("observe entity id = %q, want %q", observe.EntityId, "npc:Linus")
+	}
+
 	env.failObservation(sent.MessageId, wantErr)
 
 	select {
@@ -186,23 +197,66 @@ func TestStreamEnvironmentFailObservationUnblocksObserve(t *testing.T) {
 	}
 }
 
-type captureStream struct {
-	sent chan *protocolv1alpha1.RuntimeMessage
+func TestAdapterErrorExposesFailureReason(t *testing.T) {
+	err := adapterError{
+		code:    "world_mismatch",
+		message: "current world changed",
+	}
+
+	if err.FailureReason() != "world_mismatch" {
+		t.Fatalf("failure reason = %q, want world_mismatch", err.FailureReason())
+	}
+	if !strings.Contains(err.Error(), "world_mismatch") {
+		t.Fatalf("error string = %q, want code included", err.Error())
+	}
 }
 
-func (s *captureStream) Send(msg *protocolv1alpha1.RuntimeMessage) error {
+func TestStreamEnvironmentRejectsObservationScopeMismatch(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
+	env := newStreamEnvironment(stream)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := env.Observe(context.Background(), "world:test", "npc:Linus")
+		resultCh <- err
+	}()
+
+	sent := stream.recvSent(t)
+	env.resolveObservation(sent.MessageId, &protocolv1alpha2.Observation{
+		EntityId: "npc:Linus",
+		WorldId:  "world:other",
+	})
+
+	select {
+	case err := <-resultCh:
+		if err == nil {
+			t.Fatal("expected observation scope mismatch error")
+		}
+		if !strings.Contains(err.Error(), "observation_scope_mismatch") {
+			t.Fatalf("expected observation_scope_mismatch, got %q", err.Error())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("observe was not unblocked")
+	}
+}
+
+type captureStream struct {
+	sent chan *protocolv1alpha2.RuntimeMessage
+}
+
+func (s *captureStream) Send(msg *protocolv1alpha2.RuntimeMessage) error {
 	if s.sent == nil {
-		s.sent = make(chan *protocolv1alpha1.RuntimeMessage, 1)
+		s.sent = make(chan *protocolv1alpha2.RuntimeMessage, 1)
 	}
 	s.sent <- msg
 	return nil
 }
 
-func (s *captureStream) Recv() (*protocolv1alpha1.AdapterMessage, error) {
+func (s *captureStream) Recv() (*protocolv1alpha2.AdapterMessage, error) {
 	return nil, fmt.Errorf("recv not implemented")
 }
 
-func (s *captureStream) recvSent(t *testing.T) *protocolv1alpha1.RuntimeMessage {
+func (s *captureStream) recvSent(t *testing.T) *protocolv1alpha2.RuntimeMessage {
 	t.Helper()
 
 	select {

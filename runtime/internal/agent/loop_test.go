@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/llm/fake"
+	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 	"gameagent/runtime/internal/trace"
 
@@ -26,11 +27,13 @@ func (r *recordingTraceRecorder) Close(ctx context.Context) error {
 }
 
 type fakeEnvironment struct {
+	observedWorldID  string
 	observedEntityID string
-	submittedAction  *protocolv1alpha1.ActionRequest
+	submittedAction  *protocolv1alpha2.ActionRequest
 }
 
-func (f *fakeEnvironment) Observe(ctx context.Context, entityID string) (*protocolv1alpha1.Observation, error) {
+func (f *fakeEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
+	f.observedWorldID = worldID
 	f.observedEntityID = entityID
 
 	state, err := structpb.NewStruct(map[string]any{
@@ -41,30 +44,30 @@ func (f *fakeEnvironment) Observe(ctx context.Context, entityID string) (*protoc
 		return nil, err
 	}
 
-	return &protocolv1alpha1.Observation{
+	return &protocolv1alpha2.Observation{
 		EntityId: entityID,
-		SaveId:   "save:test",
+		WorldId:  worldID,
 		State:    state,
 	}, nil
 }
 
-func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha1.ActionRequest) (*protocolv1alpha1.ActionResult, error) {
+func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
 	f.submittedAction = req
 
-	return &protocolv1alpha1.ActionResult{
+	return &protocolv1alpha2.ActionResult{
 		ActionId: req.ActionId,
-		Status:   protocolv1alpha1.ActionStatus_ACTION_STATUS_SUCCEEDED,
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
 	}, nil
 }
 
 func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	registry := tool.NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha1.Capability{
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 		{
 			Name:            "speak",
 			Description:     "Make the NPC speak.",
 			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
-			ExecutionMode:   protocolv1alpha1.ExecutionMode_EXECUTION_MODE_SYNC,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		},
 	})
 
@@ -72,17 +75,22 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	recorder := &recordingTraceRecorder{}
 	loop := agent.NewLoop(fake.NewProvider(), registry, recorder, agent.DefaultConfig())
 
-	event := &protocolv1alpha1.GameEvent{
-		EventId:   "event_1",
-		EventType: "player_interacted_with_npc",
-		SaveId:    "save:test",
-		Entities: []*protocolv1alpha1.EntityRef{
+	event := &protocolv1alpha2.GameEvent{
+		EventId:        "event_1",
+		EventType:      "player_interacted_with_npc",
+		WorldId:        "world:test",
+		TargetEntityId: "npc:Robin",
+		Entities: []*protocolv1alpha2.EntityRef{
 			{
 				EntityId:   "player:local",
 				EntityType: "player",
 			},
 			{
 				EntityId:   "npc:Linus",
+				EntityType: "npc",
+			},
+			{
+				EntityId:   "npc:Robin",
 				EntityType: "npc",
 			},
 		},
@@ -93,20 +101,34 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		SessionID: "session:test",
 	}
 
-	if err := loop.HandleEvent(context.Background(), env, conn, event); err != nil {
+	key := session.AgentSessionKey{
+		GameID:   conn.GameID,
+		WorldID:  event.WorldId,
+		EntityID: event.TargetEntityId,
+	}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, event); err != nil {
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 
-	if env.observedEntityID != "npc:Linus" {
-		t.Fatalf("observed entity id = %q, want %q", env.observedEntityID, "npc:Linus")
+	if env.observedWorldID != "world:test" {
+		t.Fatalf("observed world id = %q, want %q", env.observedWorldID, "world:test")
+	}
+
+	if env.observedEntityID != "npc:Robin" {
+		t.Fatalf("observed entity id = %q, want %q", env.observedEntityID, "npc:Robin")
 	}
 
 	if env.submittedAction == nil {
 		t.Fatal("expected action to be submitted")
 	}
 
-	if env.submittedAction.EntityId != "npc:Linus" {
-		t.Fatalf("submitted entity id = %q, want %q", env.submittedAction.EntityId, "npc:Linus")
+	if env.submittedAction.WorldId != "world:test" {
+		t.Fatalf("submitted world id = %q, want %q", env.submittedAction.WorldId, "world:test")
+	}
+
+	if env.submittedAction.EntityId != "npc:Robin" {
+		t.Fatalf("submitted entity id = %q, want %q", env.submittedAction.EntityId, "npc:Robin")
 	}
 
 	if env.submittedAction.Capability != "speak" {
@@ -148,7 +170,7 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		if got.TraceID != got.TurnID {
 			t.Fatalf("trace event[%d] trace_id = %q, want turn_id %q", i, got.TraceID, got.TurnID)
 		}
-		if got.GameID != conn.GameID || got.SessionID != conn.SessionID || got.SaveID != event.SaveId || got.EventID != event.EventId || got.EventType != event.EventType || got.EntityID != "npc:Linus" {
+		if got.GameID != conn.GameID || got.SessionID != conn.SessionID || got.WorldID != event.WorldId || got.EventID != event.EventId || got.EventType != event.EventType || got.EntityID != "npc:Robin" {
 			t.Fatalf("trace event[%d] context mismatch: %+v", i, got)
 		}
 	}

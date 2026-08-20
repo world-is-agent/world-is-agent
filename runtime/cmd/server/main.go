@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/gateway"
 	"gameagent/runtime/internal/llm"
@@ -56,7 +56,7 @@ func main() {
 	gatewayServer := gateway.NewServer(agentLoop, toolRegistry)
 
 	grpcServer := grpc.NewServer()
-	protocolv1alpha1.RegisterGameAgentGatewayServer(grpcServer, gatewayServer)
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, gatewayServer)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:50051")
 	if err != nil {

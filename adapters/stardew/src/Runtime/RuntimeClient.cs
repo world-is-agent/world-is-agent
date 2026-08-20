@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using GameAgent.Protocol.V1Alpha1;
+using GameAgent.Protocol.V1Alpha2;
 using GameAgent.Stardew.Capabilities;
 using GameAgent.Stardew.State;
 using Grpc.Core;
@@ -13,6 +13,8 @@ namespace GameAgent.Stardew.Runtime;
 
 public sealed class RuntimeClient : IDisposable
 {
+    private const string ProtocolVersion = "v1alpha2";
+
     private readonly AdapterConfig config;
     private readonly MainThreadDispatcher dispatcher;
     private readonly ObservationBuilder observationBuilder;
@@ -27,8 +29,9 @@ public sealed class RuntimeClient : IDisposable
     private CancellationTokenSource? cancellation;
     private Task? receiveTask;
     private readonly string sessionId = Guid.NewGuid().ToString("N");
-    // currentSaveId 由 SMAPI 主线程生命周期事件维护；后台 gRPC 线程不要直接解析游戏状态。
-    private volatile string currentSaveId = string.Empty;
+    // currentWorldId is maintained from SMAPI main-thread lifecycle events.
+    // Background gRPC threads must not resolve Stardew world state directly.
+    private volatile string currentWorldId = string.Empty;
     private long eventSequence;
     private volatile bool isReady;
 
@@ -79,8 +82,14 @@ public sealed class RuntimeClient : IDisposable
             return;
         }
 
+        if (!RuntimeWorldScope.IsAvailable(this.currentWorldId))
+        {
+            this.monitor.Log("GameAgent world context is unavailable; ignoring interaction event.", LogLevel.Warn);
+            return;
+        }
+
         ulong sequence = unchecked((ulong)Interlocked.Increment(ref this.eventSequence));
-        GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, trigger, sequence, this.currentSaveId);
+        GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, trigger, sequence, this.currentWorldId);
 
         await this.SendAsync(
             new AdapterMessage
@@ -148,11 +157,10 @@ public sealed class RuntimeClient : IDisposable
         {
             AdapterId = this.config.AdapterId,
             AdapterVersion = this.config.AdapterVersion,
-            ProtocolVersion = this.config.ProtocolVersion,
+            ProtocolVersion = ProtocolVersion,
             GameId = this.config.GameId,
             GameVersion = "unknown",
             SessionId = this.sessionId,
-            SaveId = this.currentSaveId,
         };
 
         await this.SendAsync(
@@ -236,9 +244,20 @@ public sealed class RuntimeClient : IDisposable
     {
         try
         {
+            if (!RuntimeWorldScope.Matches(request.WorldId, this.currentWorldId))
+            {
+                string message = RuntimeWorldScope.MismatchMessage(request.WorldId, this.currentWorldId);
+                this.monitor.Log($"GameAgent ObserveRequest rejected: {message}", LogLevel.Warn);
+                this.SendFireAndForget(
+                    this.SendAsync(ProtocolMapper.BuildErrorMessage(correlationId, "world_mismatch", message), this.cancellation?.Token ?? CancellationToken.None),
+                    "Observe world mismatch"
+                );
+                return;
+            }
+
             NPC npc = this.RequireNpc(request.EntityId);
             ProbeObservation probe = this.observationBuilder.Build(npc, Game1.player, "runtime_observe");
-            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, probe, this.currentSaveId);
+            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, probe, this.currentWorldId);
 
             this.SendFireAndForget(
                 this.SendAsync(
@@ -269,7 +288,13 @@ public sealed class RuntimeClient : IDisposable
     {
         ActionResult result;
 
-        if (this.actionCancellationRegistry.TryConsumeCancelled(request.ActionId))
+        if (!RuntimeWorldScope.Matches(request.WorldId, this.currentWorldId))
+        {
+            string message = RuntimeWorldScope.MismatchMessage(request.WorldId, this.currentWorldId);
+            result = ProtocolMapper.BuildRejectedActionResult(request, "world_mismatch", message);
+            this.monitor.Log($"GameAgent ActionRequest rejected: {message}", LogLevel.Warn);
+        }
+        else if (this.actionCancellationRegistry.TryConsumeCancelled(request.ActionId))
         {
             result = ProtocolMapper.BuildCancelledActionResult(request, "action cancelled before execution");
             this.monitor.Log($"GameAgent ActionRequest skipped because it was cancelled: {request.ActionId}", LogLevel.Debug);
@@ -322,18 +347,18 @@ public sealed class RuntimeClient : IDisposable
         return npc;
     }
 
-    public void RefreshSaveContext()
+    public void RefreshWorldContext()
     {
-        this.currentSaveId = this.ResolveCurrentSaveId();
-        this.monitor.Log($"GameAgent save context refreshed: save_id={this.currentSaveId}", LogLevel.Debug);
+        this.currentWorldId = this.ResolveCurrentWorldId();
+        this.monitor.Log($"GameAgent world context refreshed: world_id={this.currentWorldId}", LogLevel.Debug);
     }
 
-    public void ClearSaveContext()
+    public void ClearWorldContext()
     {
-        this.currentSaveId = string.Empty;
+        this.currentWorldId = string.Empty;
     }
 
-    private string ResolveCurrentSaveId()
+    private string ResolveCurrentWorldId()
     {
         if (!Context.IsWorldReady)
             return string.Empty;
@@ -341,7 +366,7 @@ public sealed class RuntimeClient : IDisposable
         if (!string.IsNullOrWhiteSpace(Constants.SaveFolderName))
             return Constants.SaveFolderName;
 
-        return Game1.player?.UniqueMultiplayerID.ToString() ?? string.Empty;
+        return string.Empty;
     }
 
     private async Task SendAsync(AdapterMessage message, CancellationToken cancellationToken)
@@ -369,13 +394,13 @@ public sealed class RuntimeClient : IDisposable
         string detail = message.PayloadCase switch
         {
             AdapterMessage.PayloadOneofCase.Hello =>
-                $"AdapterHello message_id={message.MessageId} adapter_id={message.Hello?.AdapterId} game_id={message.Hello?.GameId} session_id={message.Hello?.SessionId} save_id={message.Hello?.SaveId}",
+                $"AdapterHello message_id={message.MessageId} adapter_id={message.Hello?.AdapterId} game_id={message.Hello?.GameId} session_id={message.Hello?.SessionId}",
             AdapterMessage.PayloadOneofCase.Capabilities =>
                 $"CapabilityList message_id={message.MessageId} correlation_id={message.CorrelationId} capabilities=[{string.Join(",", message.Capabilities.Capabilities.Select(capability => capability.Name))}]",
             AdapterMessage.PayloadOneofCase.Event =>
-                $"GameEvent message_id={message.MessageId} event_id={message.Event?.EventId} event_type={message.Event?.EventType} save_id={message.Event?.SaveId} entities=[{FormatEntities(message.Event)}]",
+                $"GameEvent message_id={message.MessageId} event_id={message.Event?.EventId} event_type={message.Event?.EventType} world_id={message.Event?.WorldId} target_entity_id={message.Event?.TargetEntityId} entities=[{FormatEntities(message.Event)}]",
             AdapterMessage.PayloadOneofCase.Observation =>
-                $"Observation message_id={message.MessageId} correlation_id={message.CorrelationId} entity_id={message.Observation?.EntityId} save_id={message.Observation?.SaveId}",
+                $"Observation message_id={message.MessageId} correlation_id={message.CorrelationId} entity_id={message.Observation?.EntityId} world_id={message.Observation?.WorldId}",
             AdapterMessage.PayloadOneofCase.ActionResult =>
                 $"ActionResult message_id={message.MessageId} action_id={message.ActionResult?.ActionId} status={message.ActionResult?.Status}",
             AdapterMessage.PayloadOneofCase.Error =>
@@ -401,9 +426,9 @@ public sealed class RuntimeClient : IDisposable
             RuntimeMessage.PayloadOneofCase.EventAck =>
                 $"EventAck message_id={message.MessageId} correlation_id={message.CorrelationId} event_id={message.EventAck?.EventId} status={message.EventAck?.Status}",
             RuntimeMessage.PayloadOneofCase.Observe =>
-                $"ObserveRequest message_id={message.MessageId} entity_id={message.Observe?.EntityId}",
+                $"ObserveRequest message_id={message.MessageId} entity_id={message.Observe?.EntityId} world_id={message.Observe?.WorldId}",
             RuntimeMessage.PayloadOneofCase.Action =>
-                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} capability={message.Action?.Capability} {FormatActionArguments(message.Action)}",
+                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} world_id={message.Action?.WorldId} capability={message.Action?.Capability} {FormatActionArguments(message.Action)}",
             RuntimeMessage.PayloadOneofCase.CancelAction =>
                 $"CancelActionRequest message_id={message.MessageId} action_id={message.CancelAction?.ActionId} reason={message.CancelAction?.Reason}",
             RuntimeMessage.PayloadOneofCase.Error =>

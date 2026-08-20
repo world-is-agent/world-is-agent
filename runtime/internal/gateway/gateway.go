@@ -1,20 +1,24 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"time"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
+	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 )
 
+const playerInteractedWithNPCEvent = "player_interacted_with_npc"
+
 // Server 实现 Runtime 侧的 GameAgentGateway gRPC 服务。
 type Server struct {
-	protocolv1alpha1.UnimplementedGameAgentGatewayServer
+	protocolv1alpha2.UnimplementedGameAgentGatewayServer
 
 	agentLoop *agent.Loop
 	tools     *tool.Registry
@@ -31,7 +35,7 @@ func NewServer(agentLoop *agent.Loop, tools *tool.Registry) *Server {
 //
 // 它先完成 Environment Bootstrap，发现 Adapter 提供的 capabilities，
 // 然后进入 recvLoop 持续分发 GameEvent / Observation / ActionResult。
-func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer) error {
+func (s *Server) Connect(stream protocolv1alpha2.GameAgentGateway_ConnectServer) error {
 	firstMessage, err := stream.Recv()
 	if err != nil {
 		return err
@@ -45,10 +49,10 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 	// EnvironmentReady 只表示协议连接已经建立；Runtime 是否能执行
 	// AgentRun，还要等 capability discovery 完成。
 	readyMessageID := newMessageID("runtime_ready")
-	readyMessage := &protocolv1alpha1.RuntimeMessage{
+	readyMessage := &protocolv1alpha2.RuntimeMessage{
 		MessageId: readyMessageID,
-		Payload: &protocolv1alpha1.RuntimeMessage_EnvironmentReady{
-			EnvironmentReady: &protocolv1alpha1.EnvironmentReady{
+		Payload: &protocolv1alpha2.RuntimeMessage_EnvironmentReady{
+			EnvironmentReady: &protocolv1alpha2.EnvironmentReady{
 				SessionId:        hello.SessionId,
 				ServerTimeUnixMs: time.Now().UnixMilli(),
 			},
@@ -67,10 +71,10 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 	// MVP0 先发现 environment-level capability；未来如果不同 entity
 	// 能力不同，再把 CapabilityRequest 细化到 entity_id 维度。
 	capabilityRequestID := newMessageID("cap_req")
-	capabilityRequestMessage := &protocolv1alpha1.RuntimeMessage{
+	capabilityRequestMessage := &protocolv1alpha2.RuntimeMessage{
 		MessageId: capabilityRequestID,
-		Payload: &protocolv1alpha1.RuntimeMessage_CapabilityRequest{
-			CapabilityRequest: &protocolv1alpha1.CapabilityRequest{},
+		Payload: &protocolv1alpha2.RuntimeMessage_CapabilityRequest{
+			CapabilityRequest: &protocolv1alpha2.CapabilityRequest{},
 		},
 	}
 
@@ -91,24 +95,18 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 	s.tools.RegisterEnvironmentCapabilities(capabilityList.Capabilities)
 
 	env := newStreamEnvironment(stream)
-	eventCh := make(chan *protocolv1alpha1.GameEvent, 16)
-
-	// AgentRun 不能直接在 recvLoop 中执行：HandleEvent 会等待
-	// Observation / ActionResult，而这些回复也必须由 recvLoop 接收。
-	go func() {
-		for event := range eventCh {
-			if err := s.agentLoop.HandleEvent(stream.Context(), env, conn, event); err != nil {
-				fmt.Printf("agent loop failed: %v\n", err)
-			}
-		}
-	}()
+	laneStore, err := session.NewLaneStore(stream.Context(), session.DefaultQueueSize)
+	if err != nil {
+		return err
+	}
+	defer laneStore.Close()
+	seenEventIDs := make(map[string]struct{})
 
 	// recvLoop 只负责接收和分发 AdapterMessage，避免被单次 AgentRun 阻塞。
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
 			env.failAllPending(err)
-			close(eventCh)
 			if errors.Is(err, io.EOF) {
 				return nil
 			}
@@ -118,63 +116,233 @@ func (s *Server) Connect(stream protocolv1alpha1.GameAgentGateway_ConnectServer)
 		// Event 会启动新的 AgentRun；Observation / ActionResult 用来唤醒
 		// 已经在 streamEnvironment 中等待的同步调用。
 		switch payload := msg.Payload.(type) {
-		case *protocolv1alpha1.AdapterMessage_Event:
+		case *protocolv1alpha2.AdapterMessage_Event:
 			if payload.Event == nil {
 				continue
 			}
-			status := protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED
-			var ackErr *protocolv1alpha1.Error
-
-			select {
-			case eventCh <- payload.Event:
-			default:
-				status = protocolv1alpha1.EventAckStatus_EVENT_ACK_STATUS_REJECTED
-				ackErr = &protocolv1alpha1.Error{
-					Code:    "event_queue_full",
-					Message: "Runtime is still processing previous events",
-				}
-				log.Printf("drop game event %q: event queue is full", payload.Event.EventId)
-			}
-
-			// EventAck 表示 Runtime 是否接收该 GameEvent；真正的 action
-			// 执行结果会在后续 ActionResult 中体现。
-			if err := env.send(eventAckMessage(msg.MessageId, payload.Event.EventId, status, ackErr)); err != nil {
+			if err := s.dispatchGameEvent(env, laneStore, seenEventIDs, conn, msg.MessageId, payload.Event); err != nil {
 				return err
 			}
 
-		case *protocolv1alpha1.AdapterMessage_Observation:
+		case *protocolv1alpha2.AdapterMessage_Observation:
 			if payload.Observation == nil {
 				continue
 			}
 			env.resolveObservation(msg.CorrelationId, payload.Observation)
 
-		case *protocolv1alpha1.AdapterMessage_ActionResult:
+		case *protocolv1alpha2.AdapterMessage_ActionResult:
 			if payload.ActionResult == nil {
 				continue
 			}
 			env.resolveActionResult(payload.ActionResult.ActionId, payload.ActionResult)
 
-		case *protocolv1alpha1.AdapterMessage_Error:
+		case *protocolv1alpha2.AdapterMessage_Error:
 			if payload.Error == nil {
 				continue
 			}
-			env.failObservation(msg.CorrelationId, fmt.Errorf("adapter error %s: %s", payload.Error.Code, payload.Error.Message))
+			env.failObservation(msg.CorrelationId, adapterError{
+				code:    payload.Error.Code,
+				message: payload.Error.Message,
+			})
 		}
 	}
 
 }
 
+// dispatchGameEvent 处理单个 GameEvent 的 admission 全流程：
+//
+//	Step 1  幂等：event_id 校验 + EnvironmentSession 内去重
+//	Step 2  契约：resolveAgentSessionKey 完成 pre-turn 校验与身份解析
+//	Step 3  路由：LaneStore.GetOrCreate 按身份拿/建串行队列
+//	Step 4  包装：组装 task（Run 执行 Turn / Abort 断连取消）+ admission barrier
+//	Step 5  背压：非阻塞入队，队列满 REJECTED
+//	Step 6  确认：先发 ACCEPTED，再记 seen，最后放行 barrier
+func (s *Server) dispatchGameEvent(
+	env *streamEnvironment,
+	laneStore *session.LaneStore,
+	seenEventIDs map[string]struct{},
+	conn agent.ConnectionContext,
+	messageID string,
+	event *protocolv1alpha2.GameEvent,
+) error {
+	// Step 1a：event_id 是去重与 trace 关联的基础，缺失直接拒绝。
+	if event.EventId == "" {
+		return env.send(eventAckMessage(
+			messageID,
+			event.EventId,
+			protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_REJECTED,
+			&protocolv1alpha2.Error{
+				Code:    "event_id_missing",
+				Message: "GameEvent.event_id is required",
+			},
+		))
+	}
+	// Step 1b：同一 EnvironmentSession 内已接纳过该 event_id
+	// → Adapter 重发/重试的同一条消息，回 DUPLICATE，不重复执行 Turn。
+	// 注意 REJECTED 的事件不写 seen，Adapter 修好后重发仍能重新 admission。
+	if _, ok := seenEventIDs[event.EventId]; ok {
+		return env.send(eventAckMessage(
+			messageID,
+			event.EventId,
+			protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_DUPLICATE,
+			nil,
+		))
+	}
+
+	// Step 2：pre-turn 校验 + 身份解析（event_type / target_entity_id /
+	// 目标在 entities 内 / Resolve 三要素），任一失败都 REJECTED，
+	// 不创建 lane、不创建 turn trace。
+	key, ackErr := resolveAgentSessionKey(conn, event)
+	if ackErr != nil {
+		return env.send(eventAckMessage(
+			messageID,
+			event.EventId,
+			protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_REJECTED,
+			ackErr,
+		))
+	}
+
+	// Step 3：按身份 key 拿/建该 Agent 的 ExecutionLane。
+	// 每个 Agent 一条 lane = 同一 Agent 的事件 FIFO 串行、不同 Agent 并行。
+	// GetOrCreate 失败（store 已 Close）→ environment_closed。
+	lane, err := laneStore.GetOrCreate(key)
+	if err != nil {
+		return env.send(eventAckMessage(
+			messageID,
+			event.EventId,
+			protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_REJECTED,
+			&protocolv1alpha2.Error{
+				Code:    "environment_closed",
+				Message: err.Error(),
+			},
+		))
+	}
+
+	// Step 4：把"执行一次 Turn"包装成 task。
+	// lane 只负责串行调度，不关心跑什么——Run 回调注入具体执行
+	// （Observe → LLM → Action）；Admitted 是 barrier，控制 worker
+	// 何时允许开跑（必须等 EventAck 发出）；Abort 处理断连时未轮到的事件。
+	admitted := make(chan struct{})
+	task := session.Task{
+		ID:       event.EventId,
+		Admitted: admitted,
+		Run: func(taskCtx context.Context) {
+			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, event); err != nil {
+				fmt.Printf("agent loop failed: %v\n", err)
+			}
+		},
+		Abort: func(reason session.AbortReason) {
+			log.Printf("abort queued game event %q: %s", event.EventId, reason)
+		},
+	}
+
+	// Step 5：非阻塞入队。队列上限 = 1（1 active + 1 queued），
+	// 第 3 个同 Agent 事件立即拒绝，避免积压陈旧上下文；
+	// 连接正在关闭时入队失败用 environment_closed 表达。
+	if err := lane.Enqueue(task); err != nil {
+		ackErr := &protocolv1alpha2.Error{
+			Code:    "session_queue_full",
+			Message: "Runtime is still processing previous events for this agent session",
+		}
+		if errors.Is(err, session.ErrLaneClosed) {
+			ackErr.Code = "environment_closed"
+			ackErr.Message = "Runtime event lane is closed"
+		}
+		log.Printf("drop game event %q for %s: %s", event.EventId, key.DiagnosticID(), ackErr.Code)
+		return env.send(eventAckMessage(
+			messageID,
+			event.EventId,
+			protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_REJECTED,
+			ackErr,
+		))
+	}
+
+	// Step 6：确认 + 记账 + 放行，顺序不可交换：
+	// ① 先发 ACCEPTED —— Adapter 先收到确认，ObserveRequest 才会发出；
+	// ② 再记 seen —— ACK 发送失败则不占去重名额，Adapter 重试可重新 admission；
+	// ③ 最后 close(admitted) —— 放行 worker 开始执行 task.Run。
+	// EventAck 表示 Runtime 是否接收该 GameEvent；真正的 action
+	// 执行结果会在后续 ActionResult 中体现。ack 成功发出后，
+	// admitted 才释放，避免 ObserveRequest 早于 ACCEPTED 到达 Adapter。
+	if err := env.send(eventAckMessage(
+		messageID,
+		event.EventId,
+		protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED,
+		nil,
+	)); err != nil {
+		return err
+	}
+	seenEventIDs[event.EventId] = struct{}{}
+	close(admitted)
+	return nil
+}
+
+// resolveAgentSessionKey 完成 pre-turn 校验与身份解析，被 dispatchGameEvent
+// Step 2 调用。失败返回 REJECTED 用的 *protocolv1alpha2.Error（pre-turn rejected，
+// 不创建 lane、不创建 turn trace）。
+//
+//	校验 1  event_type 准入：不属于本阶段支持的 trigger → 拒绝
+//	校验 2  target_entity_id 必须显式声明，不能靠列表顺序/类型猜
+//	校验 3  目标必须真实存在于 event.Entities，防 Adapter 声明矛盾
+//	校验 4  Resolve 三要素（game/world/entity）缺一 → 拒绝
+func resolveAgentSessionKey(conn agent.ConnectionContext, event *protocolv1alpha2.GameEvent) (session.AgentSessionKey, *protocolv1alpha2.Error) {
+	// 校验 1：Trigger Admission 必须在身份解析之前，
+	// 不支持的 event_type 不浪费后续解析（对应 Architecture §14）。
+	if event.EventType != playerInteractedWithNPCEvent {
+		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+			Code:    "unsupported_event_type",
+			Message: fmt.Sprintf("unsupported event_type %q", event.EventType),
+		}
+	}
+	// 校验 2：typed target_entity_id 是路由依据，为空无法确定事件归属。
+	if event.TargetEntityId == "" {
+		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+			Code:    "target_entity_missing",
+			Message: "GameEvent.target_entity_id is required",
+		}
+	}
+	// 校验 3：目标必须引用 entities 中已有的 EntityRef，
+	// 否则会解析出一个"凭空存在"的 Agent 身份。
+	if !eventContainsEntity(event, event.TargetEntityId) {
+		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+			Code:    "target_entity_not_in_event",
+			Message: fmt.Sprintf("target_entity_id %q is not present in GameEvent.entities", event.TargetEntityId),
+		}
+	}
+
+	// 校验 4：身份 = GameScope + WorldScope + StableEntityIdentity；
+	// 任一为空（如 world_id 未随事件传递）都拒绝，不用临时值兜底，
+	// 否则会静默破坏"EnvironmentSession 变化不影响身份"的不变量。
+	key, err := session.Resolve(conn.GameID, event.WorldId, event.TargetEntityId)
+	if err != nil {
+		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
+			Code:    "identity_scope_missing",
+			Message: err.Error(),
+		}
+	}
+	return key, nil
+}
+
+func eventContainsEntity(event *protocolv1alpha2.GameEvent, entityID string) bool {
+	for _, entity := range event.Entities {
+		if entity != nil && entity.EntityId == entityID {
+			return true
+		}
+	}
+	return false
+}
+
 func eventAckMessage(
 	correlationID string,
 	eventID string,
-	status protocolv1alpha1.EventAckStatus,
-	err *protocolv1alpha1.Error,
-) *protocolv1alpha1.RuntimeMessage {
-	return &protocolv1alpha1.RuntimeMessage{
+	status protocolv1alpha2.EventAckStatus,
+	err *protocolv1alpha2.Error,
+) *protocolv1alpha2.RuntimeMessage {
+	return &protocolv1alpha2.RuntimeMessage{
 		MessageId:     newMessageID("event_ack"),
 		CorrelationId: correlationID,
-		Payload: &protocolv1alpha1.RuntimeMessage_EventAck{
-			EventAck: &protocolv1alpha1.EventAck{
+		Payload: &protocolv1alpha2.RuntimeMessage_EventAck{
+			EventAck: &protocolv1alpha2.EventAck{
 				EventId: eventID,
 				Status:  status,
 				Error:   err,

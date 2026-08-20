@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 	"gameagent/runtime/internal/trace"
 )
@@ -14,8 +15,8 @@ import (
 //
 // Loop 只依赖这个接口，不直接依赖 gateway 或具体游戏 Adapter。
 type Environment interface {
-	Observe(ctx context.Context, entityID string) (*protocolv1alpha1.Observation, error)
-	SubmitAction(ctx context.Context, req *protocolv1alpha1.ActionRequest) (*protocolv1alpha1.ActionResult, error)
+	Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error)
+	SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error)
 }
 
 // Loop 执行 Runtime MVP0 的 one-turn AgentRun。
@@ -51,45 +52,40 @@ func (l *Loop) HandleEvent(
 	ctx context.Context,
 	env Environment,
 	conn ConnectionContext,
-	event *protocolv1alpha1.GameEvent,
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
 ) error {
-	if event.EventType != "player_interacted_with_npc" {
-		return nil
+	if key.EntityID == "" {
+		return fmt.Errorf("agent session entity id is empty")
 	}
-
-	// Agent Loop 只理解 protocol entity，不知道具体游戏 Adapter 的内部类型。
-	entityIDs := []string{}
-	for _, entity := range event.Entities {
-		if entity.EntityType == "npc" {
-			entityIDs = append(entityIDs, entity.EntityId)
-		}
-	}
-	if len(entityIDs) == 0 {
-		return fmt.Errorf("npc entity not found in game event")
+	if key.WorldID == "" {
+		return fmt.Errorf("agent session world id is empty")
 	}
 	ctx, cancelTurn := context.WithTimeout(ctx, l.config.TurnTimeout)
 	defer cancelTurn()
 
 	// 为本次有效 GameEvent 创建 TurnTracer。
 	turnTracer := trace.NewTurnTracer(l.recorder, trace.TurnContext{
-		GameID:    conn.GameID,
-		SaveID:    event.SaveId,
+		GameID:    key.GameID,
+		WorldID:   key.WorldID,
 		SessionID: conn.SessionID,
 		EventID:   event.EventId,
 		EventType: event.EventType,
-		EntityID:  entityIDs[0],
+		EntityID:  key.EntityID,
 	})
 	turnTracer.Emit(trace.EventTurnStarted, trace.EventData{})
 	turnTracer.Emit(trace.EventObservationRequested, trace.EventData{})
 
 	observeCtx, cancelObserve := context.WithTimeout(ctx, l.config.ObserveTimeout)
-	obs, err := env.Observe(observeCtx, entityIDs[0])
+	obs, err := env.Observe(observeCtx, key.WorldID, key.EntityID)
 	cancelObserve()
 
 	if err != nil {
 		reason := "observation_failed"
 		if errors.Is(err, context.DeadlineExceeded) {
 			reason = "observe_timeout"
+		} else if reasoner, ok := err.(interface{ FailureReason() string }); ok {
+			reason = reasoner.FailureReason()
 		}
 		turnTracer.Fail("observation", reason, err, trace.EventData{})
 		return err
@@ -119,7 +115,7 @@ func (l *Loop) HandleEvent(
 	turnTracer.Emit(trace.EventModelResponseReceived, trace.EventData{})
 
 	// Provider 必须返回结构化 ToolCall；Loop 只做统一校验和协议转换。
-	if err := l.tools.ValidateToolCall(entityIDs[0], rep.ToolCall); err != nil {
+	if err := l.tools.ValidateToolCall(key.EntityID, rep.ToolCall); err != nil {
 		turnTracer.Fail("tool", "tool_call_invalid", err, trace.EventData{
 			Tool: rep.ToolCall.Name,
 		})
@@ -129,7 +125,7 @@ func (l *Loop) HandleEvent(
 		Tool: rep.ToolCall.Name,
 	})
 
-	actReq, err := tool.BuildActionRequest(entityIDs[0], rep.ToolCall)
+	actReq, err := tool.BuildActionRequest(key.WorldID, key.EntityID, rep.ToolCall)
 	if err != nil {
 		turnTracer.Fail("action", "action_request_build_failed", err, trace.EventData{
 			Tool: rep.ToolCall.Name,
@@ -166,7 +162,7 @@ func (l *Loop) HandleEvent(
 		},
 	})
 
-	if actRep.Status != protocolv1alpha1.ActionStatus_ACTION_STATUS_SUCCEEDED {
+	if actRep.Status != protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED {
 		turnTracer.Fail("action", "action_result_failed", nil, trace.EventData{
 			ActionID: actRep.ActionId,
 			Tool:     actReq.Capability,

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	protocolv1alpha1 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha1"
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 )
 
 // streamEnvironment 将一条 gRPC Adapter stream 适配成 agent.Environment。
@@ -13,22 +13,28 @@ import (
 // Agent Loop 看到的是同步的 Observe / SubmitAction 调用，底层协议实际是
 // bidirectional stream 上的异步 request / response。
 type streamEnvironment struct {
-	stream protocolv1alpha1.GameAgentGateway_ConnectServer
+	stream protocolv1alpha2.GameAgentGateway_ConnectServer
 
 	sendMu sync.Mutex
 
 	pendingMu           sync.Mutex
-	pendingObservations map[string]chan observeResult
+	pendingObservations map[string]pendingObservation
 	pendingActions      map[string]chan actionResult
 }
 
+type pendingObservation struct {
+	worldID  string
+	entityID string
+	ch       chan observeResult
+}
+
 type observeResult struct {
-	observation *protocolv1alpha1.Observation
+	observation *protocolv1alpha2.Observation
 	err         error
 }
 
 type actionResult struct {
-	result *protocolv1alpha1.ActionResult
+	result *protocolv1alpha2.ActionResult
 	err    error
 }
 
@@ -36,16 +42,19 @@ type actionResult struct {
 //
 // pendingObservations / pendingActions 必须属于单条 Connect stream，
 // 避免未来多个 Adapter 连接之间互相唤醒错误的 waiter。
-func newStreamEnvironment(stream protocolv1alpha1.GameAgentGateway_ConnectServer) *streamEnvironment {
+func newStreamEnvironment(stream protocolv1alpha2.GameAgentGateway_ConnectServer) *streamEnvironment {
 	return &streamEnvironment{
 		stream:              stream,
-		pendingObservations: make(map[string]chan observeResult),
+		pendingObservations: make(map[string]pendingObservation),
 		pendingActions:      make(map[string]chan actionResult),
 	}
 }
 
 // Observe 发送 ObserveRequest，并等待 recvLoop 通过 correlation_id 返回 Observation。
-func (e *streamEnvironment) Observe(ctx context.Context, entityID string) (*protocolv1alpha1.Observation, error) {
+func (e *streamEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
+	if worldID == "" {
+		return nil, fmt.Errorf("world id is empty")
+	}
 	if entityID == "" {
 		return nil, fmt.Errorf("entity id is empty")
 	}
@@ -57,7 +66,11 @@ func (e *streamEnvironment) Observe(ctx context.Context, entityID string) (*prot
 	// message_id 是这次 ObserveRequest 的协议编号；Adapter 回复时必须把它
 	// 放到 correlation_id，recvLoop 才能找到正确的等待者。
 	e.pendingMu.Lock()
-	e.pendingObservations[messageID] = ch
+	e.pendingObservations[messageID] = pendingObservation{
+		worldID:  worldID,
+		entityID: entityID,
+		ch:       ch,
+	}
 	e.pendingMu.Unlock()
 
 	defer func() {
@@ -66,11 +79,12 @@ func (e *streamEnvironment) Observe(ctx context.Context, entityID string) (*prot
 		e.pendingMu.Unlock()
 	}()
 
-	msg := &protocolv1alpha1.RuntimeMessage{
+	msg := &protocolv1alpha2.RuntimeMessage{
 		MessageId: messageID,
-		Payload: &protocolv1alpha1.RuntimeMessage_Observe{
-			Observe: &protocolv1alpha1.ObserveRequest{
+		Payload: &protocolv1alpha2.RuntimeMessage_Observe{
+			Observe: &protocolv1alpha2.ObserveRequest{
 				EntityId: entityID,
+				WorldId:  worldID,
 			},
 		},
 	}
@@ -88,33 +102,43 @@ func (e *streamEnvironment) Observe(ctx context.Context, entityID string) (*prot
 }
 
 // resolveObservation 唤醒正在等待指定 correlation_id 的 Observe 调用。
-func (e *streamEnvironment) resolveObservation(correlationID string, observation *protocolv1alpha1.Observation) {
+func (e *streamEnvironment) resolveObservation(correlationID string, observation *protocolv1alpha2.Observation) {
 	e.pendingMu.Lock()
-	ch := e.pendingObservations[correlationID]
+	pending, ok := e.pendingObservations[correlationID]
 	e.pendingMu.Unlock()
 
-	if ch == nil {
+	if !ok {
 		return
 	}
 
-	ch <- observeResult{observation: observation}
+	if observation.WorldId != pending.worldID || observation.EntityId != pending.entityID {
+		pending.ch <- observeResult{err: observationScopeMismatchError{
+			requestedWorldID:  pending.worldID,
+			requestedEntityID: pending.entityID,
+			actualWorldID:     observation.WorldId,
+			actualEntityID:    observation.EntityId,
+		}}
+		return
+	}
+
+	pending.ch <- observeResult{observation: observation}
 }
 
 // failObservation 用 Adapter 返回的 Error 唤醒对应 Observe 调用。
 func (e *streamEnvironment) failObservation(correlationID string, err error) {
 	e.pendingMu.Lock()
-	ch := e.pendingObservations[correlationID]
+	pending, ok := e.pendingObservations[correlationID]
 	e.pendingMu.Unlock()
 
-	if ch == nil {
+	if !ok {
 		return
 	}
 
-	ch <- observeResult{err: err}
+	pending.ch <- observeResult{err: err}
 }
 
 // SubmitAction 发送 ActionRequest，并等待 Adapter 返回对应 action_id 的 ActionResult。
-func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha1.ActionRequest) (*protocolv1alpha1.ActionResult, error) {
+func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("action request is nil")
 	}
@@ -141,9 +165,9 @@ func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alp
 		e.pendingMu.Unlock()
 	}()
 
-	msg := &protocolv1alpha1.RuntimeMessage{
+	msg := &protocolv1alpha2.RuntimeMessage{
 		MessageId: messageID,
-		Payload: &protocolv1alpha1.RuntimeMessage_Action{
+		Payload: &protocolv1alpha2.RuntimeMessage_Action{
 			Action: req,
 		},
 	}
@@ -162,10 +186,10 @@ func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alp
 }
 
 func (e *streamEnvironment) sendCancelActionBestEffort(actionID string, reason string) {
-	msg := &protocolv1alpha1.RuntimeMessage{
+	msg := &protocolv1alpha2.RuntimeMessage{
 		MessageId: newMessageID("cancel_action"),
-		Payload: &protocolv1alpha1.RuntimeMessage_CancelAction{
-			CancelAction: &protocolv1alpha1.CancelActionRequest{
+		Payload: &protocolv1alpha2.RuntimeMessage_CancelAction{
+			CancelAction: &protocolv1alpha2.CancelActionRequest{
 				ActionId: actionID,
 				Reason:   reason,
 			},
@@ -178,7 +202,7 @@ func (e *streamEnvironment) sendCancelActionBestEffort(actionID string, reason s
 }
 
 // resolveActionResult 唤醒正在等待指定 action_id 的 SubmitAction 调用。
-func (e *streamEnvironment) resolveActionResult(actionID string, result *protocolv1alpha1.ActionResult) {
+func (e *streamEnvironment) resolveActionResult(actionID string, result *protocolv1alpha2.ActionResult) {
 	e.pendingMu.Lock()
 	ch := e.pendingActions[actionID]
 	e.pendingMu.Unlock()
@@ -194,7 +218,7 @@ func (e *streamEnvironment) resolveActionResult(actionID string, result *protoco
 //
 // EventAck、Observe、SubmitAction 都可能从不同 goroutine 触发 Send，
 // sendMu 保证这条 gRPC stream 只有一个 writer。
-func (e *streamEnvironment) send(msg *protocolv1alpha1.RuntimeMessage) error {
+func (e *streamEnvironment) send(msg *protocolv1alpha2.RuntimeMessage) error {
 	e.sendMu.Lock()
 	defer e.sendMu.Unlock()
 
@@ -208,8 +232,8 @@ func (e *streamEnvironment) failAllPending(err error) {
 	e.pendingMu.Lock()
 
 	observationChs := make([]chan observeResult, 0, len(e.pendingObservations))
-	for id, ch := range e.pendingObservations {
-		observationChs = append(observationChs, ch)
+	for id, pending := range e.pendingObservations {
+		observationChs = append(observationChs, pending.ch)
 		delete(e.pendingObservations, id)
 	}
 
@@ -234,4 +258,44 @@ func (e *streamEnvironment) failAllPending(err error) {
 		default:
 		}
 	}
+}
+
+type observationScopeMismatchError struct {
+	requestedWorldID  string
+	requestedEntityID string
+	actualWorldID     string
+	actualEntityID    string
+}
+
+func (e observationScopeMismatchError) Error() string {
+	return fmt.Sprintf(
+		"observation_scope_mismatch: requested world_id=%q entity_id=%q, got world_id=%q entity_id=%q",
+		e.requestedWorldID,
+		e.requestedEntityID,
+		e.actualWorldID,
+		e.actualEntityID,
+	)
+}
+
+func (e observationScopeMismatchError) FailureReason() string {
+	return "observation_scope_mismatch"
+}
+
+type adapterError struct {
+	code    string
+	message string
+}
+
+func (e adapterError) Error() string {
+	if e.message == "" {
+		return fmt.Sprintf("adapter error %s", e.code)
+	}
+	return fmt.Sprintf("adapter error %s: %s", e.code, e.message)
+}
+
+func (e adapterError) FailureReason() string {
+	if e.code == "" {
+		return "adapter_error"
+	}
+	return e.code
 }

@@ -29,3 +29,6 @@ coverage.out
 runtime/config/*.local.json
 
 docs/roadmap/
+
+docs/archive/
+docs/pro/

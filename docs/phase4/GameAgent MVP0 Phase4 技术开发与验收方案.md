@@ -650,6 +650,8 @@ Context 中应明确表达：
 ```text
 Recent Memory 是历史信息，可能已经过时。
 若 Memory 与 Current Observation 冲突，以 Current Observation 为准。
+若 Recent Memory 来自今天，且当前游戏时间没有明显推进，
+应将其视为附近的对话上下文，而不是玩家离开后再次回来。
 ```
 
 这段语义属于 Renderer hardcoded invariant。
@@ -662,6 +664,9 @@ Historical Memory < Current Observation
 ```
 
 而不是某个 NPC 的说话风格或某个游戏的可调偏好。
+
+这条规则用于避免同一天短时间内连续点击 NPC 时，
+模型仅因为看到了上一轮 Memory 就生成“又来了 / 又见面了”之类的错误时间暗示。
 
 ------
 
@@ -710,7 +715,7 @@ MemoryContextSizeLimit
 如果超过 `MemoryContextSizeLimit`：
 
 ```text
-按最新优先保留 MemoryRecord，
+按最新优先保留 MemoryRecord 的渲染摘要，
 丢弃更旧记录，
 直到渲染后字节数不超过限制。
 ```
@@ -724,7 +729,17 @@ MemoryContextSizeLimit
 允许 Recent Memory section 临时超过 MemoryContextSizeLimit。
 ```
 
-Phase4 不做字段级截断或 LLM summarization。
+Phase4 不做 LLM summarization，也不把完整 `MemoryRecord` 原样塞进 prompt。
+
+Renderer 只输出模型决策需要的短摘要，例如：
+
+```text
+- today 06:20: said "..."
+- previous day Y1 S1 D2 18:20: said "..."
+```
+
+完整结构化记录属于 Runtime Memory / 未来 Experience 层，
+Model Context 只使用有限 projection。
 
 具体默认数字在读取 Phase3 最终 prompt / config 代码后冻结。
 
@@ -796,13 +811,12 @@ type MemoryRecord struct {
 
     SessionKey AgentSessionKey
 
-    SourceTurnID  string
-    SourceEventID string
+    SourceTurnID        string
+    SourceEventID       string
+    SourceEventSequence uint64
 
     EventType string
     GameTime  *GameTimeSnapshot
-
-    EventPayload map[string]any
 
     Outcome TurnOutcome
 
@@ -818,30 +832,53 @@ type TurnOutcome struct {
     ToolArguments map[string]any
 
     ActionStatus string
-    ActionResult map[string]any
 }
 ```
 
-Phase4 允许在 `MemoryRecord` 中预留后续会使用的结构化字段，
-例如 `GameTime`、`EventPayload`、`ActionResult`。
+`GameTimeSnapshot` 是 Runtime 内部的最小游戏时间快照：
 
-但 P0 实现只要求稳定写入并测试：
+```go
+type GameTimeSnapshot struct {
+    Year   int32
+    Season int32
+    Day    int32
+    Hour   int32
+    Minute int32
+    Tick   int64
+}
+```
+
+它来自 Protocol `GameTime`，但不是新的 Protocol message。
+如果某个游戏没有完整时间系统，可以只填可用字段；
+如果完全没有游戏时间，则保持 `nil`，Renderer 退化为按顺序表达 recent interaction。
+
+P0 实现要求稳定写入并测试：
 
 ```text
 MemoryID
 SessionKey
 SourceTurnID
 SourceEventID
+SourceEventSequence
 EventType
+GameTime
 Outcome.ToolName
 Outcome.ToolArguments
 Outcome.ActionStatus
 CreatedAt
 ```
 
-其它预留字段可以为空值；Context Renderer / 测试不得依赖这些字段必然存在。
+Phase4 当前仍保持：
 
-具体类型后续根据现有 Protocol / Model 类型收敛。
+```text
+一个成功 AgentTurn -> 一条 Recent MemoryRecord
+```
+
+因为当前 AgentTurn 仍是 one-model-call / one-tool-call。
+未来若支持一个 Turn 内多个 tool call，
+可以把 `Outcome` 自然升级为 `[]TurnOutcome`，
+或引入独立 `TurnExperience`；
+Phase4 不提前实现该结构。
 
 ------
 
@@ -922,10 +959,15 @@ TurnMemoryProjector
 Event
 ToolCall
 ActionResult
-GameTime
+GameTime / EventSequence
 ```
 
 投影出 MemoryRecord。
+
+`GameTime` 优先来自 `GameEvent.game_time`。
+如果某个 Adapter 未来无法在 Event 上提供时间，
+可以用 `Observation.game_time` 作为 fallback；
+Phase4 Stardew 路径中 Event 已携带 `game_time`。
 
 ------
 
@@ -1058,6 +1100,16 @@ map[AgentSessionKey][]MemoryRecord
 ```
 
 但实现必须线程安全。
+
+Phase4 的默认 InMemory backend 必须有 per-AgentSession 保留上限：
+
+```text
+effective_max_records_per_session = max(20, RecentMemoryLimit)
+```
+
+超过该上限时，淘汰最旧 MemoryRecord，保留最新记录。
+这样既避免默认开启 Memory 后进程内历史无限增长，
+也保证 `RecentMemoryLimit` 不会被 store 层固定上限隐式截断。
 
 并发要求：
 
@@ -1562,8 +1614,8 @@ P0 Render 的文本顺序必须稳定，以方便 deterministic test。
 ...
 
 [Recent Memory]
-- Previous interaction ...
-- Previous interaction ...
+- today 06:20: said "..."
+- previous day Y1 S1 D2 18:20: used emote "happy"
 
 [Current Event]
 ...
@@ -1579,6 +1631,21 @@ Recent memory is historical context.
 `[Instruction]` 中关于 Observation 优先于 Memory 的语义由 Renderer 固定注入。
 Runtime Policy 可以提供额外全局行为约束，
 但不能关闭或覆盖这条优先级规则。
+
+Renderer 不应把完整 `MemoryRecord` 作为 JSON 原样渲染给模型。
+它应将结构化记录投影为简短 recent interaction summary：
+
+```text
+when relation + visible action summary
+```
+
+例如：
+
+```text
+- today 06:20: said "早上好……这么早就来山里，你也很喜欢安静吧。"
+```
+
+这样既保留连续性，又避免 20 条结构化记录导致 prompt 快速膨胀。
 
 Tools 继续走现有：
 
@@ -2352,6 +2419,9 @@ Phase4 真机 smoke test 不以模型自然语言表现作为唯一 Pass/Fail �
 3. 再次点击 Abigail。
    → trace:
       context_loaded memory_count>=1
+   → 若 Current Observation / Event 的 game_time 与上一轮同属今天且时间没有明显推进：
+      NPC 回复应延续当前对话，
+      不应默认说“又来了 / 又见面了 / 你回来了”。
 
 4. 点击 Linus。
    → Linus context 中不存在 Abigail memory_id。
@@ -2377,9 +2447,9 @@ Phase4 真机 smoke test 不以模型自然语言表现作为唯一 Pass/Fail �
 ```text
 1. Phase3 code-aware baseline check
    确认 AgentSessionKey / AgentLoop / ModelRequest / Trace / gateway test helper 实际边界。
-   同时确认 GameTimeSnapshot 的 P0 策略：
-       A. 定义最小 GameTimeSnapshot；
-       B. P0 保持 nil，后续阶段再填充。
+   实现最小 GameTimeSnapshot：
+       从 GameEvent.game_time 投影 year / season / day / hour / minute / tick；
+       同时记录 GameEvent.sequence。
 
 2. 冻结 Context Scope Contract。
 
@@ -2447,6 +2517,7 @@ Phase4 真机 smoke test 不以模型自然语言表现作为唯一 Pass/Fail �
 | 同一 AgentSessionKey 跨 EnvironmentSession 共享 Memory | reconnect scope integration test |
 | 关闭 Memory 后 One-Turn 仍正常                      | MemoryDisabled regression        |
 | Trace 能说明 Context 是否加载 / 更新                | context_loaded / context_updated |
+| Recent Memory 携带游戏时间语境，连续点击不误判为再次到访 | GameTime projection + Stardew smoke |
 | 有可复用确定性测试夹具                              | Deterministic TestEnvironment    |
 | Phase5 可在不依赖真实 Stardew/LLM 情况下测试多 Step | Phase4 end review                |
 

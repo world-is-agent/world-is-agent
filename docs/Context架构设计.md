@@ -646,10 +646,11 @@ Experience 可以包含：
 
 ```text
 GameEvent
+GameTime / event sequence
 Observation snapshot / reference
 Turn
-ToolCall
-ActionResult
+ToolCall(s)
+ActionResult(s)
 Turn terminal state
 ```
 
@@ -696,6 +697,31 @@ Memory
 上一轮 Agent 做了什么
 最近几次交互结果
 ```
+
+Recent Memory 不应等同于“最近几次 speak 文本”。
+
+它应从成功 AgentTurn 中形成，记录对后续行为有语义影响的可见结果：
+
+```text
+speak: NPC 刚才说过什么
+emote: NPC 刚才表达了什么情绪
+move: NPC 刚才移动到哪里
+item / quest action: NPC 刚才给予、接受或触发了什么
+```
+
+内部可以保留较完整的结构化事实；
+进入 Model Context 时必须经过 projection / compaction。
+
+例如完整记录中可以包含 `GameTime`、`event sequence`、`ToolCall` 和 `ActionResult`，
+但 prompt 中只需要类似：
+
+```text
+- today 06:20: said "..."
+- previous day Y1 S1 D2 18:20: moved to the river
+```
+
+Recent Memory 的时间语境应使用游戏内时间，而不是 Runtime wall-clock。
+Runtime wall-clock 更适合 debug、TTL 和存储维护。
 
 ---
 
@@ -1193,6 +1219,7 @@ Model Context 是：
 > Context Engine 针对本次模型调用生成的最终、有限、结构化 Context Projection。
 
 它不等于一个超级字符串。
+也不等于把 Memory / Experience 的完整存储记录原样塞给模型。
 
 推荐逻辑结构：
 
@@ -1512,6 +1539,7 @@ Phase4 的 `MemoryProjector` 可以直接从当前成功 AgentTurn 的：
 
 ```text
 GameEvent
+GameTime / event sequence
 ToolCall
 ActionResult
 AgentSessionKey
@@ -1519,6 +1547,18 @@ turn_id
 ```
 
 确定性投影出 Recent Memory。
+
+Phase4 的最小策略是：
+
+```text
+一个成功 AgentTurn -> 一条 Recent MemoryRecord
+Renderer -> 只渲染简短 recent interaction summary
+```
+
+当前 one-turn loop 只有一个 ToolCall；
+未来如果一个 Turn 内支持多个 ToolCall，
+Recent Memory 可以保留为“一条 Turn 级记录包含多个 tool outcome”，
+而不是按每个 `speak` 单独形成 Memory。
 
 这只是 Experience 体系的最小 vertical slice；
 不代表长期架构中 Memory 必须绕过 Experience。

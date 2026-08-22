@@ -71,6 +71,26 @@ func TestTurnTracerEmitsContextAndSequentialEvents(t *testing.T) {
 	}
 }
 
+func TestTurnTracerCanUseCallerProvidedTurnID(t *testing.T) {
+	recorder := &memoryRecorder{}
+	tracer := NewTurnTracerWithID(recorder, TurnContext{EntityID: "npc:Linus"}, "turn-explicit")
+
+	tracer.Emit(EventTurnStarted, EventData{})
+	tracer.Complete(EventData{})
+
+	if len(recorder.events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(recorder.events))
+	}
+	for i, event := range recorder.events {
+		if event.TurnID != "turn-explicit" {
+			t.Fatalf("event[%d].TurnID = %q, want turn-explicit", i, event.TurnID)
+		}
+		if event.TraceID != "turn-explicit" {
+			t.Fatalf("event[%d].TraceID = %q, want turn-explicit", i, event.TraceID)
+		}
+	}
+}
+
 func TestTurnTracerCompleteIsTerminalFinal(t *testing.T) {
 	recorder := &memoryRecorder{}
 	tracer := NewTurnTracer(recorder, TurnContext{EntityID: "npc:Linus"})

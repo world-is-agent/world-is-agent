@@ -36,8 +36,18 @@ type turnTracer struct {
 	closed bool
 }
 
+// NewTurnTracer 创建一条新的 Turn trace。
+// 默认由 tracer 自己生成 turnID，适合不需要和其他子系统共享 ID 的场景。
 func NewTurnTracer(recorder Recorder, ctx TurnContext) TurnTracer {
-	turnID := newTurnID()
+	return NewTurnTracerWithID(recorder, ctx, newTurnID())
+}
+
+// NewTurnTracerWithID 创建使用调用方 turnID 的 Turn trace。
+// Phase4 让 Trace 和 Memory 共享同一个上游 turnID，避免 Memory 反向依赖 Trace。
+func NewTurnTracerWithID(recorder Recorder, ctx TurnContext, turnID string) TurnTracer {
+	if turnID == "" {
+		turnID = newTurnID()
+	}
 	return &turnTracer{
 		recorder: recorder,
 		ctx:      ctx,
@@ -47,10 +57,13 @@ func NewTurnTracer(recorder Recorder, ctx TurnContext) TurnTracer {
 	}
 }
 
+// newTurnID 生成默认 Turn ID。
 func newTurnID() string {
 	return idgen.New("turn")
 }
 
+// Emit 记录普通阶段事件。
+// terminal 事件发出后，后续 Emit 会被忽略。
 func (t *turnTracer) Emit(name EventName, data EventData) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -61,6 +74,8 @@ func (t *turnTracer) Emit(name EventName, data EventData) {
 	t.recordLocked(name, "", "", nil, data)
 }
 
+// Complete 记录 turn_completed，并关闭本轮 TurnTracer。
+// 关闭后再调用 Complete / Fail / Emit 都不会产生新事件。
 func (t *turnTracer) Complete(data EventData) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -73,6 +88,8 @@ func (t *turnTracer) Complete(data EventData) {
 	t.closed = true
 }
 
+// Fail 记录 turn_failed，并关闭本轮 TurnTracer。
+// reason 用于表达稳定失败原因，err 只在存在底层技术错误时记录。
 func (t *turnTracer) Fail(stage string, reason string, err error, data EventData) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

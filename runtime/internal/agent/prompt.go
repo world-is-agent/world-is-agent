@@ -1,30 +1,9 @@
 package agent
 
-import (
-	"fmt"
-	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
-	"gameagent/runtime/internal/model"
+import "fmt"
 
-	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
-)
-
-// BuildModelRequest 构建当前 Agent Turn 的模型输入。
-func BuildModelRequest(
-	event *protocolv1alpha2.GameEvent,
-	observation *protocolv1alpha2.Observation,
-	tools []model.ToolDefinition,
-	promptConfig PromptConfig,
-) model.Request {
-	return model.Request{
-		System: BuildSystemPrompt(promptConfig),
-		Messages: []model.Message{
-			BuildTurnMessage(event, observation),
-		},
-		Tools: tools,
-	}
-}
-
+// BuildSystemPrompt 根据配置构建 Runtime policy。
+// 这里只描述角色行为边界，当前 Turn 的事件、Observation 和 Memory 由 Context Renderer 注入。
 func BuildSystemPrompt(cfg PromptConfig) string {
 	return fmt.Sprintf(`You are controlling an NPC in a game.
 
@@ -40,39 +19,4 @@ Your job:
 		cfg.NPCStyle,
 		cfg.MaxSpeakChars,
 	)
-}
-
-func BuildTurnMessage(
-	event *protocolv1alpha2.GameEvent,
-	observation *protocolv1alpha2.Observation,
-) model.Message {
-	return model.Message{
-		Role: model.RoleUser,
-		Content: fmt.Sprintf(`Current game event JSON:
-%s
-
-Current observation JSON:
-%s
-
-Return a tool call only.
-`, protoToJSON(event), protoToJSON(observation)),
-	}
-}
-
-// protoToJSON 把 protobuf 对象转成 JSON 字符串。
-func protoToJSON(message proto.Message) string {
-	if message == nil {
-		return "{}"
-	}
-
-	data, err := protojson.MarshalOptions{
-		Multiline: true,
-		Indent:    "  ",
-	}.Marshal(message)
-
-	if err != nil {
-		return "{}"
-	}
-
-	return string(data)
 }

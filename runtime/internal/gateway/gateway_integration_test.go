@@ -16,6 +16,7 @@ import (
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/agent"
 	"gameagent/runtime/internal/llm/fake"
+	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/tool"
 	"gameagent/runtime/internal/trace"
 
@@ -24,6 +25,67 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+type recordingGatewayProvider struct {
+	mu       sync.Mutex
+	requests []model.Request
+}
+
+func (p *recordingGatewayProvider) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, req)
+	p.mu.Unlock()
+
+	args, err := structpb.NewStruct(map[string]any{
+		"text": "gateway memory line",
+	})
+	if err != nil {
+		return model.Response{}, err
+	}
+	return model.Response{
+		ToolCall: model.ToolCall{
+			Name:      "speak",
+			Arguments: args,
+		},
+	}, nil
+}
+
+func (p *recordingGatewayProvider) Requests() []model.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]model.Request, len(p.requests))
+	copy(out, p.requests)
+	return out
+}
+
+type recordingGatewayTraceRecorder struct {
+	mu     sync.Mutex
+	events []trace.Event
+}
+
+func (r *recordingGatewayTraceRecorder) Record(event trace.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *recordingGatewayTraceRecorder) Close(ctx context.Context) error {
+	return nil
+}
+
+func (r *recordingGatewayTraceRecorder) Count(eventName trace.EventName) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	count := 0
+	for _, event := range r.events {
+		if event.Event == eventName {
+			count++
+		}
+	}
+	return count
+}
 
 func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -572,6 +634,283 @@ func TestConnectSerializesEventsForSameNPC(t *testing.T) {
 	}
 }
 
+func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &recordingGatewayProvider{}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream, err := client.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+
+	if err := stream.Send(adapterHelloMessage()); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	_ = recvRuntimeMessage(t, stream)
+	capabilityRequest := recvRuntimeMessage(t, stream)
+	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
+		t.Fatalf("send capability list: %v", err)
+	}
+	waitForTool(t, registry, "speak")
+
+	if err := stream.Send(npcInteractionEventMessageWithIDs(1)); err != nil {
+		t.Fatalf("send first event: %v", err)
+	}
+	firstAck := recvRuntimeMessage(t, stream).GetEventAck()
+	if firstAck == nil || firstAck.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("first ack = %+v, want accepted", firstAck)
+	}
+	firstObserveMessage := recvRuntimeMessage(t, stream)
+	if firstObserve := firstObserveMessage.GetObserve(); firstObserve == nil || firstObserve.EntityId != "npc:Linus" {
+		t.Fatalf("first observe = %+v, want npc:Linus", firstObserve)
+	}
+
+	if err := stream.Send(npcInteractionEventMessageWithIDs(2)); err != nil {
+		t.Fatalf("send queued event: %v", err)
+	}
+	secondAck := recvRuntimeMessage(t, stream).GetEventAck()
+	if secondAck == nil || secondAck.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("second ack = %+v, want accepted", secondAck)
+	}
+
+	if err := stream.Send(observationMessage(firstObserveMessage.MessageId)); err != nil {
+		t.Fatalf("send first observation: %v", err)
+	}
+	firstAction := recvRuntimeMessage(t, stream).GetAction()
+	if firstAction == nil {
+		t.Fatal("expected first action")
+	}
+	if err := stream.Send(actionResultMessage(firstAction.ActionId)); err != nil {
+		t.Fatalf("send first action result: %v", err)
+	}
+
+	secondObserveMessage := recvRuntimeMessage(t, stream)
+	if secondObserve := secondObserveMessage.GetObserve(); secondObserve == nil || secondObserve.EntityId != "npc:Linus" {
+		t.Fatalf("second observe = %+v, want npc:Linus", secondObserve)
+	}
+	if err := stream.Send(observationMessage(secondObserveMessage.MessageId)); err != nil {
+		t.Fatalf("send second observation: %v", err)
+	}
+	secondAction := recvRuntimeMessage(t, stream).GetAction()
+	if secondAction == nil {
+		t.Fatal("expected second action")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	secondPrompt := requests[1].Messages[0].Content
+	for _, want := range []string{
+		"[Recent Memory]",
+		"previous interaction",
+		`said "gateway memory line"`,
+		"gateway memory line",
+	} {
+		if !strings.Contains(secondPrompt, want) {
+			t.Fatalf("second prompt missing %q:\n%s", want, secondPrompt)
+		}
+	}
+	for _, unwanted := range []string{
+		"event_1",
+		"ACTION_STATUS_SUCCEEDED",
+		"source_turn_id",
+	} {
+		if strings.Contains(secondPrompt, unwanted) {
+			t.Fatalf("second prompt should not expose storage field %q:\n%s", unwanted, secondPrompt)
+		}
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectSameAgentSessionReadsMemoryAfterReconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &recordingGatewayProvider{}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	firstStream := connectReadyStream(t, ctx, client, registry, "session:first")
+	runSuccessfulNPCInteraction(t, firstStream, 1, "npc:Linus", "Linus")
+	waitForTraceEventCount(t, recorder, trace.EventContextUpdated, 1)
+	if err := firstStream.CloseSend(); err != nil {
+		t.Fatalf("close first stream: %v", err)
+	}
+	if _, err := firstStream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("first stream final recv error = %v, want EOF", err)
+	}
+
+	secondStream := connectReadyStream(t, ctx, client, registry, "session:second")
+	secondObserveMessage := sendAcceptedNPCEvent(t, secondStream, 2, "npc:Linus", "Linus")
+	if err := secondStream.Send(observationMessageForNPC(secondObserveMessage.MessageId, "npc:Linus", "Linus")); err != nil {
+		t.Fatalf("send second observation: %v", err)
+	}
+	if action := recvRuntimeMessage(t, secondStream).GetAction(); action == nil {
+		t.Fatal("expected second action")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	secondPrompt := requests[1].Messages[0].Content
+	for _, want := range []string{
+		"[Recent Memory]",
+		"previous interaction",
+		`said "gateway memory line"`,
+		"gateway memory line",
+	} {
+		if !strings.Contains(secondPrompt, want) {
+			t.Fatalf("reconnected prompt missing %q:\n%s", want, secondPrompt)
+		}
+	}
+
+	if err := secondStream.CloseSend(); err != nil {
+		t.Fatalf("close second stream: %v", err)
+	}
+}
+
+func TestConnectDoesNotLeakMemoryAcrossNPCs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &recordingGatewayProvider{}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, registry, "session:test")
+
+	runSuccessfulNPCInteraction(t, stream, 1, "npc:Abigail", "Abigail")
+	waitForTraceEventCount(t, recorder, trace.EventContextUpdated, 1)
+
+	linusObserveMessage := sendAcceptedNPCEvent(t, stream, 2, "npc:Linus", "Linus")
+	if err := stream.Send(observationMessageForNPC(linusObserveMessage.MessageId, "npc:Linus", "Linus")); err != nil {
+		t.Fatalf("send linus observation: %v", err)
+	}
+	if action := recvRuntimeMessage(t, stream).GetAction(); action == nil {
+		t.Fatal("expected linus action")
+	}
+
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("provider request count = %d, want 2", len(requests))
+	}
+	linusPrompt := requests[1].Messages[0].Content
+	for _, unwanted := range []string{
+		"event_1",
+		"gateway memory line",
+	} {
+		if strings.Contains(linusPrompt, unwanted) {
+			t.Fatalf("linus prompt unexpectedly contains Abigail memory %q:\n%s", unwanted, linusPrompt)
+		}
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
 func TestConnectDrainsQueuedEventOnDisconnect(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -857,7 +1196,101 @@ func waitForTool(t *testing.T, registry *tool.Registry, name string) {
 	}
 }
 
+func waitForTraceEventCount(t *testing.T, recorder *recordingGatewayTraceRecorder, eventName trace.EventName, want int) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		if got := recorder.Count(eventName); got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("trace event %q count = %d, want at least %d", eventName, recorder.Count(eventName), want)
+		case <-tick.C:
+		}
+	}
+}
+
+func connectReadyStream(
+	t *testing.T,
+	ctx context.Context,
+	client protocolv1alpha2.GameAgentGatewayClient,
+	registry *tool.Registry,
+	sessionID string,
+) protocolv1alpha2.GameAgentGateway_ConnectClient {
+	t.Helper()
+
+	stream, err := client.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect returned error: %v", err)
+	}
+	if err := stream.Send(adapterHelloMessageWithSession(sessionID)); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	_ = recvRuntimeMessage(t, stream)
+	capabilityRequest := recvRuntimeMessage(t, stream)
+	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
+		t.Fatalf("send capability list: %v", err)
+	}
+	waitForTool(t, registry, "speak")
+	return stream
+}
+
+func sendAcceptedNPCEvent(
+	t *testing.T,
+	stream protocolv1alpha2.GameAgentGateway_ConnectClient,
+	index int,
+	entityID string,
+	displayName string,
+) *protocolv1alpha2.RuntimeMessage {
+	t.Helper()
+
+	if err := stream.Send(npcInteractionEventMessageForNPC(index, entityID, displayName)); err != nil {
+		t.Fatalf("send %s event: %v", entityID, err)
+	}
+	ack := recvRuntimeMessage(t, stream).GetEventAck()
+	if ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("%s ack = %+v, want accepted", entityID, ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if observe := observeMessage.GetObserve(); observe == nil || observe.EntityId != entityID {
+		t.Fatalf("%s observe = %+v, want %s", entityID, observe, entityID)
+	}
+	return observeMessage
+}
+
+func runSuccessfulNPCInteraction(
+	t *testing.T,
+	stream protocolv1alpha2.GameAgentGateway_ConnectClient,
+	index int,
+	entityID string,
+	displayName string,
+) {
+	t.Helper()
+
+	observeMessage := sendAcceptedNPCEvent(t, stream, index, entityID, displayName)
+	if err := stream.Send(observationMessageForNPC(observeMessage.MessageId, entityID, displayName)); err != nil {
+		t.Fatalf("send %s observation: %v", entityID, err)
+	}
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil {
+		t.Fatalf("expected %s action", entityID)
+	}
+	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
+		t.Fatalf("send %s action result: %v", entityID, err)
+	}
+}
+
 func adapterHelloMessage() *protocolv1alpha2.AdapterMessage {
+	return adapterHelloMessageWithSession("session:test")
+}
+
+func adapterHelloMessageWithSession(sessionID string) *protocolv1alpha2.AdapterMessage {
 	return &protocolv1alpha2.AdapterMessage{
 		MessageId: "hello_msg_1",
 		Payload: &protocolv1alpha2.AdapterMessage_Hello{
@@ -867,7 +1300,7 @@ func adapterHelloMessage() *protocolv1alpha2.AdapterMessage {
 				ProtocolVersion: "v1alpha2",
 				GameId:          "fake-game",
 				GameVersion:     "0.1.0",
-				SessionId:       "session:test",
+				SessionId:       sessionID,
 			},
 		},
 	}
@@ -958,8 +1391,12 @@ func npcInteractionEventMessageForNPC(index int, entityID string, displayName st
 }
 
 func observationMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return observationMessageForNPC(correlationID, "npc:Linus", "Linus")
+}
+
+func observationMessageForNPC(correlationID string, entityID string, displayName string) *protocolv1alpha2.AdapterMessage {
 	state, err := structpb.NewStruct(map[string]any{
-		"npc_name": "Linus",
+		"npc_name": displayName,
 		"location": "Mountain",
 		"weather":  "sunny",
 	})
@@ -972,7 +1409,7 @@ func observationMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
 		CorrelationId: correlationID,
 		Payload: &protocolv1alpha2.AdapterMessage_Observation{
 			Observation: &protocolv1alpha2.Observation{
-				EntityId: "npc:Linus",
+				EntityId: entityID,
 				WorldId:  "world:test",
 				Revision: 1,
 				State:    state,

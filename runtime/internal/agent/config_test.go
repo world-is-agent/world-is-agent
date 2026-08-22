@@ -16,6 +16,9 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
   "llm_timeout_ms": 2000,
   "observe_timeout_ms": 3000,
   "action_timeout_ms": 4000,
+  "memory_enabled": true,
+  "recent_memory_limit": 7,
+  "memory_context_size_limit": 2048,
   "prompt": {
     "language": "Simplified Chinese",
     "npc_style": "quiet mountain hermit",
@@ -47,6 +50,47 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 	if cfg.Prompt.ToolInstruction != "Use exactly one available tool." {
 		t.Fatalf("expected tool instruction from config, got %q", cfg.Prompt.ToolInstruction)
 	}
+	if !cfg.MemoryEnabledValue() {
+		t.Fatal("expected memory enabled from config")
+	}
+	if cfg.RecentMemoryLimit != 7 {
+		t.Fatalf("expected recent memory limit 7, got %d", cfg.RecentMemoryLimit)
+	}
+	if cfg.MemoryContextSizeLimit != 2048 {
+		t.Fatalf("expected memory context size limit 2048, got %d", cfg.MemoryContextSizeLimit)
+	}
+}
+
+func TestLoadConfigFileDefaultsMemoryEnabledWhenFieldOmitted(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "agent.json")
+	data := []byte(`{
+  "turn_timeout_ms": 1000,
+  "prompt": {
+    "language": "Simplified Chinese"
+  }
+}`)
+	if err := os.WriteFile(configPath, data, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := agent.LoadConfigFile(configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if !cfg.MemoryEnabledValue() {
+		t.Fatal("expected memory to be enabled by default when memory_enabled is omitted")
+	}
+}
+
+func TestConfigWithDefaultsPreservesExplicitMemoryDisabled(t *testing.T) {
+	cfg := (agent.Config{
+		MemoryEnabled: boolPtr(false),
+	}).WithDefaults()
+
+	if cfg.MemoryEnabledValue() {
+		t.Fatal("expected explicit memory disabled to survive WithDefaults")
+	}
 }
 
 func TestConfigWithDefaultsFillsPromptConfig(t *testing.T) {
@@ -64,4 +108,17 @@ func TestConfigWithDefaultsFillsPromptConfig(t *testing.T) {
 	if cfg.Prompt.ToolInstruction == "" {
 		t.Fatal("expected default tool instruction")
 	}
+	if !cfg.MemoryEnabledValue() {
+		t.Fatal("expected memory to be enabled by default")
+	}
+	if cfg.RecentMemoryLimit <= 0 {
+		t.Fatalf("expected positive default recent memory limit, got %d", cfg.RecentMemoryLimit)
+	}
+	if cfg.MemoryContextSizeLimit <= 0 {
+		t.Fatalf("expected positive default memory context size limit, got %d", cfg.MemoryContextSizeLimit)
+	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

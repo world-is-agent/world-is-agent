@@ -1,9 +1,10 @@
-# GameAgent Context Architecture v0.1
+# GameAgent Context Architecture v0.2
 
 > Status: Architecture Draft — Context Model Baseline
-> Date: 2026-08-21
+> Date: 2026-08-22
 > Scope: Context Sources + Context Engine + Model Context
 > Identity Baseline: `AgentSessionKey = game_id + world_id + entity_id`
+> Compatibility Baseline: [GameAgent 多游戏兼容性与 Agent Binding 决策](./summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md)
 > Design Goal: 为长期运行、多 World、多 Agent 的游戏 Agent Runtime 提供清晰、可扩展、可验证的上下文架构。
 
 ---
@@ -21,7 +22,7 @@ GameAgent 的 Context 不是简单的 Prompt 拼接，也不是一个不断增�
 角色当前主观认知
 真实发生过的历史
 长期与短期 Memory
-当前这一次 AgentRun 的 Event / Observation / Tools
+当前这一次 AgentTurn 的 Event / Observation / Tools
 ```
 
 并解决三个核心问题：
@@ -57,7 +58,7 @@ Context Sources
     以及它们的 Scope、Authority、Lifecycle。
 
 Context Engine
-    针对当前 AgentRun，从 Sources 中定位、验证、检索、筛选并压缩信息。
+    针对当前 AgentTurn，从 Sources 中定位、验证、检索、筛选并压缩信息。
 
 Model Context
     Context Engine 最终为本次模型调用生成的有限、结构化上下文。
@@ -160,19 +161,23 @@ Authoritative Environment State 更新
 
 ## 2.4 Static Definition 与 Dynamic Instance 分离
 
-Game Definition 和 Agent Definition 是基础定义；World、Agent State、Experience、Memory 是具体实例态。
+Game Definition 和 Agent Definition / Archetype 是基础定义；World、Agent Instance Descriptor、Agent State、Experience、Memory 是具体实例态。
 
 ```text
 Game Definition
         +
 World Instance
 
-Agent Definition
+Agent Definition / Archetype
         +
-World-scoped Agent Instance
+Agent Instance Descriptor
+        +
+World-scoped Agent State / Memory
 ```
 
-同一个 Abigail Definition 可以生成多个世界实例中的 Abigail：
+同一个 Definition 可以用于多个世界实例中的具体实体。
+
+Stardew 中经常是 1:1：
 
 ```text
                   Abigail Definition
@@ -187,6 +192,24 @@ World-scoped Agent Instance
    experience A                 experience B
    memory A                     memory B
 ```
+
+但动态实体游戏中通常是 N:1：
+
+```text
+                  villager/farmer Definition
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+world_001 / villager:uuid-1       world_001 / villager:uuid-2
+```
+
+因此：
+
+```text
+entity_id != definition_id
+```
+
+Stardew 只是允许 `definition_id == entity_id` 的特例。
 
 ---
 
@@ -270,15 +293,16 @@ Context Scope Contract 是 Context Architecture 的核心 Contract。
 | Runtime Policy | Runtime |
 | Game Definition / Lore | `game_id` |
 | World Environment State | `game_id + world_id` |
-| Agent Definition | `game_id + entity_id` |
+| Agent Definition / Archetype | `game_id + definition_id` |
+| Agent Instance Descriptor | `game_id + world_id + entity_id` |
 | Agent Environment State | `game_id + world_id + entity_id` |
 | Agent Cognitive State | `game_id + world_id + entity_id` |
 | World Experience | `game_id + world_id` |
 | Agent Experience | `game_id + world_id + entity_id` |
 | Agent Memory | `game_id + world_id + entity_id` |
-| Current Event | 当前 AgentRun |
-| Current Observation | 当前 AgentRun |
-| Available Tools | 当前 Environment / Entity |
+| Current Event | 当前 AgentTurn |
+| Current Observation | 当前 AgentTurn |
+| Available Tools | 当前 AgentTurn |
 
 这张表回答：
 
@@ -300,6 +324,9 @@ Runtime
     ├── Game Definition
     │   scope = game_id
     │
+    ├── Agent Definition / Archetype
+    │   scope = game_id + definition_id
+    │
     └── World Instance
         │
         ├── World Environment State
@@ -307,6 +334,7 @@ Runtime
         │
         └── Agent Instance
             │
+            ├── Agent Instance Descriptor
             ├── Agent Environment State
             ├── Agent Cognitive State
             ├── Agent Experience
@@ -316,7 +344,7 @@ Runtime
 旁边还有当前执行态：
 
 ```text
-Current AgentRun
+Current AgentTurn
 │
 ├── AgentSessionKey
 ├── Current Event
@@ -382,29 +410,74 @@ Pelican Town 世界设定
 
 ---
 
-## 5.3 Agent Definition
+## 5.3 Agent Definition / Archetype
 
 Scope：
 
 ```text
-game_id + entity_id
+game_id + definition_id
 ```
 
 例如：
 
 ```text
-Abigail 的背景
-基础人格
-基本喜好
-基础说话方式
-角色 Lore
+Stardew:
+    npc:Linus
+    npc:Abigail
+
+Minecraft:
+    villager/farmer
+    villager/librarian
+
+RimWorld:
+    human_pawn
+    trader
 ```
 
 它回答：
 
-> “这个角色是谁？”
+> “这一类 Agent 应该如何说话、思考和行动？”
 
-World A / World B 中的同一角色共享基础 Definition，但实例态互相隔离。
+Agent Definition 是可复用模板，不一定对应某个具体 `entity_id`。
+
+Stardew 的固定 NPC 可以使用：
+
+```text
+definition_id = entity_id
+```
+
+但动态实体游戏不应依赖这个等式。
+
+---
+
+## 5.4 Agent Instance Descriptor
+
+Scope：
+
+```text
+game_id + world_id + entity_id
+```
+
+例如：
+
+```text
+display_name
+definition_id
+entity_type
+profession
+traits
+faction
+relationship hints
+adapter-provided metadata
+```
+
+它回答：
+
+> “当前 world 中这个具体实体是谁？”
+
+Agent Instance Descriptor 是事实输入，不是完整 prompt。
+
+Adapter 可以提供 Descriptor facts；Runtime / Context Sources 根据 `definition_id` 加载 Agent Definition，并与 Descriptor、State、Memory、Observation 一起组合 Model Context。
 
 ---
 
@@ -473,7 +546,7 @@ inventory = ...
 Scope：
 
 ```text
-当前 AgentRun
+当前 AgentTurn
 ```
 
 它表示当前时刻 Agent 被允许看到的最新世界事实，例如：
@@ -784,13 +857,13 @@ Current Run 是 Context Engine 的查询 Anchor。
 
 ```text
 在 MVP0 / Phase4 中：
-    Current AgentRun
+    Current AgentTurn
     ==
     一次 AgentTurn
 ```
 
-后续 Phase5/6 若引入 Multi-step、AgentRun / AgentStep / AgentTurn 可以再细分；
-本架构文档中的 `AgentRun` 在当前阶段不要求新增独立 Runtime 类型。
+本架构文档统一使用 `AgentTurn` 作为当前执行边界。
+后续 Phase5/6 若需要引入更高层的 `AgentRun` 概念，必须单独形成 Architecture Decision。
 
 例如：
 
@@ -810,7 +883,7 @@ Current Run 不只是本身要进入 Context，更重要的是它决定 Context 
 
 ## 10.1 Scope Resolution 示例
 
-当前 AgentRun：
+当前 AgentTurn：
 
 ```text
 game_id      = stardew-valley
@@ -830,8 +903,11 @@ Game Definition
 World Environment State
     scope = stardew-valley + Farm001
 
-Agent Definition
+Agent Definition / Archetype
     scope = stardew-valley + npc:Abigail
+
+Agent Instance Descriptor
+    scope = stardew-valley + Farm001 + npc:Abigail
 
 Agent Environment State
     scope = stardew-valley + Farm001 + npc:Abigail
@@ -1004,7 +1080,7 @@ Context Engine 不是简单的 Prompt Builder。
 完整流水线：
 
 ```text
-Current AgentRun
+Current AgentTurn
         ↓
 Scope Resolution
         ↓
@@ -1035,6 +1111,7 @@ Model Context
 game_id
 world_id
 entity_id
+resolved definition_id
 ```
 
 计算当前调用可以访问的 Context Scope。
@@ -1050,14 +1127,15 @@ entity_id
 ```text
 Game Definition
 World Environment State
-Agent Definition
+Agent Definition / Archetype
+Agent Instance Descriptor
 Agent Environment State
 Cognitive State
 Experience
 Memory
 ```
 
-Current Event / Observation / Tools 则来自本次 AgentRun。
+Current Event / Observation / Tools 则来自本次 AgentTurn。
 
 ---
 
@@ -1229,13 +1307,14 @@ Model Context
 ├── System
 │   ├── Runtime Policy
 │   ├── Game Definition
-│   └── Agent Definition
+│   └── Agent Definition / Archetype
 │
 ├── Environment Context
 │   ├── Relevant Authoritative Facts
 │   └── Current Observation
 │
 ├── Agent Context
+│   ├── Agent Instance Descriptor
 │   ├── Cognitive State
 │   ├── Relevant Memory
 │   └── Recent Experience
@@ -1598,13 +1677,21 @@ game_id + world_id + entity_id
 
 作为 Scope。
 
-但 Agent Definition 只使用：
+但 Agent Definition / Archetype 使用：
 
 ```text
-game_id + entity_id
+game_id + definition_id
 ```
 
-因为它属于角色基础定义，而不是具体 World Instance。
+因为它属于可复用模板，而不是具体 World Instance。
+
+Agent Instance Descriptor 使用：
+
+```text
+game_id + world_id + entity_id
+```
+
+因为它描述的是当前 world 中这个具体实体。
 
 ---
 
@@ -1747,4 +1834,4 @@ Context Engine
 
 # 22. 一句话总结
 
-> **GameAgent Context Architecture 的核心不是“怎么拼 Prompt”，而是建立一套有 Scope、有 Authority、有 Freshness、有 History 与 Memory 边界的 Context Projection 体系：Game 决定世界事实，Runtime 管理 Agent 的认知与记忆，Context Engine 针对当前 AgentRun 从所有信息源中选择本轮真正需要的内容，最终生成有限、结构化的 Model Context。**
+> **GameAgent Context Architecture 的核心不是“怎么拼 Prompt”，而是建立一套有 Scope、有 Authority、有 Freshness、有 History 与 Memory 边界的 Context Projection 体系：Game 决定世界事实，Runtime 管理 Agent 的认知与记忆，Context Engine 针对当前 AgentTurn 从所有信息源中选择本轮真正需要的内容，最终生成有限、结构化的 Model Context。**

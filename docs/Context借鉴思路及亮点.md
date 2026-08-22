@@ -6,6 +6,15 @@
 
 你现在原始 Context 设计已经明确把静态 Game/Agent Definition 与 world-scoped Agent State/Memory 分开，并用 `game_id / world_id / entity_id` 规定不同数据的 Scope。
 
+后续多游戏兼容性评估进一步把 `Agent Definition` 拆成：
+
+```text
+Agent Definition / Archetype = game_id + definition_id
+Agent Instance Descriptor    = game_id + world_id + entity_id
+```
+
+这样 Stardew 的固定 NPC 仍可以 `definition_id == entity_id`，而动态生成 NPC / Pawn / Villager 可以共享可复用模板。
+
 ------
 
 # 一、先看四套系统最根本的区别
@@ -764,14 +773,15 @@ profile
 | Runtime Policy          | Runtime                          |
 | Game Definition         | `game_id + game_version`         |
 | World Environment State | `game_id + world_id`             |
-| Agent Definition        | `game_id + entity_id`            |
+| Agent Definition / Archetype | `game_id + definition_id`        |
+| Agent Instance Descriptor | `game_id + world_id + entity_id` |
 | Agent Environment State | `game_id + world_id + entity_id` |
 | Agent Cognitive State   | `game_id + world_id + entity_id` |
 | World Experience        | `game_id + world_id`             |
 | Agent Experience        | `game_id + world_id + entity_id` |
 | Agent Memory            | `game_id + world_id + entity_id` |
-| Event / Observation     | Current AgentRun                 |
-| Tools                   | Current Environment / Entity     |
+| Event / Observation     | Current AgentTurn                |
+| Tools                   | Current AgentTurn capability view |
 
 这不是 Pi/Hermes/DeepSeek 的直接设计。
 
@@ -781,7 +791,7 @@ profile
 
 # 八、第二个自有亮点：Definition 与 Instance 真正分离
 
-我们的：
+我们一开始的：
 
 ```text
 Agent Definition
@@ -799,17 +809,37 @@ Stardew + Abigail
 
 > Abigail 是谁。
 
+多游戏兼容性评估后，这个模型进一步收敛为：
+
+```text
+Agent Definition / Archetype
+=
+game_id + definition_id
+```
+
+回答：
+
+> 这一类 Agent 该如何说话、思考和行动。
+
+例如：
+
+```text
+Stardew + npc:Abigail
+Minecraft + villager/farmer
+RimWorld + human_pawn
+```
+
 而：
 
 ```text
-Agent Instance
+Agent Instance Descriptor / State / Memory
 =
 game_id + world_id + entity_id
 ```
 
 回答：
 
-> Farm001 里的 Abigail 现在变成了谁。
+> Farm001 里的 Abigail / world_001 里的 villager:uuid-123 现在是谁。
 
 于是：
 
@@ -1018,7 +1048,7 @@ Game 才有 authority。
 最终我们现在的 Context Engine 是：
 
 ```text
-Current AgentRun
+Current AgentTurn
        ↓
 Scope Resolution
        ↓

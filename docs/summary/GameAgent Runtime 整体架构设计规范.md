@@ -1,8 +1,9 @@
 # GameAgent Runtime 整体架构设计规范
 
-> **Version:** v0.2
+> **Version:** v0.3
 > **Status:** Architecture Baseline
-> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted
+> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted
+> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）
 > **Purpose:** 定义 GameAgent 的长期架构边界、核心运行模型、模块职责、依赖方向和演进约束。
 > 本文中的 `MUST / MUST NOT / SHOULD / MAY` 为规范性关键词。
 
@@ -63,9 +64,9 @@ Phase 技术方案原则上 MUST 遵守本文。
 
 # 2. Baseline 来源
 
-Architecture v0.2 不是纯理论设计。
+Architecture v0.3 不是纯理论设计。
 
-它建立在已经完成并验收的两个真实阶段之上。
+它建立在已经完成并验收的四个真实阶段之上。
 
 ## Phase1 已验证
 
@@ -123,7 +124,35 @@ Observe / Model / Action 都可以设置 bounded timeout。
 Action timeout 后可以向 Adapter 发送 best-effort cancel。
 ```
 
-因此 v0.2 冻结的是：
+## Phase3 已验证
+
+Phase3 在 Phase2 基础上进一步证明：
+
+```text
+AgentSessionKey = game_id + world_id + entity_id 可以稳定路由多个 NPC。
+
+EnvironmentSession 与 AgentSession 可以分离。
+
+同一 AgentSession 可以串行执行，跨 AgentSession 可以并行。
+
+Protocol v1alpha2 的 world_id / target_entity_id 能支撑显式实体路由。
+```
+
+## Phase4 已验证
+
+Phase4 在 Phase3 基础上进一步证明：
+
+```text
+MemoryStore 可以按 AgentSessionKey 隔离短期 Memory。
+
+ContextBuilder / Renderer 可以把 Event、Observation、Recent Memory 和 Tools 组合成模型上下文。
+
+Memory load failure 可以 fail-open，Memory update failure 不改写已成功 Turn。
+
+确定性 gateway 测试可以覆盖同实体排队、跨 session reconnect、不同实体隔离和断线 drain。
+```
+
+因此 v0.3 冻结的是：
 
 > **已经有真实证据支持的核心边界，以及为了后续演进必须提前保持的架构不变量。**
 
@@ -488,7 +517,7 @@ AgentSession 表示：
 
 Phase1 / Phase2 尚未正式实现 AgentSession persistence。
 
-但从 v0.2 起，语义固定。
+但从 v0.3 起，语义固定。
 
 AgentSession MUST：
 
@@ -505,7 +534,7 @@ AgentSession MUST：
 ```text
 game scope
 +
-save / world scope
+world scope
 +
 stable entity identity
 ```
@@ -521,7 +550,7 @@ key 格式
 UUID 方案
 ```
 
-不在 v0.2 冻结。
+不在 v0.3 冻结。
 
 未来 AgentSession 可以拥有：
 
@@ -541,6 +570,83 @@ EnvironmentSession
 !=
 AgentSession
 ```
+
+## 9.1 Agent Binding 与 Definition / Instance 分离
+
+AgentSession identity 绑定的是具体游戏实体，不绑定 Agent Definition。
+
+长期必须区分：
+
+```text
+Game Entity
+    ↓
+Agent Binding
+    ↓
+Agent Instance
+    ├── Agent Definition / Archetype
+    ├── Agent Instance Descriptor
+    ├── Agent State
+    └── Agent Memory
+```
+
+`entity_id` 表示当前 `world_id` 命名空间内稳定的游戏实体身份。
+
+它用于：
+
+```text
+AgentSessionKey
+Agent State scope
+Agent Memory scope
+Event routing
+Trace diagnostics
+```
+
+它 MUST NOT 被长期解释为 Agent Definition 的天然 key。
+
+Agent Definition / Archetype 的 scope 是：
+
+```text
+game_id + definition_id
+```
+
+Agent Instance Descriptor / State / Memory 的 scope 是：
+
+```text
+game_id + world_id + entity_id
+```
+
+Stardew 可以采用：
+
+```text
+entity_id     = npc:Linus
+definition_id = npc:Linus
+```
+
+但这只是固定角色游戏的特例。
+
+动态实体游戏可以采用：
+
+```text
+entity_id     = villager:uuid-123
+definition_id = villager/farmer
+
+entity_id     = pawn:723491
+definition_id = human_pawn
+```
+
+Agent Binding 负责回答：
+
+```text
+这个 Game Entity 是否应该成为 Agent？
+如果是，它使用哪个 definition_id？
+它有哪些 instance descriptor facts？
+```
+
+Runtime MAY 未来以独立 Resolver / Store 实现 Agent Binding，但 v0.3 只冻结语义，不要求创建新的 package 或 protocol message。
+
+Adapter SHOULD 提供事实，例如 `entity_id`、`definition_id`、`display_name`、traits、attributes 和当前状态。
+
+Adapter MUST NOT 通过 Agent Binding 直接接管完整 Agent prompt；Runtime / Context Sources 负责根据 Definition、Descriptor、State、Memory、Observation 和 Tools 组合模型上下文。
 
 ------
 
@@ -562,7 +668,7 @@ turn_completed
 turn_failed
 ```
 
-因此 v0.2 正式统一使用：
+因此 v0.3 正式统一使用：
 
 ```text
 AgentTurn
@@ -622,7 +728,7 @@ AgentStep 表示：
 1 Turn = 1 Step
 ```
 
-因此 v0.2 只冻结 AgentStep 的概念，不要求当前代码创建：
+因此 v0.3 只冻结 AgentStep 的概念，不要求当前代码创建：
 
 ```text
 Step state machine
@@ -731,7 +837,7 @@ Action terminal result
 resume AgentTurn
 ```
 
-v0.2 只冻结这一能力要求。
+v0.3 只冻结这一能力要求。
 
 不冻结：
 
@@ -812,6 +918,30 @@ Agent Context
 +
 Available Tools
 ```
+
+Observation MUST 保持 narrow waist：
+
+```text
+small common envelope
++
+game-specific structured state / extensions
+```
+
+Runtime Core 不应该因为某个游戏需要就持续把以下字段变成跨游戏 protocol 字段：
+
+```text
+season
+weather
+friendship
+biome
+hunger
+mood
+job
+block
+mana
+```
+
+这些游戏事实应由 Adapter 通过 `state` / `extensions` 表达，并由 Context projection 在需要时选择性使用。
 
 ------
 
@@ -1015,7 +1145,7 @@ Agent Core
 gateway.Server
 ```
 
-v0.2 不要求为了架构形式提前创建：
+v0.3 不要求为了架构形式提前创建：
 
 ```text
 runtime/internal/environment
@@ -1072,6 +1202,20 @@ Tool
 > 本次 Model 最终能看到和调用什么。
 
 由 Runtime 构造。
+
+Available Tools 是当前 AgentTurn 的动态 capability view。
+
+它可能由以下因素共同决定：
+
+```text
+Environment capabilities
+Entity capabilities
+Current Observation / State
+Runtime Policy / Permission
+Turn Policy
+```
+
+它不等同于某个 Environment 或 entity type 的永久固定工具列表。
 
 长期链路：
 
@@ -1380,27 +1524,14 @@ Adapter
 
 # 24. Context 与 Prompt
 
-当前 Phase2 的 Context 规模仍较小。
+Phase4 已经引入最小 `runtime/internal/context`，用于组装 Runtime Policy、Recent Memory、Current Event、Current Observation 和 Tools。
 
-因此 Prompt / Model Request 构造 MAY 继续位于：
-
-```text
-runtime/internal/agent
-```
-
-v0.2 不要求立即创建：
+长期 Context 如果继续包含：
 
 ```text
-contextengine/
-prompt/
-```
-
-独立 subsystem。
-
-未来 Context 如果包含：
-
-```text
-Profile
+Game Definition
+Agent Definition / Archetype
+Agent Instance Descriptor
 Observation
 Trigger Event
 Recent Turns
@@ -1411,11 +1542,7 @@ Context Budget
 Compression
 ```
 
-导致 AgentTurn Core 过度承担 Context 组合职责时，SHOULD 抽出：
-
-```text
-Context Engine / Prompt Builder
-```
+Context 组合职责 SHOULD 继续保持在 Context boundary，而不是回流到 AgentTurn 主控制流。
 
 长期 Context MAY 分为：
 
@@ -1425,7 +1552,14 @@ Semi-Stable Context
 Volatile Context
 ```
 
-但具体结构不在 v0.2 冻结。
+并至少遵守：
+
+```text
+Agent Definition / Archetype scope = game_id + definition_id
+Agent Instance Descriptor scope = game_id + world_id + entity_id
+Agent Memory scope = game_id + world_id + entity_id
+Current Observation > historical Memory
+```
 
 ------
 
@@ -1453,7 +1587,7 @@ Relevant Memory
 Agent Context
 ```
 
-v0.2 只冻结：
+v0.3 只冻结：
 
 ```text
 Memory belongs to Agent State.
@@ -1461,7 +1595,11 @@ Memory belongs to Agent State.
 Memory should bind to stable AgentSession identity.
 
 Memory does not belong to EnvironmentSession.
+
+Memory does not belong to Agent Definition / Archetype.
 ```
+
+因此多个动态实体可以共享同一个 `definition_id`，但它们的 Memory MUST 仍按 `game_id + world_id + entity_id` 隔离。
 
 不冻结：
 
@@ -1478,7 +1616,7 @@ Summary strategy
 
 # 26. Trace / Observability
 
-Phase2 已验证的 Trace 原则从 v0.2 起成为架构约束。
+Phase2 已验证的 Trace 原则从 v0.3 起成为架构约束。
 
 ## TurnTracer 与 Recorder 分离
 
@@ -1955,7 +2093,7 @@ idgen
     Runtime local ID generation
 ```
 
-这是 v0.2 当前实际 Minimal Core。
+这是 v0.3 当前实际 Minimal Core。
 
 ------
 
@@ -2375,7 +2513,7 @@ Dependency impact:
 17. Adapter 可以在执行前消费 cancel marker，并跳过已经取消的 Action。
 ```
 
-这些构成 v0.2 的实际证据基础。
+这些构成 v0.3 的实际证据基础。
 
 ------
 
@@ -2401,6 +2539,16 @@ Action 模型必须允许长时间异步执行
 AgentTurn 必须允许未来 waiting / suspend / resume
 
 Memory 必须绑定 AgentSession，而不是 EnvironmentSession
+
+Entity identity 不等于 Agent Definition
+
+Agent Definition / Archetype 使用 game_id + definition_id
+
+Agent Instance Descriptor / State / Memory 使用 game_id + world_id + entity_id
+
+Observation 必须保持 narrow waist，不因单个游戏字段膨胀 Protocol
+
+Available Tools 是当前 AgentTurn 的 dynamic capability view
 ```
 
 这些属于：
@@ -2417,7 +2565,7 @@ Current Feature
 
 ------
 
-# 47. v0.2 明确不冻结的内容
+# 47. v0.3 明确不冻结的内容
 
 以下设计必须等对应 Phase 有真实需求后再确定：
 
@@ -2467,7 +2615,7 @@ Trace backend
 Evaluation framework
 ```
 
-这些内容不得因为 Architecture v0.2 存在就被认为已经设计完成。
+这些内容不得因为 Architecture v0.3 存在就被认为已经设计完成。
 
 ------
 
@@ -2565,4 +2713,4 @@ Adapter owns translation.
 Game owns execution.
 ```
 
-这组边界构成 **GameAgent Runtime Architecture v0.2 Baseline**。
+这组边界构成 **GameAgent Runtime Architecture v0.3 Baseline**。

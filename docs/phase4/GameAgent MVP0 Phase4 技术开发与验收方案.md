@@ -1,10 +1,10 @@
 # GameAgent MVP0 Phase4 技术开发与验收方案
 
-> **Status:** Draft — Phase3 code-aware revision
-> **Date:** 2026-08-21
+> **Status:** Accepted — Post-Phase4 compatibility revision
+> **Date:** 2026-08-22
 > **Scope:** Context Boundary + Short-term Memory + Deterministic TestEnvironment
-> **Architecture Baseline:** GameAgent Runtime Architecture v0.2
-> **Roadmap Baseline:** GameAgent Phase3–Phase8 阶段规划 v0.3
+> **Architecture Baseline:** GameAgent Runtime Architecture v0.3
+> **Roadmap Baseline:** GameAgent Phase3–Phase8 阶段规划 v0.4
 > **Protocol Baseline:** gameagent.protocol.v1alpha2（以 Phase3 Accepted 实现为准）
 
 ------
@@ -458,12 +458,13 @@ Phase4 必须正式冻结下面的逻辑 Scope。
 | Runtime Policy         | Runtime                          | Runtime config        | P0             |
 | Game Definition        | `game_id`                        | 静态配置              | P1 可选        |
 | World Instance Context | `game_id + world_id`             | 当前 Observation 为主 | 只冻结概念     |
-| Agent Definition       | `game_id + entity_id`            | 静态配置              | P1 可选        |
+| Agent Definition / Archetype | `game_id + definition_id`  | 静态配置              | P1 可选        |
+| Agent Instance Descriptor | `game_id + world_id + entity_id` | Adapter / 静态映射 / 当前 Observation | 只冻结概念 |
 | Agent State            | `game_id + world_id + entity_id` | 当前 Observation 为主 | 不建独立 Store |
 | Agent Memory           | `game_id + world_id + entity_id` | Runtime MemoryStore   | P0             |
 | Observation            | 当前 AgentTurn                   | Adapter               | P0             |
 | Event                  | 当前 AgentTurn                   | Adapter               | P0             |
-| Tools                  | 当前 Environment                 | Capability Registry   | P0             |
+| Tools                  | 当前 AgentTurn                   | Capability Registry   | P0             |
 
 `Runtime Policy` 在本方案中表示 Runtime 全局行为边界：
 
@@ -480,8 +481,11 @@ Phase4 必须正式冻结下面的逻辑 Scope。
 每个 NPC 不同的说话方式、人物设定、背景知识应属于：
 
 ```text
-Agent Definition
-scope = game_id + entity_id
+Agent Definition / Archetype
+scope = game_id + definition_id
+
+Agent Instance Descriptor
+scope = game_id + world_id + entity_id
 ```
 
 Phase4 可以先用 Runtime Policy 提供默认 prompt 行为；
@@ -493,6 +497,17 @@ Phase4 可以先用 Runtime Policy 提供默认 prompt 行为；
 Phase4 保持现有 `PromptConfig` 配置路径可用，
 只在 Context Scope Contract 中冻结语义边界；
 per-agent prompt / persona 覆盖留到 Phase5/6 或后续 Static Definition 阶段。
+
+Post-Phase4 compatibility review 已进一步明确：
+
+```text
+Entity != Agent Definition
+Agent Definition / Archetype = game_id + definition_id
+Agent Instance Descriptor = game_id + world_id + entity_id
+```
+
+Stardew 的固定 NPC 可以让 `definition_id == entity_id`；
+动态实体游戏不应依赖这个等式。
 
 核心关系：
 
@@ -1506,8 +1521,12 @@ Game Definition
     游戏规则 / 基础世界设定
 
 Agent Definition
-    game_id + entity_id
+    game_id + definition_id
     固定人物人格 / 背景
+
+Agent Instance Descriptor
+    game_id + world_id + entity_id
+    当前 world 中这个具体实体的描述性事实
 ```
 
 禁止在这里保存：

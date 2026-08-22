@@ -165,3 +165,19 @@ Trace events for context load/update diagnosis
 ```
 
 Phase5 可以在不依赖真实 Stardew / 真实 LLM 的情况下继续开发多 step AgentTurn。
+
+但 Phase5 开工前必须先接受多游戏兼容性 gate：
+
+```text
+docs/summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md
+```
+
+该 gate 不改变 Phase4 的验收结论，也不改变 Phase4 Memory scope。
+
+它只冻结后续架构语义：
+
+```text
+Entity != Agent Definition
+Agent Definition / Archetype = game_id + definition_id
+Agent Instance Descriptor / State / Memory = game_id + world_id + entity_id
+```

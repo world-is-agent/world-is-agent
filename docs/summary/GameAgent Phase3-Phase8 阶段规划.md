@@ -1,11 +1,11 @@
 # GameAgent Phase3–Phase8 阶段规划
 
-> **Version:** v0.3  
+> **Version:** v0.4
 > **Status:** Roadmap Baseline  
-> **Date:** 2026-08-20  
-> **Architecture Baseline:** GameAgent Runtime Architecture v0.2  
-> **Current Baseline:** Phase1 Accepted + Phase2 Accepted
-> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）
+> **Date:** 2026-08-22
+> **Architecture Baseline:** GameAgent Runtime Architecture v0.3
+> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted
+> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）
 
 ---
 
@@ -21,7 +21,7 @@
 
 每个阶段完成并验收后，必须重新 Review：
 
-- 当前实现事实是否仍符合 Architecture v0.2；
+- 当前实现事实是否仍符合 Architecture v0.3；
 - 下一阶段是否仍是最高优先级；
 - 后续阶段是否需要合并、拆分或调整顺序；
 - 是否需要形成新的 Architecture Decision。
@@ -95,7 +95,7 @@ Phase6：用 move_to 验证异步 Action lifecycle。
 
 ## 3.3 每阶段结束后重新规划
 
-Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.2 的核心边界。
+Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.3 的核心边界。
 
 ---
 
@@ -105,6 +105,7 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | --- | --- | --- |
 | Phase3 | Agent Identity 与 Adapter 泛化 | 同一实体具有稳定身份；Stardew Adapter 不再局限于单 NPC |
 | Phase4 | Context 与短期 Memory | Agent 可以在多个 Turn 之间保留隔离的上下文，并形成可复用确定性测试底座 |
+| Phase5 Entry Gate | Multi-game Compatibility / Agent Binding | Phase5 开工前先冻结 Entity、Agent Definition、Agent Instance 的长期语义 |
 | Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个 Model → Tool / Result Step |
 | Phase6 | 异步 Action 与 Turn Resume | 长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
@@ -265,11 +266,78 @@ Scenario Evaluation Framework
 
 ## 阶段结束 Review
 
-重点确认 AgentSession identity 是否稳定、MemoryStore 是否足够小、Context 构造是否已经需要独立模块，以及确定性测试夹具是否足以支撑 Phase5。
+重点确认 AgentSession identity 是否稳定、MemoryStore 是否足够小、Context 构造是否已经需要独立模块，确定性测试夹具是否足以支撑 Phase5，以及 Phase5 前是否需要先冻结多游戏兼容性语义。
 
 ---
 
-# 7. Phase5：有界 Multi-step AgentTurn
+# 7. Phase5 Entry Gate：Multi-game Compatibility / Agent Binding
+
+## Gate 目标
+
+Phase5 会扩展 AgentTurn 内部结构，引入多个 AgentStep。
+
+在进入这个阶段前，必须避免继续放大 Stardew-only 假设：
+
+```text
+Agent Definition = game_id + entity_id
+```
+
+因此 Phase5 开工前必须接受并引用：
+
+```text
+docs/summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md
+```
+
+## Gate 冻结语义
+
+```text
+Entity != Agent Definition
+
+Entity -> Agent Binding
+
+Agent Definition / Archetype = game_id + definition_id
+
+Agent Instance Descriptor = game_id + world_id + entity_id
+
+Agent State / Memory = game_id + world_id + entity_id
+
+Observation = small common envelope + game-specific state/extensions
+
+Available Tools = current AgentTurn dynamic capability view
+
+Trigger admission is not hardcoded to one game-specific event_type
+```
+
+## 非目标
+
+本 Gate 不要求立即实现：
+
+```text
+AgentBinding runtime package
+AgentDescriptor protocol message
+definition_id proto field
+第二个真实 Adapter
+Agent Definition storage
+```
+
+如果 Phase5 技术方案或 FakeGame contract test 证明需要新增协议字段，应单独形成 Protocol v1alpha3 / additive extension 决策。
+
+Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract test。该测试不要求真实第二 Adapter，也不要求新增 protocol 字段；它只需要证明非 Stardew 语义的 trigger 可以通过 Runtime core，并且不需要为了该 fixture 修改 `runtime/internal/{agent,context,tool,model,session}` 的 game-specific 分支。
+
+## 完成条件
+
+- Architecture v0.3 已纳入 Agent Binding / Definition / Instance 分离；
+- Context Architecture v0.2 已更新 Scope Contract；
+- Phase5 技术方案不再默认 `definition_id == entity_id`；
+- Phase5 技术方案在 AgentContext / AgentDefinition / Context Source 的签名、字段或数据源说明中显式区分 `definition_id` 与 `entity_id`；若 Phase5 仍不实现 AgentDefinition source，也必须写明当前降级策略不依赖 `definition_id == entity_id`；
+- Phase5 技术方案不要求 Runtime Core 理解具体游戏 Observation 字段；
+- Phase5 技术方案把 Tools 视为本次 AgentTurn 的动态 capability view；
+- Phase5 技术方案必须明确 Trigger Admission / Trigger Router 的最小策略，AgentLoop / Gateway core 不得继续把单一 game-specific `event_type` 作为长期准入条件；
+- Phase5 Entry Gate 必须包含最小 non-Stardew fixture / contract test，覆盖至少一个非 `player_interacted_with_npc` trigger。
+
+---
+
+# 8. Phase5：有界 Multi-step AgentTurn
 
 ## 阶段目标
 
@@ -324,7 +392,7 @@ Sub-agent / Supervisor
 
 ---
 
-# 8. Phase6：异步 Action Lifecycle 与 AgentTurn Resume
+# 9. Phase6：异步 Action Lifecycle 与 AgentTurn Resume
 
 ## 阶段目标
 
@@ -371,7 +439,7 @@ Runtime 崩溃后的 continuation 恢复
 
 ---
 
-# 9. Phase7：Environment Recovery 与持久 Agent State
+# 10. Phase7：Environment Recovery 与持久 Agent State
 
 ## 阶段目标
 
@@ -416,7 +484,7 @@ Exactly-once 全链路
 
 ---
 
-# 10. Phase8：Evaluation、Developer Experience 与产品化
+# 11. Phase8：Evaluation、Developer Experience 与产品化
 
 ## 阶段目标
 
@@ -462,7 +530,7 @@ Multi-Agent 社会模拟平台
 
 ---
 
-# 11. 跨阶段不变量
+# 12. 跨阶段不变量
 
 无论处于哪个 Phase，都必须保持：
 
@@ -484,13 +552,18 @@ message_id != action_id != turn_id
 Observer != Functional Hook
 Action != synchronous function
 AgentStep belongs to AgentTurn
+Entity identity != Agent Definition
+Agent Definition / Archetype != Agent Instance Descriptor
+Observation narrow waist != universal game state schema
+Available Tools == current AgentTurn capability view
+Trigger admission != hardcoded game-specific event_type
 ```
 
-任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.2，并形成正式 Architecture Decision。
+任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.3，并形成正式 Architecture Decision。
 
 ---
 
-# 12. 每阶段固定交付物
+# 13. 每阶段固定交付物
 
 从 Phase3 开始，每阶段至少应形成：
 
@@ -528,7 +601,7 @@ Needs Follow-up
 
 ---
 
-# 13. 暂不绑定固定 Phase 的候选能力
+# 14. 暂不绑定固定 Phase 的候选能力
 
 以下能力保留为未来候选，等核心 Harness 出现真实需求后再进入阶段规划：
 
@@ -549,7 +622,7 @@ Cloud deployment
 
 ---
 
-# 14. 一句话 Roadmap
+# 15. 一句话 Roadmap
 
 ```text
 Phase1

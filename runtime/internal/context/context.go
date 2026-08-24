@@ -31,6 +31,8 @@ type AgentContext struct {
 	Observation *protocolv1alpha2.Observation
 
 	Tools []model.ToolDefinition
+
+	Transcript []model.Message
 }
 
 type BuildInput struct {
@@ -44,6 +46,8 @@ type BuildInput struct {
 	Observation *protocolv1alpha2.Observation
 
 	Tools []model.ToolDefinition
+
+	Transcript []model.Message
 }
 
 type Builder struct{}
@@ -78,7 +82,60 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 		Event:          input.Event,
 		Observation:    input.Observation,
 		Tools:          append([]model.ToolDefinition(nil), input.Tools...),
+		Transcript:     copyMessages(input.Transcript),
 	}, nil
+}
+
+func copyMessages(messages []model.Message) []model.Message {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	out := make([]model.Message, len(messages))
+	for i, message := range messages {
+		out[i] = message
+		out[i].ToolCalls = copyToolCalls(message.ToolCalls)
+		out[i].ToolResults = copyToolResults(message.ToolResults)
+	}
+	return out
+}
+
+func copyToolCalls(calls []model.ToolCall) []model.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	out := make([]model.ToolCall, len(calls))
+	for i, call := range calls {
+		out[i] = call
+		out[i].Arguments = copyMap(call.Arguments)
+	}
+	return out
+}
+
+func copyToolResults(results []model.ToolResult) []model.ToolResult {
+	if len(results) == 0 {
+		return nil
+	}
+
+	out := make([]model.ToolResult, len(results))
+	for i, result := range results {
+		out[i] = result
+		out[i].Output = copyMap(result.Output)
+	}
+	return out
+}
+
+func copyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 func definitionIDFromTargetEntity(event *protocolv1alpha2.GameEvent) string {

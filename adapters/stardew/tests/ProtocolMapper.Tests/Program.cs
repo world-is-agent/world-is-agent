@@ -40,7 +40,9 @@ Assert(gameEvent.WorldId == "Farm_123456", "event should carry world_id");
 Assert(gameEvent.TargetEntityId == "npc:Abigail", "event should carry target_entity_id");
 Assert(gameEvent.Sequence == 42, "event sequence should be preserved");
 Assert(gameEvent.Entities.Any(entity => entity.EntityId == "npc:Abigail" && entity.EntityType == "npc"), "target npc should be in entities");
+Assert(gameEvent.Entities.Any(entity => entity.EntityId == "npc:Abigail" && entity.DefinitionId == "npc:Abigail"), "target npc should carry definition_id");
 Assert(gameEvent.Entities.Any(entity => entity.EntityId == "player:local" && entity.EntityType == "player"), "player should be in entities");
+Assert(gameEvent.Entities.Any(entity => entity.EntityId == "player:local" && entity.DefinitionId == "player:local"), "player should carry definition_id");
 Assert(gameEvent.Payload.Fields["trigger"].StringValue == "player_interact", "payload should keep trigger");
 Assert(!gameEvent.Payload.Fields.ContainsKey("target_entity_id"), "payload must not duplicate target_entity_id");
 
@@ -62,8 +64,13 @@ ProbeObservation probe = new(
 Observation observation = ProtocolMapper.BuildObservation("npc:Abigail", probe, "Farm_123456", gameTime);
 Assert(observation.EntityId == "npc:Abigail", "observation should carry entity_id");
 Assert(observation.WorldId == "Farm_123456", "observation should carry world_id");
-Assert(observation.State.Fields["definition_id"].StringValue == "npc:Abigail", "stardew observation should publish definition_id");
+Assert(!observation.State.Fields.ContainsKey("definition_id"), "observation state must not publish definition_id");
 Assert(observation.NearbyEntities.Any(entity => entity.EntityId == "player:local" && entity.EntityType == "player"), "observation should include local player nearby entity");
+Assert(observation.NearbyEntities.Any(entity => entity.EntityId == "player:local" && entity.DefinitionId == "player:local"), "nearby player should carry definition_id");
+
+CapabilityList capabilities = CapabilityCatalog.BuildEnvironmentCapabilities();
+Assert(capabilities.Capabilities.Any(capability => capability.Name == "speak" && capability.ConcurrencyMode == CapabilityConcurrencyMode.Sequential), "speak capability should be sequential");
+Assert(capabilities.Capabilities.Any(capability => capability.Name == "emote" && capability.ConcurrencyMode == CapabilityConcurrencyMode.Sequential), "emote capability should be sequential");
 
 ActionRequest actionRequest = new()
 {

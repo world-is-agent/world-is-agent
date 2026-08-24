@@ -28,6 +28,7 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         'message\s+AdapterHello\s*\{',
         'message\s+EnvironmentReady\s*\{',
         'message\s+EntityRef\s*\{',
+        'message\s+EntityRef\s*\{[^}]*string\s+definition_id\s*=\s*4;',
         'message\s+GameTime\s*\{',
         'message\s+GameEvent\s*\{',
         'enum\s+EventAckStatus\s*\{',
@@ -36,7 +37,11 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         'message\s+ObserveRequest\s*\{',
         'message\s+Observation\s*\{',
         'enum\s+ExecutionMode\s*\{',
+        'enum\s+CapabilityConcurrencyMode\s*\{',
+        'CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL\s*=\s*1;',
+        'CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE\s*=\s*2;',
         'message\s+Capability\s*\{',
+        'message\s+Capability\s*\{[^}]*CapabilityConcurrencyMode\s+concurrency_mode\s*=\s*7;',
         'message\s+CapabilityRequest\s*\{',
         'message\s+CapabilityList\s*\{',
         'message\s+ActionRequest\s*\{',
@@ -99,6 +104,10 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         Add-Violation 'Observation.world_id must use field 7'
     }
 
+    if ($proto -match 'message\s+Observation\s*\{[^}]*definition_id') {
+        Add-Violation 'Observation must not include definition_id'
+    }
+
     if ($proto -notmatch 'message\s+ActionRequest\s*\{[^}]*string\s+world_id\s*=\s*6;') {
         Add-Violation 'ActionRequest.world_id must use field 6'
     }
@@ -133,6 +142,10 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
 
     if ($proto -match 'agent_id') {
         Add-Violation 'v1alpha2 must not expose agent_id to adapters'
+    }
+
+    if ($proto -match 'target_definition_id') {
+        Add-Violation 'proto must not include target_definition_id'
     }
 }
 

@@ -24,6 +24,7 @@ public static class CapabilityCatalog
                     Description = "Make the NPC speak.",
                     InputSchemaJson = SpeakInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
+                    ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
                 },
                 new Capability
                 {
@@ -32,6 +33,7 @@ public static class CapabilityCatalog
                     Description = "Make the NPC play an emote bubble.",
                     InputSchemaJson = EmoteInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
+                    ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
                 },
             },
         };

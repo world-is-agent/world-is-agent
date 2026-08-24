@@ -123,6 +123,55 @@ func (ExecutionMode) EnumDescriptor() ([]byte, []int) {
 	return file_gameagent_proto_rawDescGZIP(), []int{1}
 }
 
+type CapabilityConcurrencyMode int32
+
+const (
+	CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED   CapabilityConcurrencyMode = 0
+	CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL    CapabilityConcurrencyMode = 1
+	CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE CapabilityConcurrencyMode = 2
+)
+
+// Enum value maps for CapabilityConcurrencyMode.
+var (
+	CapabilityConcurrencyMode_name = map[int32]string{
+		0: "CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED",
+		1: "CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL",
+		2: "CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE",
+	}
+	CapabilityConcurrencyMode_value = map[string]int32{
+		"CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED":   0,
+		"CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL":    1,
+		"CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE": 2,
+	}
+)
+
+func (x CapabilityConcurrencyMode) Enum() *CapabilityConcurrencyMode {
+	p := new(CapabilityConcurrencyMode)
+	*p = x
+	return p
+}
+
+func (x CapabilityConcurrencyMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CapabilityConcurrencyMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_gameagent_proto_enumTypes[2].Descriptor()
+}
+
+func (CapabilityConcurrencyMode) Type() protoreflect.EnumType {
+	return &file_gameagent_proto_enumTypes[2]
+}
+
+func (x CapabilityConcurrencyMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CapabilityConcurrencyMode.Descriptor instead.
+func (CapabilityConcurrencyMode) EnumDescriptor() ([]byte, []int) {
+	return file_gameagent_proto_rawDescGZIP(), []int{2}
+}
+
 type ActionStatus int32
 
 const (
@@ -174,11 +223,11 @@ func (x ActionStatus) String() string {
 }
 
 func (ActionStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_gameagent_proto_enumTypes[2].Descriptor()
+	return file_gameagent_proto_enumTypes[3].Descriptor()
 }
 
 func (ActionStatus) Type() protoreflect.EnumType {
-	return &file_gameagent_proto_enumTypes[2]
+	return &file_gameagent_proto_enumTypes[3]
 }
 
 func (x ActionStatus) Number() protoreflect.EnumNumber {
@@ -187,7 +236,7 @@ func (x ActionStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ActionStatus.Descriptor instead.
 func (ActionStatus) EnumDescriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{2}
+	return file_gameagent_proto_rawDescGZIP(), []int{3}
 }
 
 type AdapterHello struct {
@@ -331,6 +380,7 @@ type EntityRef struct {
 	EntityId      string                 `protobuf:"bytes,1,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"`
 	EntityType    string                 `protobuf:"bytes,2,opt,name=entity_type,json=entityType,proto3" json:"entity_type,omitempty"`
 	DisplayName   string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	DefinitionId  string                 `protobuf:"bytes,4,opt,name=definition_id,json=definitionId,proto3" json:"definition_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -382,6 +432,13 @@ func (x *EntityRef) GetEntityType() string {
 func (x *EntityRef) GetDisplayName() string {
 	if x != nil {
 		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *EntityRef) GetDefinitionId() string {
+	if x != nil {
+		return x.DefinitionId
 	}
 	return ""
 }
@@ -775,13 +832,14 @@ func (x *Observation) GetWorldId() string {
 }
 
 type Capability struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Version         string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	Description     string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	InputSchemaJson string                 `protobuf:"bytes,4,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
-	ExecutionMode   ExecutionMode          `protobuf:"varint,5,opt,name=execution_mode,json=executionMode,proto3,enum=gameagent.protocol.v1alpha2.ExecutionMode" json:"execution_mode,omitempty"`
-	Extensions      *structpb.Struct       `protobuf:"bytes,6,opt,name=extensions,proto3" json:"extensions,omitempty"`
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	Name            string                    `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version         string                    `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Description     string                    `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	InputSchemaJson string                    `protobuf:"bytes,4,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
+	ExecutionMode   ExecutionMode             `protobuf:"varint,5,opt,name=execution_mode,json=executionMode,proto3,enum=gameagent.protocol.v1alpha2.ExecutionMode" json:"execution_mode,omitempty"`
+	Extensions      *structpb.Struct          `protobuf:"bytes,6,opt,name=extensions,proto3" json:"extensions,omitempty"`
+	ConcurrencyMode CapabilityConcurrencyMode `protobuf:"varint,7,opt,name=concurrency_mode,json=concurrencyMode,proto3,enum=gameagent.protocol.v1alpha2.CapabilityConcurrencyMode" json:"concurrency_mode,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -856,6 +914,13 @@ func (x *Capability) GetExtensions() *structpb.Struct {
 		return x.Extensions
 	}
 	return nil
+}
+
+func (x *Capability) GetConcurrencyMode() CapabilityConcurrencyMode {
+	if x != nil {
+		return x.ConcurrencyMode
+	}
+	return CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED
 }
 
 type CapabilityRequest struct {
@@ -1727,12 +1792,13 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x10EnvironmentReady\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12-\n" +
-	"\x13server_time_unix_ms\x18\x02 \x01(\x03R\x10serverTimeUnixMs\"l\n" +
+	"\x13server_time_unix_ms\x18\x02 \x01(\x03R\x10serverTimeUnixMs\"\x91\x01\n" +
 	"\tEntityRef\x12\x1b\n" +
 	"\tentity_id\x18\x01 \x01(\tR\bentityId\x12\x1f\n" +
 	"\ventity_type\x18\x02 \x01(\tR\n" +
 	"entityType\x12!\n" +
-	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\"\xdf\x01\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12#\n" +
+	"\rdefinition_id\x18\x04 \x01(\tR\fdefinitionId\"\xdf\x01\n" +
 	"\bGameTime\x12\x17\n" +
 	"\x04year\x18\x01 \x01(\x05H\x00R\x04year\x88\x01\x01\x12\x1b\n" +
 	"\x06season\x18\x02 \x01(\x05H\x01R\x06season\x88\x01\x01\x12\x15\n" +
@@ -1772,7 +1838,7 @@ const file_gameagent_proto_rawDesc = "" +
 	"\n" +
 	"extensions\x18\x06 \x01(\v2\x17.google.protobuf.StructR\n" +
 	"extensions\x12\x19\n" +
-	"\bworld_id\x18\a \x01(\tR\aworldId\"\x94\x02\n" +
+	"\bworld_id\x18\a \x01(\tR\aworldId\"\xf7\x02\n" +
 	"\n" +
 	"Capability\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
@@ -1782,7 +1848,8 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x0eexecution_mode\x18\x05 \x01(\x0e2*.gameagent.protocol.v1alpha2.ExecutionModeR\rexecutionMode\x127\n" +
 	"\n" +
 	"extensions\x18\x06 \x01(\v2\x17.google.protobuf.StructR\n" +
-	"extensions\"C\n" +
+	"extensions\x12a\n" +
+	"\x10concurrency_mode\x18\a \x01(\x0e26.gameagent.protocol.v1alpha2.CapabilityConcurrencyModeR\x0fconcurrencyMode\"C\n" +
 	"\x11CapabilityRequest\x12 \n" +
 	"\tentity_id\x18\x01 \x01(\tH\x00R\bentityId\x88\x01\x01B\f\n" +
 	"\n" +
@@ -1858,7 +1925,11 @@ const file_gameagent_proto_rawDesc = "" +
 	"\rExecutionMode\x12\x1e\n" +
 	"\x1aEXECUTION_MODE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13EXECUTION_MODE_SYNC\x10\x01\x12\x18\n" +
-	"\x14EXECUTION_MODE_ASYNC\x10\x02*\x8e\x02\n" +
+	"\x14EXECUTION_MODE_ASYNC\x10\x02*\xa3\x01\n" +
+	"\x19CapabilityConcurrencyMode\x12+\n" +
+	"'CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED\x10\x00\x12*\n" +
+	"&CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL\x10\x01\x12-\n" +
+	")CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE\x10\x02*\x8e\x02\n" +
 	"\fActionStatus\x12\x1d\n" +
 	"\x19ACTION_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15ACTION_STATUS_PENDING\x10\x01\x12\x1a\n" +
@@ -1884,76 +1955,78 @@ func file_gameagent_proto_rawDescGZIP() []byte {
 	return file_gameagent_proto_rawDescData
 }
 
-var file_gameagent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_gameagent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_gameagent_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_gameagent_proto_goTypes = []any{
-	(EventAckStatus)(0),         // 0: gameagent.protocol.v1alpha2.EventAckStatus
-	(ExecutionMode)(0),          // 1: gameagent.protocol.v1alpha2.ExecutionMode
-	(ActionStatus)(0),           // 2: gameagent.protocol.v1alpha2.ActionStatus
-	(*AdapterHello)(nil),        // 3: gameagent.protocol.v1alpha2.AdapterHello
-	(*EnvironmentReady)(nil),    // 4: gameagent.protocol.v1alpha2.EnvironmentReady
-	(*EntityRef)(nil),           // 5: gameagent.protocol.v1alpha2.EntityRef
-	(*GameTime)(nil),            // 6: gameagent.protocol.v1alpha2.GameTime
-	(*GameEvent)(nil),           // 7: gameagent.protocol.v1alpha2.GameEvent
-	(*EventAck)(nil),            // 8: gameagent.protocol.v1alpha2.EventAck
-	(*ObserveRequest)(nil),      // 9: gameagent.protocol.v1alpha2.ObserveRequest
-	(*Observation)(nil),         // 10: gameagent.protocol.v1alpha2.Observation
-	(*Capability)(nil),          // 11: gameagent.protocol.v1alpha2.Capability
-	(*CapabilityRequest)(nil),   // 12: gameagent.protocol.v1alpha2.CapabilityRequest
-	(*CapabilityList)(nil),      // 13: gameagent.protocol.v1alpha2.CapabilityList
-	(*ActionRequest)(nil),       // 14: gameagent.protocol.v1alpha2.ActionRequest
-	(*ActionStatusUpdate)(nil),  // 15: gameagent.protocol.v1alpha2.ActionStatusUpdate
-	(*ActionResult)(nil),        // 16: gameagent.protocol.v1alpha2.ActionResult
-	(*CancelActionRequest)(nil), // 17: gameagent.protocol.v1alpha2.CancelActionRequest
-	(*Error)(nil),               // 18: gameagent.protocol.v1alpha2.Error
-	(*Heartbeat)(nil),           // 19: gameagent.protocol.v1alpha2.Heartbeat
-	(*AdapterMessage)(nil),      // 20: gameagent.protocol.v1alpha2.AdapterMessage
-	(*RuntimeMessage)(nil),      // 21: gameagent.protocol.v1alpha2.RuntimeMessage
-	(*structpb.Struct)(nil),     // 22: google.protobuf.Struct
+	(EventAckStatus)(0),            // 0: gameagent.protocol.v1alpha2.EventAckStatus
+	(ExecutionMode)(0),             // 1: gameagent.protocol.v1alpha2.ExecutionMode
+	(CapabilityConcurrencyMode)(0), // 2: gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
+	(ActionStatus)(0),              // 3: gameagent.protocol.v1alpha2.ActionStatus
+	(*AdapterHello)(nil),           // 4: gameagent.protocol.v1alpha2.AdapterHello
+	(*EnvironmentReady)(nil),       // 5: gameagent.protocol.v1alpha2.EnvironmentReady
+	(*EntityRef)(nil),              // 6: gameagent.protocol.v1alpha2.EntityRef
+	(*GameTime)(nil),               // 7: gameagent.protocol.v1alpha2.GameTime
+	(*GameEvent)(nil),              // 8: gameagent.protocol.v1alpha2.GameEvent
+	(*EventAck)(nil),               // 9: gameagent.protocol.v1alpha2.EventAck
+	(*ObserveRequest)(nil),         // 10: gameagent.protocol.v1alpha2.ObserveRequest
+	(*Observation)(nil),            // 11: gameagent.protocol.v1alpha2.Observation
+	(*Capability)(nil),             // 12: gameagent.protocol.v1alpha2.Capability
+	(*CapabilityRequest)(nil),      // 13: gameagent.protocol.v1alpha2.CapabilityRequest
+	(*CapabilityList)(nil),         // 14: gameagent.protocol.v1alpha2.CapabilityList
+	(*ActionRequest)(nil),          // 15: gameagent.protocol.v1alpha2.ActionRequest
+	(*ActionStatusUpdate)(nil),     // 16: gameagent.protocol.v1alpha2.ActionStatusUpdate
+	(*ActionResult)(nil),           // 17: gameagent.protocol.v1alpha2.ActionResult
+	(*CancelActionRequest)(nil),    // 18: gameagent.protocol.v1alpha2.CancelActionRequest
+	(*Error)(nil),                  // 19: gameagent.protocol.v1alpha2.Error
+	(*Heartbeat)(nil),              // 20: gameagent.protocol.v1alpha2.Heartbeat
+	(*AdapterMessage)(nil),         // 21: gameagent.protocol.v1alpha2.AdapterMessage
+	(*RuntimeMessage)(nil),         // 22: gameagent.protocol.v1alpha2.RuntimeMessage
+	(*structpb.Struct)(nil),        // 23: google.protobuf.Struct
 }
 var file_gameagent_proto_depIdxs = []int32{
-	5,  // 0: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	6,  // 1: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	22, // 2: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
+	6,  // 0: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	7,  // 1: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	23, // 2: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
 	0,  // 3: gameagent.protocol.v1alpha2.EventAck.status:type_name -> gameagent.protocol.v1alpha2.EventAckStatus
-	18, // 4: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
-	6,  // 5: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	22, // 6: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
-	5,  // 7: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	22, // 8: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
+	19, // 4: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
+	7,  // 5: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	23, // 6: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
+	6,  // 7: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	23, // 8: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
 	1,  // 9: gameagent.protocol.v1alpha2.Capability.execution_mode:type_name -> gameagent.protocol.v1alpha2.ExecutionMode
-	22, // 10: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
-	11, // 11: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
-	22, // 12: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
-	22, // 13: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
-	2,  // 14: gameagent.protocol.v1alpha2.ActionStatusUpdate.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	22, // 15: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
-	2,  // 16: gameagent.protocol.v1alpha2.ActionResult.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	22, // 17: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
-	18, // 18: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
-	22, // 19: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
-	3,  // 20: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
-	7,  // 21: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
-	10, // 22: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
-	13, // 23: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
-	15, // 24: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
-	16, // 25: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
-	19, // 26: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
-	18, // 27: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	4,  // 28: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
-	9,  // 29: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
-	12, // 30: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
-	14, // 31: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
-	17, // 32: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
-	8,  // 33: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
-	18, // 34: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	20, // 35: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
-	21, // 36: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
-	36, // [36:37] is the sub-list for method output_type
-	35, // [35:36] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	23, // 10: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
+	2,  // 11: gameagent.protocol.v1alpha2.Capability.concurrency_mode:type_name -> gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
+	12, // 12: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
+	23, // 13: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
+	23, // 14: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
+	3,  // 15: gameagent.protocol.v1alpha2.ActionStatusUpdate.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
+	23, // 16: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
+	3,  // 17: gameagent.protocol.v1alpha2.ActionResult.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
+	23, // 18: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
+	19, // 19: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
+	23, // 20: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
+	4,  // 21: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
+	8,  // 22: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
+	11, // 23: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
+	14, // 24: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
+	16, // 25: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
+	17, // 26: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
+	20, // 27: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
+	19, // 28: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	5,  // 29: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
+	10, // 30: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
+	13, // 31: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
+	15, // 32: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
+	18, // 33: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
+	9,  // 34: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
+	19, // 35: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	21, // 36: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
+	22, // 37: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
+	37, // [37:38] is the sub-list for method output_type
+	36, // [36:37] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_gameagent_proto_init() }
@@ -1988,7 +2061,7 @@ func file_gameagent_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gameagent_proto_rawDesc), len(file_gameagent_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,

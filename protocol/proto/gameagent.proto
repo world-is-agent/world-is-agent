@@ -29,6 +29,7 @@ message EntityRef {
   string entity_id = 1;
   string entity_type = 2;
   string display_name = 3;
+  string definition_id = 4;
 }
 
 message GameTime {
@@ -85,6 +86,12 @@ enum ExecutionMode {
   EXECUTION_MODE_ASYNC = 2;
 }
 
+enum CapabilityConcurrencyMode {
+  CAPABILITY_CONCURRENCY_MODE_UNSPECIFIED = 0;
+  CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL = 1;
+  CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE = 2;
+}
+
 message Capability {
   string name = 1;
   string version = 2;
@@ -92,6 +99,7 @@ message Capability {
   string input_schema_json = 4;
   ExecutionMode execution_mode = 5;
   google.protobuf.Struct extensions = 6;
+  CapabilityConcurrencyMode concurrency_mode = 7;
 }
 
 message CapabilityRequest {

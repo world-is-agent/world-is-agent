@@ -78,7 +78,6 @@ public static partial class ProtocolMapper
                 {
                     ["agent_id"] = Value.ForString(probe.AgentId),
                     ["agent_name"] = Value.ForString(probe.AgentName),
-                    ["definition_id"] = Value.ForString(entityId),
                     ["agent_location"] = Value.ForString(probe.AgentLocation),
                     ["agent_tile_x"] = Value.ForNumber(probe.AgentTileX),
                     ["agent_tile_y"] = Value.ForNumber(probe.AgentTileY),
@@ -217,6 +216,7 @@ public static partial class ProtocolMapper
             EntityId = entityId,
             EntityType = entityType,
             DisplayName = displayName,
+            DefinitionId = entityId,
         };
     }
 }

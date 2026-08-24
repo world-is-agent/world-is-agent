@@ -10,7 +10,52 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestBuilderExtractsAgentDescriptorDefinitionIDFromObservationState(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		Event:      &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
+		Observation: &protocolv1alpha2.Observation{
+			WorldId:  "world-a",
+			EntityId: "creature:alpha",
+			State: mustStruct(t, map[string]any{
+				"definition_id": "villager/farmer",
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if agentCtx.AgentDescriptor.EntityID != "creature:alpha" {
+		t.Fatalf("AgentDescriptor.EntityID = %q, want creature:alpha", agentCtx.AgentDescriptor.EntityID)
+	}
+	if agentCtx.AgentDescriptor.DefinitionID != "villager/farmer" {
+		t.Fatalf("AgentDescriptor.DefinitionID = %q, want villager/farmer", agentCtx.AgentDescriptor.DefinitionID)
+	}
+}
+
+func TestBuilderDoesNotDefaultDefinitionIDToEntityID(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:  session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		Event:       &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "creature:alpha"},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	if agentCtx.AgentDescriptor.DefinitionID != "" {
+		t.Fatalf("AgentDescriptor.DefinitionID = %q, want empty", agentCtx.AgentDescriptor.DefinitionID)
+	}
+}
 
 func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *testing.T) {
 	builder := agentcontext.NewBuilder()
@@ -38,6 +83,9 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 		Observation: &protocolv1alpha2.Observation{
 			WorldId:  "world-a",
 			EntityId: "npc:Abigail",
+			State: mustStruct(t, map[string]any{
+				"definition_id": "npc:Abigail",
+			}),
 		},
 		RecentMemories: []memory.Record{{
 			MemoryID:      "mem-1",
@@ -78,6 +126,9 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 		"today 06:20",
 		`said "hello from last turn"`,
 		"hello from last turn",
+		"[Agent Descriptor]",
+		"entity_id: npc:Abigail",
+		"definition_id: npc:Abigail",
 		"[Current Event]",
 		"[Current Observation]",
 		"[Instruction]",
@@ -246,4 +297,14 @@ func TestBuilderRejectsMissingCurrentObservation(t *testing.T) {
 
 func ptrInt32(value int32) *int32 {
 	return &value
+}
+
+func mustStruct(t *testing.T, fields map[string]any) *structpb.Struct {
+	t.Helper()
+
+	value, err := structpb.NewStruct(fields)
+	if err != nil {
+		t.Fatalf("NewStruct returned error: %v", err)
+	}
+	return value
 }

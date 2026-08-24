@@ -3,6 +3,7 @@ package context
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/memory"
@@ -12,8 +13,15 @@ import (
 
 var ErrInvalidInput = errors.New("invalid agent context input")
 
+type AgentDescriptor struct {
+	EntityID     string
+	DefinitionID string
+}
+
 type AgentContext struct {
 	SessionKey session.AgentSessionKey
+
+	AgentDescriptor AgentDescriptor
 
 	RuntimePolicy string
 
@@ -60,11 +68,26 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 	}
 
 	return AgentContext{
-		SessionKey:     input.SessionKey,
+		SessionKey: input.SessionKey,
+		AgentDescriptor: AgentDescriptor{
+			EntityID:     input.SessionKey.EntityID,
+			DefinitionID: definitionIDFromObservation(input.Observation),
+		},
 		RuntimePolicy:  input.RuntimePolicy,
 		RecentMemories: append([]memory.Record(nil), input.RecentMemories...),
 		Event:          input.Event,
 		Observation:    input.Observation,
 		Tools:          append([]model.ToolDefinition(nil), input.Tools...),
 	}, nil
+}
+
+func definitionIDFromObservation(observation *protocolv1alpha2.Observation) string {
+	if observation == nil || observation.State == nil {
+		return ""
+	}
+	value, ok := observation.State.Fields["definition_id"]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value.GetStringValue())
 }

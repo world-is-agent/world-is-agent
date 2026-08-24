@@ -529,6 +529,83 @@ func TestConnectRoutesDifferentNPCsToIndependentLanes(t *testing.T) {
 	}
 }
 
+func TestConnectAcceptsNonStardewTriggerWithRoutedEntity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	loop := agent.NewLoop(fake.NewProvider(), registry, trace.NoopRecorder{}, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, registry, "session:test-survival")
+
+	if err := stream.Send(gameEventMessageForEntity(1, "damage_received", "creature:alpha", "creature", "Alpha")); err != nil {
+		t.Fatalf("send non-stardew event: %v", err)
+	}
+	ack := recvRuntimeMessage(t, stream).GetEventAck()
+	if ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("non-stardew ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	observe := observeMessage.GetObserve()
+	if observe == nil || observe.EntityId != "creature:alpha" || observe.WorldId != "world:test" {
+		t.Fatalf("observe = %+v, want world:test creature:alpha", observe)
+	}
+
+	if err := stream.Send(observationMessageForEntity(observeMessage.MessageId, "creature:alpha", "creature", "Alpha")); err != nil {
+		t.Fatalf("send non-stardew observation: %v", err)
+	}
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil || action.EntityId != "creature:alpha" || action.WorldId != "world:test" {
+		t.Fatalf("action = %+v, want world:test creature:alpha", action)
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestResolveAgentSessionKeyRejectsMissingEventType(t *testing.T) {
+	event := gameEventMessageForEntity(1, "   ", "creature:alpha", "creature", "Alpha").GetEvent()
+
+	_, ackErr := resolveAgentSessionKey(agent.ConnectionContext{GameID: "fake-game"}, event)
+	if ackErr == nil {
+		t.Fatal("resolveAgentSessionKey returned nil error, want event_type_missing")
+	}
+	if ackErr.Code != "event_type_missing" {
+		t.Fatalf("error code = %q, want event_type_missing", ackErr.Code)
+	}
+}
+
 func TestConnectSerializesEventsForSameNPC(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1364,12 +1441,16 @@ func npcInteractionEventMessageWithIDs(index int) *protocolv1alpha2.AdapterMessa
 }
 
 func npcInteractionEventMessageForNPC(index int, entityID string, displayName string) *protocolv1alpha2.AdapterMessage {
+	return gameEventMessageForEntity(index, "player_interacted_with_npc", entityID, "npc", displayName)
+}
+
+func gameEventMessageForEntity(index int, eventType string, entityID string, entityType string, displayName string) *protocolv1alpha2.AdapterMessage {
 	return &protocolv1alpha2.AdapterMessage{
 		MessageId: "event_msg_" + strconv.Itoa(index),
 		Payload: &protocolv1alpha2.AdapterMessage_Event{
 			Event: &protocolv1alpha2.GameEvent{
 				EventId:        "event_" + strconv.Itoa(index),
-				EventType:      "player_interacted_with_npc",
+				EventType:      eventType,
 				WorldId:        "world:test",
 				TargetEntityId: entityID,
 				Entities: []*protocolv1alpha2.EntityRef{
@@ -1380,7 +1461,7 @@ func npcInteractionEventMessageForNPC(index int, entityID string, displayName st
 					},
 					{
 						EntityId:    entityID,
-						EntityType:  "npc",
+						EntityType:  entityType,
 						DisplayName: displayName,
 					},
 				},
@@ -1395,10 +1476,15 @@ func observationMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
 }
 
 func observationMessageForNPC(correlationID string, entityID string, displayName string) *protocolv1alpha2.AdapterMessage {
+	return observationMessageForEntity(correlationID, entityID, "npc", displayName)
+}
+
+func observationMessageForEntity(correlationID string, entityID string, entityType string, displayName string) *protocolv1alpha2.AdapterMessage {
 	state, err := structpb.NewStruct(map[string]any{
-		"npc_name": displayName,
-		"location": "Mountain",
-		"weather":  "sunny",
+		"entity_type": entityType,
+		"name":        displayName,
+		"location":    "Mountain",
+		"weather":     "sunny",
 	})
 	if err != nil {
 		panic(err)

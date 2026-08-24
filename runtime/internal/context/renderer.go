@@ -54,6 +54,9 @@ func (r Renderer) renderUserMessage(agentContext AgentContext) string {
 	return fmt.Sprintf(`[Recent Memory]
 %s
 
+[Agent Descriptor]
+%s
+
 [Current Event]
 %s
 
@@ -69,9 +72,18 @@ If Recent Memory is from today and current game time has not clearly advanced mu
 Return a tool call only.
 `,
 		r.renderMemories(agentContext.RecentMemories, currentGameTime(agentContext)),
+		renderAgentDescriptor(agentContext.AgentDescriptor),
 		protoToJSON(agentContext.Event),
 		protoToJSON(agentContext.Observation),
 	)
+}
+
+func renderAgentDescriptor(descriptor AgentDescriptor) string {
+	definitionID := strings.TrimSpace(descriptor.DefinitionID)
+	if definitionID == "" {
+		definitionID = "(unspecified)"
+	}
+	return fmt.Sprintf("entity_id: %s\ndefinition_id: %s", descriptor.EntityID, definitionID)
 }
 
 // renderMemories 渲染 Recent Memory section。

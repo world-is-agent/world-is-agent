@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
@@ -13,8 +14,6 @@ import (
 	"gameagent/runtime/internal/session"
 	"gameagent/runtime/internal/tool"
 )
-
-const playerInteractedWithNPCEvent = "player_interacted_with_npc"
 
 // Server 实现 Runtime 侧的 GameAgentGateway gRPC 服务。
 type Server struct {
@@ -189,7 +188,7 @@ func (s *Server) dispatchGameEvent(
 		))
 	}
 
-	// Step 2：pre-turn 校验 + 身份解析（event_type / target_entity_id /
+	// Step 2：pre-turn 校验 + 身份解析（event_type 非空 / target_entity_id /
 	// 目标在 entities 内 / Resolve 三要素），任一失败都 REJECTED，
 	// 不创建 lane、不创建 turn trace。
 	key, ackErr := resolveAgentSessionKey(conn, event)
@@ -281,19 +280,21 @@ func (s *Server) dispatchGameEvent(
 // Step 2 调用。失败返回 REJECTED 用的 *protocolv1alpha2.Error（pre-turn rejected，
 // 不创建 lane、不创建 turn trace）。
 //
-//	校验 1  event_type 准入：不属于本阶段支持的 trigger → 拒绝
+//	校验 1  event_type 必须非空，但不做 game-specific allowlist
 //	校验 2  target_entity_id 必须显式声明，不能靠列表顺序/类型猜
 //	校验 3  目标必须真实存在于 event.Entities，防 Adapter 声明矛盾
 //	校验 4  Resolve 三要素（game/world/entity）缺一 → 拒绝
 func resolveAgentSessionKey(conn agent.ConnectionContext, event *protocolv1alpha2.GameEvent) (session.AgentSessionKey, *protocolv1alpha2.Error) {
-	// 校验 1：Trigger Admission 必须在身份解析之前，
-	// 不支持的 event_type 不浪费后续解析（对应 Architecture §14）。
-	if event.EventType != playerInteractedWithNPCEvent {
+	if strings.TrimSpace(event.EventType) == "" {
 		return session.AgentSessionKey{}, &protocolv1alpha2.Error{
-			Code:    "unsupported_event_type",
-			Message: fmt.Sprintf("unsupported event_type %q", event.EventType),
+			Code:    "event_type_missing",
+			Message: "GameEvent.event_type is required",
 		}
 	}
+
+	// Gateway core 不解释具体 event_type；只要 GameEvent 是显式 routed
+	// trigger，且满足 target/world/entity identity contract，就可以进入
+	// AgentTurn。具体 trigger 语义由 Adapter / game-specific policy 解释。
 	// 校验 2：typed target_entity_id 是路由依据，为空无法确定事件归属。
 	if event.TargetEntityId == "" {
 		return session.AgentSessionKey{}, &protocolv1alpha2.Error{

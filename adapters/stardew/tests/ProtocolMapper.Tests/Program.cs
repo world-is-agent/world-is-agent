@@ -62,6 +62,7 @@ ProbeObservation probe = new(
 Observation observation = ProtocolMapper.BuildObservation("npc:Abigail", probe, "Farm_123456", gameTime);
 Assert(observation.EntityId == "npc:Abigail", "observation should carry entity_id");
 Assert(observation.WorldId == "Farm_123456", "observation should carry world_id");
+Assert(observation.State.Fields["definition_id"].StringValue == "npc:Abigail", "stardew observation should publish definition_id");
 Assert(observation.NearbyEntities.Any(entity => entity.EntityId == "player:local" && entity.EntityType == "player"), "observation should include local player nearby entity");
 
 ActionRequest actionRequest = new()

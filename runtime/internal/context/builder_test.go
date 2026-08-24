@@ -600,6 +600,40 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 	}
 }
 
+func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 1024,
+	})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-2",
+			EventType: "player_interacted_with_npc",
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{{
+			Outcomes: []memory.TurnOutcome{
+				{ToolName: "speak", ToolArguments: map[string]any{"text": "hello"}},
+				{ToolName: "emote", ToolArguments: map[string]any{"emote": "happy"}},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	assertContainsAll(t, content, `said "hello"`, `used emote "happy"`)
+}
+
 func TestRendererMarksPreviousDayMemory(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{

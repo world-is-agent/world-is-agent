@@ -136,12 +136,19 @@ func buildMessages(req model.Request) []map[string]string {
 
 	for _, message := range req.Messages {
 		messages = append(messages, map[string]string{
-			"role":    string(message.Role),
+			"role":    providerMessageRole(message.Role),
 			"content": message.Content,
 		})
 	}
 
 	return messages
+}
+
+func providerMessageRole(role model.Role) string {
+	if role == model.RoleTool {
+		return string(model.RoleUser)
+	}
+	return string(role)
 }
 
 func parseResponse(data []byte) (model.Response, error) {

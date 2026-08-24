@@ -21,6 +21,12 @@ type ProjectInput struct {
 	Event        *protocolv1alpha2.GameEvent
 	ToolCall     model.ToolCall
 	ActionResult *protocolv1alpha2.ActionResult
+	Outcomes     []ProjectOutcome
+}
+
+type ProjectOutcome struct {
+	ToolCall     model.ToolCall
+	ActionResult *protocolv1alpha2.ActionResult
 }
 
 type Projector struct {
@@ -45,14 +51,13 @@ func (p Projector) Project(input ProjectInput) (Record, error) {
 	if input.Event == nil {
 		return Record{}, fmt.Errorf("%w: event is required", ErrProject)
 	}
-	if input.ActionResult == nil {
-		return Record{}, fmt.Errorf("%w: action_result is required", ErrProject)
-	}
-	if strings.TrimSpace(input.ToolCall.Name) == "" {
-		return Record{}, fmt.Errorf("%w: tool name is required", ErrProject)
-	}
 	if input.SessionKey.GameID == "" || input.SessionKey.WorldID == "" || input.SessionKey.EntityID == "" {
 		return Record{}, fmt.Errorf("%w: session key is required", ErrProject)
+	}
+
+	outcomes, err := projectOutcomes(input)
+	if err != nil {
+		return Record{}, err
 	}
 
 	return Record{
@@ -63,13 +68,36 @@ func (p Projector) Project(input ProjectInput) (Record, error) {
 		SourceEventSequence: input.Event.GetSequence(),
 		EventType:           input.Event.GetEventType(),
 		GameTime:            gameTimeSnapshot(input.Event.GetGameTime()),
-		Outcome: TurnOutcome{
-			ToolName:      input.ToolCall.Name,
-			ToolArguments: toolArguments(input.ToolCall),
-			ActionStatus:  input.ActionResult.GetStatus().String(),
-		},
-		CreatedAt: p.now(),
+		Outcome:             outcomes[0],
+		Outcomes:            outcomes,
+		CreatedAt:           p.now(),
 	}, nil
+}
+
+func projectOutcomes(input ProjectInput) ([]TurnOutcome, error) {
+	items := input.Outcomes
+	if len(items) == 0 {
+		items = []ProjectOutcome{{
+			ToolCall:     input.ToolCall,
+			ActionResult: input.ActionResult,
+		}}
+	}
+
+	outcomes := make([]TurnOutcome, 0, len(items))
+	for _, item := range items {
+		if item.ActionResult == nil {
+			return nil, fmt.Errorf("%w: action_result is required", ErrProject)
+		}
+		if strings.TrimSpace(item.ToolCall.Name) == "" {
+			return nil, fmt.Errorf("%w: tool name is required", ErrProject)
+		}
+		outcomes = append(outcomes, TurnOutcome{
+			ToolName:      item.ToolCall.Name,
+			ToolArguments: toolArguments(item.ToolCall),
+			ActionStatus:  item.ActionResult.GetStatus().String(),
+		})
+	}
+	return outcomes, nil
 }
 
 func gameTimeSnapshot(gameTime *protocolv1alpha2.GameTime) *GameTimeSnapshot {

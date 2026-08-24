@@ -365,7 +365,16 @@ func trimMemories(records []memory.Record, limit int, currentTime *memory.GameTi
 // renderMemory 将单条 MemoryRecord 投影为模型可读的短摘要。
 // 存储字段用于 Runtime 追踪；模型只需要“何时 + 可见动作”的连续性信号。
 func renderMemory(record memory.Record, currentTime *memory.GameTimeSnapshot) string {
-	return fmt.Sprintf("- %s: %s", gameTimeRelation(record.GameTime, currentTime), visibleActionSummary(record.Outcome))
+	outcomes := record.Outcomes
+	if len(outcomes) == 0 {
+		outcomes = []memory.TurnOutcome{record.Outcome}
+	}
+
+	summaries := make([]string, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		summaries = append(summaries, visibleActionSummary(outcome))
+	}
+	return fmt.Sprintf("- %s: %s", gameTimeRelation(record.GameTime, currentTime), strings.Join(summaries, "; "))
 }
 
 func visibleActionSummary(outcome memory.TurnOutcome) string {

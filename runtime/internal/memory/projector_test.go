@@ -110,6 +110,52 @@ func TestProjectorCopiesToolCallArgumentMap(t *testing.T) {
 	}
 }
 
+func TestProjectorBuildsRecordWithMultipleOutcomes(t *testing.T) {
+	now := time.Unix(300, 0)
+	projector := memory.NewProjector(func() time.Time { return now })
+	key := session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"}
+
+	record, err := projector.Project(memory.ProjectInput{
+		SessionKey: key,
+		TurnID:     "turn-1",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-1",
+			EventType: "player_interacted_with_npc",
+			Sequence:  7,
+		},
+		Outcomes: []memory.ProjectOutcome{
+			{
+				ToolCall: model.ToolCall{Name: "speak", Arguments: map[string]any{"text": "hello"}},
+				ActionResult: &protocolv1alpha2.ActionResult{
+					Status: protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+				},
+			},
+			{
+				ToolCall: model.ToolCall{Name: "emote", Arguments: map[string]any{"emote": "happy"}},
+				ActionResult: &protocolv1alpha2.ActionResult{
+					Status: protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Project returned error: %v", err)
+	}
+
+	if record.SessionKey != key {
+		t.Fatalf("SessionKey = %+v, want %+v", record.SessionKey, key)
+	}
+	if got := len(record.Outcomes); got != 2 {
+		t.Fatalf("outcome count = %d, want 2", got)
+	}
+	if record.Outcomes[0].ToolName != "speak" || record.Outcomes[1].ToolName != "emote" {
+		t.Fatalf("outcome order = %+v, want speak then emote", record.Outcomes)
+	}
+	if record.Outcome.ToolName != "speak" {
+		t.Fatalf("legacy Outcome = %+v, want first outcome", record.Outcome)
+	}
+}
+
 func TestProjectorRejectsMissingTurnID(t *testing.T) {
 	projector := memory.NewProjector(func() time.Time { return time.Unix(200, 0) })
 

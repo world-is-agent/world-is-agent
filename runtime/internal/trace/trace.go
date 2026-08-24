@@ -9,6 +9,9 @@ type EventName string
 
 const (
 	EventTurnStarted           EventName = "turn_started"
+	EventAgentStepStarted      EventName = "agent_step_started"
+	EventAgentStepCompleted    EventName = "agent_step_completed"
+	EventAgentStepFailed       EventName = "agent_step_failed"
 	EventObservationRequested  EventName = "observation_requested"
 	EventObservationReceived   EventName = "observation_received"
 	EventContextLoaded         EventName = "context_loaded"
@@ -16,10 +19,14 @@ const (
 	EventModelRequestStarted   EventName = "model_request_started"
 	EventModelResponseReceived EventName = "model_response_received"
 	EventToolCallSelected      EventName = "tool_call_selected"
+	EventToolBatchStarted      EventName = "tool_batch_started"
+	EventToolBatchCompleted    EventName = "tool_batch_completed"
+	EventToolBatchFailed       EventName = "tool_batch_failed"
 	EventActionSubmitStarted   EventName = "action_submit_started"
 	EventActionResultReceived  EventName = "action_result_received"
 	EventContextUpdated        EventName = "context_updated"
 	EventContextUpdateFailed   EventName = "context_update_failed"
+	EventTurnSettled           EventName = "turn_settled"
 	EventTurnCompleted         EventName = "turn_completed"
 	EventTurnFailed            EventName = "turn_failed"
 )

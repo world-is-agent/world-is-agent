@@ -43,12 +43,44 @@ func (p *recordingGatewayProvider) Generate(ctx context.Context, req model.Reque
 				Name:      "speak",
 				Arguments: map[string]any{"text": "gateway memory line"},
 			}},
-			Control: model.ControlDirective{Kind: model.ControlContinue},
+			Control: model.ControlDirective{Kind: model.ControlSettle},
 		},
 	}, nil
 }
 
 func (p *recordingGatewayProvider) Requests() []model.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make([]model.Request, len(p.requests))
+	copy(out, p.requests)
+	return out
+}
+
+type scriptedGatewayProvider struct {
+	mu        sync.Mutex
+	requests  []model.Request
+	responses []model.Response
+}
+
+func (p *scriptedGatewayProvider) Generate(ctx context.Context, req model.Request) (model.Response, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.requests = append(p.requests, req)
+	if len(p.responses) == 0 {
+		return model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle},
+			},
+		}, nil
+	}
+	resp := p.responses[0]
+	p.responses = p.responses[1:]
+	return resp, nil
+}
+
+func (p *scriptedGatewayProvider) Requests() []model.Request {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -83,6 +115,15 @@ func (r *recordingGatewayTraceRecorder) Count(eventName trace.EventName) int {
 		}
 	}
 	return count
+}
+
+func (r *recordingGatewayTraceRecorder) Events() []trace.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	out := make([]trace.Event, len(r.events))
+	copy(out, r.events)
+	return out
 }
 
 func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
@@ -357,6 +398,299 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	_, err = stream.Recv()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("final recv error = %v, want EOF", err)
+	}
+}
+
+func TestConnectRunsSingleStepBatchWithTwoActionsAndSettle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{{
+		Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{
+				{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "hello"}},
+				{ID: "call_2", Name: "emote", Arguments: map[string]any{"emote": "happy"}},
+			},
+			Control: model.ControlDirective{Kind: model.ControlSettle},
+		},
+	}}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-batch", capabilityListWithEmoteMessage)
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+
+	first := recvRuntimeMessage(t, stream).GetAction()
+	if first == nil || first.Capability != "speak" {
+		t.Fatalf("first action = %+v, want speak", first)
+	}
+	if err := stream.Send(actionResultMessage(first.ActionId)); err != nil {
+		t.Fatalf("send first action result: %v", err)
+	}
+	second := recvRuntimeMessage(t, stream).GetAction()
+	if second == nil || second.Capability != "emote" {
+		t.Fatalf("second action = %+v, want emote", second)
+	}
+	if err := stream.Send(actionResultMessage(second.ActionId)); err != nil {
+		t.Fatalf("send second action result: %v", err)
+	}
+
+	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
+	if got := len(provider.Requests()); got != 1 {
+		t.Fatalf("provider request count = %d, want 1", got)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectRunsParallelSafeBatchAndOrdersTranscriptByToolCallOrder(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{
+				{ID: "call_a", Name: "sense", Arguments: map[string]any{"label": "first"}},
+				{ID: "call_b", Name: "sense", Arguments: map[string]any{"label": "second"}},
+			},
+			Control: model.ControlDirective{Kind: model.ControlContinue},
+		}},
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
+	}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-parallel", capabilityListWithParallelSenseMessage)
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+
+	firstAction := recvRuntimeMessage(t, stream).GetAction()
+	secondAction := recvRuntimeMessage(t, stream).GetAction()
+	if firstAction == nil || secondAction == nil {
+		t.Fatalf("actions = %+v, %+v; want two parallel actions", firstAction, secondAction)
+	}
+	if err := stream.Send(actionResultMessage(secondAction.ActionId)); err != nil {
+		t.Fatalf("send second action result first: %v", err)
+	}
+	if err := stream.Send(actionResultMessage(firstAction.ActionId)); err != nil {
+		t.Fatalf("send first action result second: %v", err)
+	}
+
+	waitForGatewayProviderRequestCount(t, provider, 2)
+	requests := provider.Requests()
+	resultTranscript := requests[1].Messages[2].Content
+	if strings.Index(resultTranscript, "call_a") > strings.Index(resultTranscript, "call_b") {
+		t.Fatalf("tool result transcript not ordered by ToolCall order:\n%s", resultTranscript)
+	}
+	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectRunsMultiStepForNonStardewTriggerWithDefinitionID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "growl"}}},
+			Control:   model.ControlDirective{Kind: model.ControlContinue},
+		}},
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
+	}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, registry, "session:test-survival")
+
+	if err := stream.Send(gameEventMessageForEntityDefinition(1, "damage_received", "creature:alpha", "creature/generic", "creature", "Alpha")); err != nil {
+		t.Fatalf("send non-stardew event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessageForEntity(observeMessage.MessageId, "creature:alpha", "creature", "Alpha")); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil || action.EntityId != "creature:alpha" {
+		t.Fatalf("action = %+v, want creature:alpha", action)
+	}
+	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
+		t.Fatalf("send action result: %v", err)
+	}
+
+	waitForGatewayProviderRequestCount(t, provider, 2)
+	secondPrompt := provider.Requests()[1].Messages[0].Content
+	if !strings.Contains(secondPrompt, "definition_id: creature/generic") {
+		t.Fatalf("prompt missing target definition_id:\n%s", secondPrompt)
+	}
+	if !strings.Contains(secondPrompt, "entity_id: creature:alpha") {
+		t.Fatalf("prompt missing target entity_id:\n%s", secondPrompt)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectRetriesAfterRejectedActionResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "blocked"}}},
+			Control:   model.ControlDirective{Kind: model.ControlSettle},
+		}},
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
+	}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, registry, "session:test-retry")
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil {
+		t.Fatal("expected action")
+	}
+	if err := stream.Send(actionResultStatusMessage(action.ActionId, protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED)); err != nil {
+		t.Fatalf("send rejected action result: %v", err)
+	}
+
+	waitForGatewayProviderRequestCount(t, provider, 2)
+	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectMaxStepsExceededProducesSingleTerminalTrace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "loop"}}},
+			Control:   model.ControlDirective{Kind: model.ControlContinue},
+		}},
+	}}
+	recorder := &recordingGatewayTraceRecorder{}
+	config := agent.DefaultConfig()
+	config.MaxSteps = 1
+	loop := agent.NewLoop(provider, registry, recorder, config)
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStream(t, ctx, client, registry, "session:test-max-steps")
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil {
+		t.Fatal("expected action")
+	}
+	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
+		t.Fatalf("send action result: %v", err)
+	}
+
+	waitForTraceEventCount(t, recorder, trace.EventTurnFailed, 1)
+	events := recorder.Events()
+	terminalCount := 0
+	var terminal trace.Event
+	for _, event := range events {
+		if event.Event == trace.EventTurnCompleted || event.Event == trace.EventTurnFailed {
+			terminalCount++
+			terminal = event
+		}
+	}
+	if terminalCount != 1 || terminal.Event != trace.EventTurnFailed || terminal.Reason != "max_steps_exceeded" {
+		t.Fatalf("terminal trace = %+v count=%d; want single max_steps_exceeded failure", terminal, terminalCount)
+	}
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
 	}
 }
 
@@ -1291,12 +1625,77 @@ func waitForTraceEventCount(t *testing.T, recorder *recordingGatewayTraceRecorde
 	}
 }
 
+func waitForGatewayProviderRequestCount(t *testing.T, provider *scriptedGatewayProvider, want int) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		if got := len(provider.Requests()); got >= want {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("provider request count = %d, want at least %d", len(provider.Requests()), want)
+		case <-tick.C:
+		}
+	}
+}
+
+func startGatewayServer(t *testing.T, grpcServer *grpc.Server, listener *bufconn.Listener) {
+	t.Helper()
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- grpcServer.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+		select {
+		case <-serverErrCh:
+		case <-time.After(time.Second):
+			t.Fatal("gRPC server did not stop")
+		}
+	})
+}
+
+func dialGateway(t *testing.T, ctx context.Context, listener *bufconn.Listener) *grpc.ClientConn {
+	t.Helper()
+
+	conn, err := grpc.DialContext(
+		ctx,
+		"bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+			return listener.Dial()
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("DialContext returned error: %v", err)
+	}
+	return conn
+}
+
 func connectReadyStream(
 	t *testing.T,
 	ctx context.Context,
 	client protocolv1alpha2.GameAgentGatewayClient,
 	registry *tool.Registry,
 	sessionID string,
+) protocolv1alpha2.GameAgentGateway_ConnectClient {
+	return connectReadyStreamWithCapabilities(t, ctx, client, registry, sessionID, capabilityListMessage)
+}
+
+func connectReadyStreamWithCapabilities(
+	t *testing.T,
+	ctx context.Context,
+	client protocolv1alpha2.GameAgentGatewayClient,
+	registry *tool.Registry,
+	sessionID string,
+	capabilityMessage func(string) *protocolv1alpha2.AdapterMessage,
 ) protocolv1alpha2.GameAgentGateway_ConnectClient {
 	t.Helper()
 
@@ -1309,10 +1708,12 @@ func connectReadyStream(
 	}
 	_ = recvRuntimeMessage(t, stream)
 	capabilityRequest := recvRuntimeMessage(t, stream)
-	if err := stream.Send(capabilityListMessage(capabilityRequest.MessageId)); err != nil {
+	if err := stream.Send(capabilityMessage(capabilityRequest.MessageId)); err != nil {
 		t.Fatalf("send capability list: %v", err)
 	}
-	waitForTool(t, registry, "speak")
+	for _, capability := range capabilityMessage("").GetCapabilities().GetCapabilities() {
+		waitForTool(t, registry, capability.GetName())
+	}
 	return stream
 }
 
@@ -1430,6 +1831,28 @@ func capabilityListWithEmoteMessage(correlationID string) *protocolv1alpha2.Adap
 	}
 }
 
+func capabilityListWithParallelSenseMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return &protocolv1alpha2.AdapterMessage{
+		MessageId:     "capabilities_msg_1",
+		CorrelationId: correlationID,
+		Payload: &protocolv1alpha2.AdapterMessage_Capabilities{
+			Capabilities: &protocolv1alpha2.CapabilityList{
+				Capabilities: []*protocolv1alpha2.Capability{
+					{
+						Name:            "sense",
+						Version:         "0.1.0",
+						Description:     "Inspect nearby state.",
+						InputSchemaJson: `{"type":"object","properties":{"label":{"type":"string"}},"required":["label"]}`,
+						ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+						ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE,
+					},
+				},
+				Revision: 1,
+			},
+		},
+	}
+}
+
 func npcInteractionEventMessage() *protocolv1alpha2.AdapterMessage {
 	return npcInteractionEventMessageWithIDs(1)
 }
@@ -1443,6 +1866,10 @@ func npcInteractionEventMessageForNPC(index int, entityID string, displayName st
 }
 
 func gameEventMessageForEntity(index int, eventType string, entityID string, entityType string, displayName string) *protocolv1alpha2.AdapterMessage {
+	return gameEventMessageForEntityDefinition(index, eventType, entityID, entityID, entityType, displayName)
+}
+
+func gameEventMessageForEntityDefinition(index int, eventType string, entityID string, definitionID string, entityType string, displayName string) *protocolv1alpha2.AdapterMessage {
 	return &protocolv1alpha2.AdapterMessage{
 		MessageId: "event_msg_" + strconv.Itoa(index),
 		Payload: &protocolv1alpha2.AdapterMessage_Event{
@@ -1453,14 +1880,16 @@ func gameEventMessageForEntity(index int, eventType string, entityID string, ent
 				TargetEntityId: entityID,
 				Entities: []*protocolv1alpha2.EntityRef{
 					{
-						EntityId:    "player:local",
-						EntityType:  "player",
-						DisplayName: "Player",
+						EntityId:     "player:local",
+						EntityType:   "player",
+						DisplayName:  "Player",
+						DefinitionId: "player:local",
 					},
 					{
-						EntityId:    entityID,
-						EntityType:  entityType,
-						DisplayName: displayName,
+						EntityId:     entityID,
+						EntityType:   entityType,
+						DisplayName:  displayName,
+						DefinitionId: definitionID,
 					},
 				},
 				Sequence: 1,
@@ -1503,12 +1932,20 @@ func observationMessageForEntity(correlationID string, entityID string, entityTy
 }
 
 func actionResultMessage(actionID string) *protocolv1alpha2.AdapterMessage {
+	return actionResultStatusMessage(actionID, protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED)
+}
+
+func actionResultStatusMessage(actionID string, status protocolv1alpha2.ActionStatus) *protocolv1alpha2.AdapterMessage {
 	return &protocolv1alpha2.AdapterMessage{
 		MessageId: "action_result_msg_1",
 		Payload: &protocolv1alpha2.AdapterMessage_ActionResult{
 			ActionResult: &protocolv1alpha2.ActionResult{
 				ActionId: actionID,
-				Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+				Status:   status,
+				Error: &protocolv1alpha2.Error{
+					Code:    "adapter_" + strings.ToLower(strings.TrimPrefix(status.String(), "ACTION_STATUS_")),
+					Message: "adapter returned " + status.String(),
+				},
 			},
 		},
 	}

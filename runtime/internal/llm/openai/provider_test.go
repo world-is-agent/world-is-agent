@@ -68,6 +68,34 @@ func TestBuildRequestAddsAdditionalPropertiesForStrictToolSchema(t *testing.T) {
 	}
 }
 
+func TestBuildRequestMapsToolTranscriptToProviderSafeInput(t *testing.T) {
+	provider := NewProvider("test-key", "gpt-5-mini")
+
+	body, err := provider.buildRequest(model.Request{
+		Messages: []model.Message{
+			{Role: model.RoleUser, Content: "current context"},
+			{Role: model.RoleAssistant, Content: `[{"tool_call_id":"call_1","name":"speak"}]`},
+			{Role: model.RoleTool, Content: `[{"tool_call_id":"call_1","status":"succeeded","code":"action_succeeded"}]`},
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildRequest failed: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("request body is not JSON: %v", err)
+	}
+	input := payload["input"].([]any)
+	toolTranscript := input[2].(map[string]any)
+	if got := toolTranscript["role"]; got != "user" {
+		t.Fatalf("tool transcript role = %v, want provider-safe user", got)
+	}
+	if content := toolTranscript["content"].(string); !strings.Contains(content, "action_succeeded") {
+		t.Fatalf("tool transcript content missing result:\n%s", content)
+	}
+}
+
 func TestParseResponseReturnsModelDecisionToolCalls(t *testing.T) {
 	resp, err := parseResponse([]byte(`{
 		"output": [

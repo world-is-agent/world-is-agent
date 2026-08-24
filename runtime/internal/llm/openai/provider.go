@@ -206,12 +206,19 @@ func buildInput(messages []model.Message) []map[string]string {
 
 	for _, message := range messages {
 		input = append(input, map[string]string{
-			"role":    string(message.Role),
+			"role":    providerInputRole(message.Role),
 			"content": message.Content,
 		})
 	}
 
 	return input
+}
+
+func providerInputRole(role model.Role) string {
+	if role == model.RoleTool {
+		return string(model.RoleUser)
+	}
+	return string(role)
 }
 
 func buildInstructions(system string, controls []model.ControlDefinition) string {

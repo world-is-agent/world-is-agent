@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
@@ -15,12 +16,31 @@ import (
 // Adapter 上报的是 capability，Runtime 注册后才变成模型可见的 tool。
 type Registry struct {
 	mu    sync.RWMutex
-	tools map[string]model.ToolDefinition
+	tools map[string]Entry
+}
+
+type Kind string
+
+const (
+	KindEnvironment Kind = "environment"
+)
+
+type ConcurrencyMode string
+
+const (
+	ConcurrencySequential   ConcurrencyMode = "sequential"
+	ConcurrencyParallelSafe ConcurrencyMode = "parallel_safe"
+)
+
+type Entry struct {
+	Definition  model.ToolDefinition
+	Kind        Kind
+	Concurrency ConcurrencyMode
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]model.ToolDefinition),
+		tools: make(map[string]Entry),
 	}
 }
 
@@ -34,6 +54,9 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 		if capability.Name == "" {
 			continue
 		}
+		if capability.GetExecutionMode() == protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC {
+			continue
+		}
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(capability.InputSchemaJson), &raw); err != nil {
 			fmt.Printf("skip capability %q: invalid input_schema_json: %v\n", capability.Name, err)
@@ -45,10 +68,14 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 		inputSchemaJson := capability.InputSchemaJson
 
 		r.mu.Lock()
-		r.tools[name] = model.ToolDefinition{
-			Name:        name,
-			Description: description,
-			InputSchema: inputSchemaJson,
+		r.tools[name] = Entry{
+			Definition: model.ToolDefinition{
+				Name:        name,
+				Description: description,
+				InputSchema: inputSchemaJson,
+			},
+			Kind:        KindEnvironment,
+			Concurrency: concurrencyModeFromCapability(capability),
 		}
 		r.mu.Unlock()
 	}
@@ -60,22 +87,30 @@ func (r *Registry) Available() []model.ToolDefinition {
 
 	available := make([]model.ToolDefinition, 0, len(r.tools))
 	for _, tool := range r.tools {
-		available = append(available, tool)
+		available = append(available, tool.Definition)
 	}
+	sort.Slice(available, func(i, j int) bool {
+		return available[i].Name < available[j].Name
+	})
 	return available
 }
 
 func (r *Registry) HasTool(name string) bool {
+	_, exists := r.Lookup(name)
+	return exists
+}
+
+func (r *Registry) Lookup(name string) (Entry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	_, exists := r.tools[name]
-	return exists
+	entry, exists := r.tools[name]
+	return entry, exists
 }
 
 // ValidateToolCall 校验模型返回的 ToolCall 是否能安全转成 ActionRequest。
 func (r *Registry) ValidateToolCall(entityID string, call model.ToolCall) error {
-	if !r.HasTool(call.Name) {
+	if _, ok := r.Lookup(call.Name); !ok {
 		return fmt.Errorf("tool %q is not registered", call.Name)
 	}
 	if call.Arguments == nil {
@@ -83,4 +118,26 @@ func (r *Registry) ValidateToolCall(entityID string, call model.ToolCall) error 
 	}
 
 	return nil
+}
+
+func (r *Registry) ValidateToolCallBatch(entityID string, calls []model.ToolCall) ([]Entry, error) {
+	entries := make([]Entry, 0, len(calls))
+	for _, call := range calls {
+		entry, ok := r.Lookup(call.Name)
+		if !ok {
+			return nil, fmt.Errorf("tool %q is not registered", call.Name)
+		}
+		if call.Arguments == nil {
+			return nil, errors.New("tool arguments are missing")
+		}
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+func concurrencyModeFromCapability(capability *protocolv1alpha2.Capability) ConcurrencyMode {
+	if capability.GetConcurrencyMode() == protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE {
+		return ConcurrencyParallelSafe
+	}
+	return ConcurrencySequential
 }

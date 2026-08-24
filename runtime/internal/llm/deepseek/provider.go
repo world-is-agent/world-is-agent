@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	"gameagent/runtime/internal/model"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const defaultEndpoint = "https://api.deepseek.com/chat/completions"
@@ -129,10 +127,10 @@ func (p *Provider) buildRequest(req model.Request) ([]byte, error) {
 func buildMessages(req model.Request) []map[string]string {
 	messages := make([]map[string]string, 0, len(req.Messages)+1)
 
-	if req.System != "" {
+	if system := buildSystemContent(req.System, req.Controls); system != "" {
 		messages = append(messages, map[string]string{
 			"role":    "system",
-			"content": req.System,
+			"content": system,
 		})
 	}
 
@@ -156,6 +154,7 @@ func parseResponse(data []byte) (model.Response, error) {
 		Choices []struct {
 			Message struct {
 				ToolCalls []struct {
+					ID       string `json:"id"`
 					Type     string `json:"type"`
 					Function struct {
 						Name      string `json:"name"`
@@ -174,33 +173,103 @@ func parseResponse(data []byte) (model.Response, error) {
 		return model.Response{}, fmt.Errorf("deepseek error %s: %s", raw.Error.Code, raw.Error.Message)
 	}
 
+	var calls []model.ToolCall
+	decision := model.ModelDecision{
+		Control: model.ControlDirective{Kind: model.ControlUnspecified},
+	}
+	functionOrdinal := 0
 	for _, choice := range raw.Choices {
 		for _, call := range choice.Message.ToolCalls {
 			if call.Type != "" && call.Type != "function" {
 				continue
 			}
-			if call.Function.Name == "" {
+			functionOrdinal++
+			name := strings.TrimSpace(call.Function.Name)
+			if name == "" {
 				return model.Response{}, errors.New("deepseek function_call name is empty")
 			}
 
-			var args map[string]any
-			if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-				return model.Response{}, err
-			}
-
-			structArgs, err := structpb.NewStruct(args)
+			args, err := parseArguments(call.Function.Arguments)
 			if err != nil {
 				return model.Response{}, err
 			}
 
-			return model.Response{
-				ToolCall: model.ToolCall{
-					Name:      call.Function.Name,
-					Arguments: structArgs,
-				},
-			}, nil
+			if name == model.InternalSettleToolName {
+				decision.Control = model.ControlDirective{
+					Kind:   model.ControlSettle,
+					Reason: stringArgument(args, "reason"),
+				}
+				continue
+			}
+
+			calls = append(calls, model.ToolCall{
+				ID:        deepSeekToolCallID(call.ID, functionOrdinal),
+				Name:      name,
+				Arguments: args,
+			})
 		}
 	}
 
-	return model.Response{}, errors.New("deepseek response has no function tool_call")
+	if decision.Control.Kind == model.ControlUnspecified {
+		if len(calls) == 0 {
+			decision.Control = model.ControlDirective{Kind: model.ControlSettle}
+		} else {
+			decision.Control = model.ControlDirective{Kind: model.ControlContinue}
+		}
+	}
+	decision.ToolCalls = calls
+	return model.Response{Decision: decision}, nil
+}
+
+func buildSystemContent(system string, controls []model.ControlDefinition) string {
+	content := strings.TrimSpace(system)
+	for _, control := range controls {
+		if control.Kind != model.ControlSettle {
+			continue
+		}
+		settleInstruction := "When the current turn needs no environment action, return no tool calls or call __gameagent_settle with an optional reason."
+		if control.Description != "" {
+			settleInstruction += " " + control.Description
+		}
+		if content == "" {
+			content = settleInstruction
+		} else {
+			content += "\n\n" + settleInstruction
+		}
+	}
+	return content
+}
+
+func parseArguments(arguments string) (map[string]any, error) {
+	if strings.TrimSpace(arguments) == "" {
+		return map[string]any{}, nil
+	}
+
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+func deepSeekToolCallID(id string, ordinal int) string {
+	if strings.TrimSpace(id) != "" {
+		return id
+	}
+	return fmt.Sprintf("deepseek_call_%d", ordinal)
+}
+
+func stringArgument(args map[string]any, key string) string {
+	value, ok := args[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }

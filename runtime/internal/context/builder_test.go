@@ -14,19 +14,21 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-func TestBuilderExtractsAgentDescriptorDefinitionIDFromObservationState(t *testing.T) {
+func TestBuilderExtractsDefinitionIDFromTargetEntityRef(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 
 	agentCtx, err := builder.Build(agentcontext.BuildInput{
 		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
-		Event:      &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
-		Observation: &protocolv1alpha2.Observation{
-			WorldId:  "world-a",
-			EntityId: "creature:alpha",
-			State: mustStruct(t, map[string]any{
-				"definition_id": "villager/farmer",
-			}),
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:        "event-1",
+			WorldId:        "world-a",
+			TargetEntityId: "creature:alpha",
+			Entities: []*protocolv1alpha2.EntityRef{
+				{EntityId: "player:local", DefinitionId: "player/local"},
+				{EntityId: "creature:alpha", DefinitionId: "villager/farmer"},
+			},
 		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "creature:alpha"},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -40,13 +42,24 @@ func TestBuilderExtractsAgentDescriptorDefinitionIDFromObservationState(t *testi
 	}
 }
 
-func TestBuilderDoesNotDefaultDefinitionIDToEntityID(t *testing.T) {
+func TestBuilderDoesNotReadDefinitionIDFromObservationState(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 
 	agentCtx, err := builder.Build(agentcontext.BuildInput{
-		SessionKey:  session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
-		Event:       &protocolv1alpha2.GameEvent{EventId: "event-1", WorldId: "world-a", TargetEntityId: "creature:alpha"},
-		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "creature:alpha"},
+		SessionKey: session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "creature:alpha"},
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:        "event-1",
+			WorldId:        "world-a",
+			TargetEntityId: "creature:alpha",
+			Entities:       []*protocolv1alpha2.EntityRef{{EntityId: "creature:alpha"}},
+		},
+		Observation: &protocolv1alpha2.Observation{
+			WorldId:  "world-a",
+			EntityId: "creature:alpha",
+			State: mustStruct(t, map[string]any{
+				"definition_id": "legacy/observation-state",
+			}),
+		},
 	})
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
@@ -72,6 +85,9 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 			EventType:      "player_interacted_with_npc",
 			WorldId:        "world-a",
 			TargetEntityId: "npc:Abigail",
+			Entities: []*protocolv1alpha2.EntityRef{
+				{EntityId: "npc:Abigail", DefinitionId: "npc:Abigail"},
+			},
 			GameTime: &protocolv1alpha2.GameTime{
 				Year:   ptrInt32(1),
 				Season: ptrInt32(1),
@@ -83,9 +99,6 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 		Observation: &protocolv1alpha2.Observation{
 			WorldId:  "world-a",
 			EntityId: "npc:Abigail",
-			State: mustStruct(t, map[string]any{
-				"definition_id": "npc:Abigail",
-			}),
 		},
 		RecentMemories: []memory.Record{{
 			MemoryID:      "mem-1",
@@ -119,6 +132,9 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 	}
 	if len(req.Messages) != 1 {
 		t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
+	}
+	if len(req.Controls) != 1 || req.Controls[0].Kind != model.ControlSettle {
+		t.Fatalf("controls = %+v, want settle control", req.Controls)
 	}
 	content := req.Messages[0].Content
 	for _, want := range []string{

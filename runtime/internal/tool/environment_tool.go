@@ -5,6 +5,8 @@ import (
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/idgen"
 	"gameagent/runtime/internal/model"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // BuildActionRequest 把模型 ToolCall 转成 Adapter 能执行的 ActionRequest。
@@ -24,11 +26,16 @@ func BuildActionRequest(worldID string, entityID string, call model.ToolCall) (*
 		return nil, fmt.Errorf("tool arguments are missing")
 	}
 
+	arguments, err := structpb.NewStruct(call.Arguments)
+	if err != nil {
+		return nil, fmt.Errorf("convert tool arguments: %w", err)
+	}
+
 	return &protocolv1alpha2.ActionRequest{
 		ActionId:   newActionID(),
 		EntityId:   entityID,
 		Capability: call.Name,
-		Arguments:  call.Arguments,
+		Arguments:  arguments,
 		WorldId:    worldID,
 	}, nil
 }

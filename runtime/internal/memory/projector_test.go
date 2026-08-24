@@ -9,15 +9,13 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestProjectorBuildsRecordFromSuccessfulTurn(t *testing.T) {
 	now := time.Unix(200, 0)
 	projector := memory.NewProjector(func() time.Time { return now })
 	key := session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"}
-	args := mustStruct(t, map[string]any{"text": "hello"})
+	args := map[string]any{"text": "hello"}
 
 	record, err := projector.Project(memory.ProjectInput{
 		SessionKey: key,
@@ -86,6 +84,32 @@ func TestProjectorBuildsRecordFromSuccessfulTurn(t *testing.T) {
 	}
 }
 
+func TestProjectorCopiesToolCallArgumentMap(t *testing.T) {
+	projector := memory.NewProjector(func() time.Time { return time.Unix(200, 0) })
+	args := map[string]any{"text": "hello"}
+
+	record, err := projector.Project(memory.ProjectInput{
+		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		TurnID:     "turn-1",
+		Event:      &protocolv1alpha2.GameEvent{EventId: "event-1"},
+		ToolCall: model.ToolCall{
+			Name:      "speak",
+			Arguments: args,
+		},
+		ActionResult: &protocolv1alpha2.ActionResult{
+			Status: protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Project returned error: %v", err)
+	}
+
+	args["text"] = "changed"
+	if got := record.Outcome.ToolArguments["text"]; got != "hello" {
+		t.Fatalf("ToolArguments[text] = %v, want copied hello", got)
+	}
+}
+
 func TestProjectorRejectsMissingTurnID(t *testing.T) {
 	projector := memory.NewProjector(func() time.Time { return time.Unix(200, 0) })
 
@@ -120,16 +144,6 @@ func TestProjectorRejectsNilActionResult(t *testing.T) {
 	if !errors.Is(err, memory.ErrProject) {
 		t.Fatalf("Project error = %v, want ErrProject", err)
 	}
-}
-
-func mustStruct(t *testing.T, fields map[string]any) *structpb.Struct {
-	t.Helper()
-
-	value, err := structpb.NewStruct(fields)
-	if err != nil {
-		t.Fatalf("NewStruct returned error: %v", err)
-	}
-	return value
 }
 
 func ptrInt32(value int32) *int32 {

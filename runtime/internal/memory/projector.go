@@ -92,5 +92,9 @@ func toolArguments(call model.ToolCall) map[string]any {
 	if call.Arguments == nil {
 		return nil
 	}
-	return call.Arguments.AsMap()
+	out := make(map[string]any, len(call.Arguments))
+	for key, value := range call.Arguments {
+		out[key] = value
+	}
+	return out
 }

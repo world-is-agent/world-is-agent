@@ -16,25 +16,41 @@ const (
 )
 
 type Config struct {
-	TurnTimeout            time.Duration
-	LLMTimeout             time.Duration
-	ObserveTimeout         time.Duration
-	ActionTimeout          time.Duration
-	MemoryEnabled          *bool
-	RecentMemoryLimit      int
-	MemoryContextSizeLimit int
-	Prompt                 PromptConfig
+	TurnTimeout                   time.Duration
+	LLMTimeout                    time.Duration
+	ObserveTimeout                time.Duration
+	ActionTimeout                 time.Duration
+	MemoryEnabled                 *bool
+	RecentMemoryLimit             int
+	MemoryContextSizeLimit        int
+	MaxSteps                      int
+	MaxToolCallsPerStep           int
+	MaxToolCallsPerTurn           int
+	MaxParallelToolCalls          int
+	MaxToolResultOutputBytes      int
+	MaxToolResultOutputDepth      int
+	MaxToolResultOutputFields     int
+	MaxToolResultOutputArrayItems int
+	Prompt                        PromptConfig
 }
 
 type fileConfig struct {
-	TurnTimeoutMS          int64        `json:"turn_timeout_ms"`
-	LLMTimeoutMS           int64        `json:"llm_timeout_ms"`
-	ObserveTimeoutMS       int64        `json:"observe_timeout_ms"`
-	ActionTimeoutMS        int64        `json:"action_timeout_ms"`
-	MemoryEnabled          *bool        `json:"memory_enabled"`
-	RecentMemoryLimit      int          `json:"recent_memory_limit"`
-	MemoryContextSizeLimit int          `json:"memory_context_size_limit"`
-	Prompt                 PromptConfig `json:"prompt"`
+	TurnTimeoutMS                 int64        `json:"turn_timeout_ms"`
+	LLMTimeoutMS                  int64        `json:"llm_timeout_ms"`
+	ObserveTimeoutMS              int64        `json:"observe_timeout_ms"`
+	ActionTimeoutMS               int64        `json:"action_timeout_ms"`
+	MemoryEnabled                 *bool        `json:"memory_enabled"`
+	RecentMemoryLimit             int          `json:"recent_memory_limit"`
+	MemoryContextSizeLimit        int          `json:"memory_context_size_limit"`
+	MaxSteps                      int          `json:"max_steps"`
+	MaxToolCallsPerStep           int          `json:"max_tool_calls_per_step"`
+	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
+	MaxParallelToolCalls          int          `json:"max_parallel_tool_calls"`
+	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
+	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
+	MaxToolResultOutputFields     int          `json:"max_tool_result_output_fields"`
+	MaxToolResultOutputArrayItems int          `json:"max_tool_result_output_array_items"`
+	Prompt                        PromptConfig `json:"prompt"`
 }
 
 type PromptConfig struct {
@@ -45,21 +61,29 @@ type PromptConfig struct {
 }
 
 // DefaultConfig 返回 Agent Runtime 的默认运行配置。
-// Phase4 默认开启短期 Memory，但保留开关，方便回退到 Phase3 的 one-turn 行为。
+// 默认开启短期 Memory，并加载当前 Runtime 预算上限。
 func DefaultConfig() Config {
 	return Config{
-		TurnTimeout:            15 * time.Second,
-		LLMTimeout:             8 * time.Second,
-		ObserveTimeout:         3 * time.Second,
-		ActionTimeout:          3 * time.Second,
-		MemoryEnabled:          boolPtr(defaultMemoryEnabled),
-		RecentMemoryLimit:      5,
-		MemoryContextSizeLimit: 4096,
+		TurnTimeout:                   60 * time.Second,
+		LLMTimeout:                    8 * time.Second,
+		ObserveTimeout:                3 * time.Second,
+		ActionTimeout:                 3 * time.Second,
+		MemoryEnabled:                 boolPtr(defaultMemoryEnabled),
+		RecentMemoryLimit:             5,
+		MemoryContextSizeLimit:        4096,
+		MaxSteps:                      3,
+		MaxToolCallsPerStep:           4,
+		MaxToolCallsPerTurn:           6,
+		MaxParallelToolCalls:          4,
+		MaxToolResultOutputBytes:      8192,
+		MaxToolResultOutputDepth:      4,
+		MaxToolResultOutputFields:     64,
+		MaxToolResultOutputArrayItems: 32,
 		Prompt: PromptConfig{
 			Language:        "Simplified Chinese",
 			NPCStyle:        "自然、简短、符合当前游戏 NPC 的语气",
 			MaxSpeakChars:   60,
-			ToolInstruction: "Use exactly one available tool. Prefer speak for dialogue; use emote only for clear emotional reactions.",
+			ToolInstruction: "Use available tools only when the NPC should take an environment action. Prefer speak for dialogue; use emote only for clear emotional reactions.",
 		},
 	}
 }
@@ -90,14 +114,22 @@ func LoadConfigFile(path string) (Config, error) {
 	}
 
 	cfg := Config{
-		MemoryEnabled:          raw.MemoryEnabled,
-		TurnTimeout:            durationMS(raw.TurnTimeoutMS),
-		LLMTimeout:             durationMS(raw.LLMTimeoutMS),
-		ObserveTimeout:         durationMS(raw.ObserveTimeoutMS),
-		ActionTimeout:          durationMS(raw.ActionTimeoutMS),
-		RecentMemoryLimit:      raw.RecentMemoryLimit,
-		MemoryContextSizeLimit: raw.MemoryContextSizeLimit,
-		Prompt:                 raw.Prompt,
+		MemoryEnabled:                 raw.MemoryEnabled,
+		TurnTimeout:                   durationMS(raw.TurnTimeoutMS),
+		LLMTimeout:                    durationMS(raw.LLMTimeoutMS),
+		ObserveTimeout:                durationMS(raw.ObserveTimeoutMS),
+		ActionTimeout:                 durationMS(raw.ActionTimeoutMS),
+		RecentMemoryLimit:             raw.RecentMemoryLimit,
+		MemoryContextSizeLimit:        raw.MemoryContextSizeLimit,
+		MaxSteps:                      raw.MaxSteps,
+		MaxToolCallsPerStep:           raw.MaxToolCallsPerStep,
+		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
+		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
+		MaxToolResultOutputBytes:      raw.MaxToolResultOutputBytes,
+		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
+		MaxToolResultOutputFields:     raw.MaxToolResultOutputFields,
+		MaxToolResultOutputArrayItems: raw.MaxToolResultOutputArrayItems,
+		Prompt:                        raw.Prompt,
 	}.WithDefaults()
 
 	return cfg, nil
@@ -134,7 +166,7 @@ func (p PromptConfig) WithDefaults() PromptConfig {
 }
 
 // WithDefaults 为 Agent Config 补齐缺省字段。
-// Phase4 的 Memory 配置也在这里归一化，避免 Loop 初始化时处理零值分支。
+// Memory 配置和 Runtime 预算在这里统一归一化，避免 Loop 初始化时处理零值分支。
 func (c Config) WithDefaults() Config {
 	defaults := DefaultConfig()
 	if c.MemoryEnabled == nil {
@@ -158,6 +190,30 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MemoryContextSizeLimit <= 0 {
 		c.MemoryContextSizeLimit = defaults.MemoryContextSizeLimit
+	}
+	if c.MaxSteps <= 0 {
+		c.MaxSteps = defaults.MaxSteps
+	}
+	if c.MaxToolCallsPerStep <= 0 {
+		c.MaxToolCallsPerStep = defaults.MaxToolCallsPerStep
+	}
+	if c.MaxToolCallsPerTurn <= 0 {
+		c.MaxToolCallsPerTurn = defaults.MaxToolCallsPerTurn
+	}
+	if c.MaxParallelToolCalls <= 0 {
+		c.MaxParallelToolCalls = defaults.MaxParallelToolCalls
+	}
+	if c.MaxToolResultOutputBytes <= 0 {
+		c.MaxToolResultOutputBytes = defaults.MaxToolResultOutputBytes
+	}
+	if c.MaxToolResultOutputDepth <= 0 {
+		c.MaxToolResultOutputDepth = defaults.MaxToolResultOutputDepth
+	}
+	if c.MaxToolResultOutputFields <= 0 {
+		c.MaxToolResultOutputFields = defaults.MaxToolResultOutputFields
+	}
+	if c.MaxToolResultOutputArrayItems <= 0 {
+		c.MaxToolResultOutputArrayItems = defaults.MaxToolResultOutputArrayItems
 	}
 	c.Prompt = c.Prompt.WithDefaults()
 	return c

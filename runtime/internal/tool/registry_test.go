@@ -7,8 +7,6 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestRegisterEnvironmentCapabilitiesUsesAdapterSchema(t *testing.T) {
@@ -91,14 +89,11 @@ func TestValidateToolCallOnlyChecksEnvelope(t *testing.T) {
 		},
 	})
 
-	args, err := structpb.NewStruct(map[string]any{
+	args := map[string]any{
 		"unexpected": "adapter-validates-semantics",
-	})
-	if err != nil {
-		t.Fatalf("NewStruct failed: %v", err)
 	}
 
-	err = registry.ValidateToolCall("npc:Linus", model.ToolCall{
+	err := registry.ValidateToolCall("npc:Linus", model.ToolCall{
 		Name:      "emote",
 		Arguments: args,
 	})
@@ -119,5 +114,17 @@ func TestValidateToolCallOnlyChecksEnvelope(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected nil arguments to fail")
+	}
+}
+
+func TestRegistryValidateToolCallRejectsNilArgumentMap(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+		{Name: "speak", InputSchemaJson: `{"type":"object"}`},
+	})
+
+	err := registry.ValidateToolCall("npc:Linus", model.ToolCall{Name: "speak"})
+	if err == nil {
+		t.Fatal("expected nil argument map to fail")
 	}
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 
 	"gameagent/runtime/internal/model"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var _ model.Provider = (*Provider)(nil)
@@ -32,14 +30,16 @@ func (Provider) Generate(ctx context.Context, req model.Request) (model.Response
 }
 
 func newToolCall(name string, arguments map[string]any) (model.Response, error) {
-	args, err := structpb.NewStruct(arguments)
-	if err != nil {
-		return model.Response{}, err
-	}
 	return model.Response{
-		ToolCall: model.ToolCall{
-			Name:      name,
-			Arguments: args,
+		Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{
+				{
+					ID:        "fake_call_1",
+					Name:      name,
+					Arguments: arguments,
+				},
+			},
+			Control: model.ControlDirective{Kind: model.ControlContinue},
 		},
 	}, nil
 }

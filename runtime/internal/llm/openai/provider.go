@@ -11,8 +11,6 @@ import (
 	"strings"
 
 	"gameagent/runtime/internal/model"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const defaultEndpoint = "https://api.openai.com/v1/responses"
@@ -116,11 +114,11 @@ func (p *Provider) buildRequest(req model.Request) ([]byte, error) {
 		"model":       p.model,
 		"input":       buildInput(req.Messages),
 		"tools":       tools,
-		"tool_choice": "required",
+		"tool_choice": "auto",
 	}
 
-	if req.System != "" {
-		payload["instructions"] = req.System
+	if instructions := buildInstructions(req.System, req.Controls); instructions != "" {
+		payload["instructions"] = instructions
 	}
 
 	return json.Marshal(payload)
@@ -145,6 +143,8 @@ func parseResponse(data []byte) (model.Response, error) {
 	var raw struct {
 		Output []struct {
 			Type      string `json:"type"`
+			ID        string `json:"id"`
+			CallID    string `json:"call_id"`
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		} `json:"output"`
@@ -154,30 +154,51 @@ func parseResponse(data []byte) (model.Response, error) {
 		return model.Response{}, err
 	}
 
+	var calls []model.ToolCall
+	decision := model.ModelDecision{
+		Control: model.ControlDirective{Kind: model.ControlUnspecified},
+	}
+	functionOrdinal := 0
 	for _, item := range raw.Output {
 		if item.Type != "function_call" {
 			continue
 		}
+		functionOrdinal++
 
-		var args map[string]any
-		if err := json.Unmarshal([]byte(item.Arguments), &args); err != nil {
-			return model.Response{}, err
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			return model.Response{}, errors.New("openai function_call name is empty")
 		}
 
-		structArgs, err := structpb.NewStruct(args)
+		args, err := parseArguments(item.Arguments)
 		if err != nil {
 			return model.Response{}, err
 		}
 
-		return model.Response{
-			ToolCall: model.ToolCall{
-				Name:      item.Name,
-				Arguments: structArgs,
-			},
-		}, nil
+		if name == model.InternalSettleToolName {
+			decision.Control = model.ControlDirective{
+				Kind:   model.ControlSettle,
+				Reason: stringArgument(args, "reason"),
+			}
+			continue
+		}
+
+		calls = append(calls, model.ToolCall{
+			ID:        openAIToolCallID(item.CallID, item.ID, functionOrdinal),
+			Name:      name,
+			Arguments: args,
+		})
 	}
 
-	return model.Response{}, fmt.Errorf("openai response has no function_call")
+	if decision.Control.Kind == model.ControlUnspecified {
+		if len(calls) == 0 {
+			decision.Control = model.ControlDirective{Kind: model.ControlSettle}
+		} else {
+			decision.Control = model.ControlDirective{Kind: model.ControlContinue}
+		}
+	}
+	decision.ToolCalls = calls
+	return model.Response{Decision: decision}, nil
 }
 
 func buildInput(messages []model.Message) []map[string]string {
@@ -191,4 +212,60 @@ func buildInput(messages []model.Message) []map[string]string {
 	}
 
 	return input
+}
+
+func buildInstructions(system string, controls []model.ControlDefinition) string {
+	instructions := strings.TrimSpace(system)
+	for _, control := range controls {
+		if control.Kind != model.ControlSettle {
+			continue
+		}
+		settleInstruction := "When the current turn needs no environment action, return no tool calls or call __gameagent_settle with an optional reason."
+		if control.Description != "" {
+			settleInstruction += " " + control.Description
+		}
+		if instructions == "" {
+			instructions = settleInstruction
+		} else {
+			instructions += "\n\n" + settleInstruction
+		}
+	}
+	return instructions
+}
+
+func parseArguments(arguments string) (map[string]any, error) {
+	if strings.TrimSpace(arguments) == "" {
+		return map[string]any{}, nil
+	}
+
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+func openAIToolCallID(callID string, id string, ordinal int) string {
+	if strings.TrimSpace(callID) != "" {
+		return callID
+	}
+	if strings.TrimSpace(id) != "" {
+		return id
+	}
+	return fmt.Sprintf("openai_call_%d", ordinal)
+}
+
+func stringArgument(args map[string]any, key string) string {
+	value, ok := args[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }

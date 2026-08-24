@@ -36,16 +36,14 @@ func (p *recordingGatewayProvider) Generate(ctx context.Context, req model.Reque
 	p.requests = append(p.requests, req)
 	p.mu.Unlock()
 
-	args, err := structpb.NewStruct(map[string]any{
-		"text": "gateway memory line",
-	})
-	if err != nil {
-		return model.Response{}, err
-	}
 	return model.Response{
-		ToolCall: model.ToolCall{
-			Name:      "speak",
-			Arguments: args,
+		Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_1",
+				Name:      "speak",
+				Arguments: map[string]any{"text": "gateway memory line"},
+			}},
+			Control: model.ControlDirective{Kind: model.ControlContinue},
 		},
 	}, nil
 }

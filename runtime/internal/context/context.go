@@ -71,7 +71,7 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 		SessionKey: input.SessionKey,
 		AgentDescriptor: AgentDescriptor{
 			EntityID:     input.SessionKey.EntityID,
-			DefinitionID: definitionIDFromObservation(input.Observation),
+			DefinitionID: definitionIDFromTargetEntity(input.Event),
 		},
 		RuntimePolicy:  input.RuntimePolicy,
 		RecentMemories: append([]memory.Record(nil), input.RecentMemories...),
@@ -81,13 +81,24 @@ func (Builder) Build(input BuildInput) (AgentContext, error) {
 	}, nil
 }
 
-func definitionIDFromObservation(observation *protocolv1alpha2.Observation) string {
-	if observation == nil || observation.State == nil {
+func definitionIDFromTargetEntity(event *protocolv1alpha2.GameEvent) string {
+	if event == nil {
 		return ""
 	}
-	value, ok := observation.State.Fields["definition_id"]
-	if !ok {
+	targetEntityID := strings.TrimSpace(event.GetTargetEntityId())
+	if targetEntityID == "" {
 		return ""
 	}
-	return strings.TrimSpace(value.GetStringValue())
+
+	for _, entity := range event.GetEntities() {
+		if entity == nil {
+			continue
+		}
+		if strings.TrimSpace(entity.GetEntityId()) != targetEntityID {
+			continue
+		}
+		return strings.TrimSpace(entity.GetDefinitionId())
+	}
+
+	return ""
 }

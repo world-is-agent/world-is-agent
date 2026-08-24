@@ -39,21 +39,26 @@ type fakeEnvironment struct {
 
 type recordingProvider struct {
 	requests []model.Request
+	response model.Response
 }
 
 func (p *recordingProvider) Generate(ctx context.Context, req model.Request) (model.Response, error) {
 	p.requests = append(p.requests, req)
 
-	args, err := structpb.NewStruct(map[string]any{
-		"text": "remember this line",
-	})
-	if err != nil {
-		return model.Response{}, err
+	if p.response.Decision.ToolCalls != nil || p.response.Decision.Control.Kind != "" {
+		return p.response, nil
 	}
+
 	return model.Response{
-		ToolCall: model.ToolCall{
-			Name:      "speak",
-			Arguments: args,
+		Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{
+				{
+					ID:        "call_1",
+					Name:      "speak",
+					Arguments: map[string]any{"text": "remember this line"},
+				},
+			},
+			Control: model.ControlDirective{Kind: model.ControlContinue},
 		},
 	}, nil
 }
@@ -352,6 +357,9 @@ func gameEvent(eventID string, key session.AgentSessionKey) *protocolv1alpha2.Ga
 		EventType:      "player_interacted_with_npc",
 		WorldId:        key.WorldID,
 		TargetEntityId: key.EntityID,
+		Entities: []*protocolv1alpha2.EntityRef{
+			{EntityId: key.EntityID, DefinitionId: key.EntityID},
+		},
 	}
 }
 
@@ -386,16 +394,19 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 		TargetEntityId: "npc:Robin",
 		Entities: []*protocolv1alpha2.EntityRef{
 			{
-				EntityId:   "player:local",
-				EntityType: "player",
+				EntityId:     "player:local",
+				EntityType:   "player",
+				DefinitionId: "player:local",
 			},
 			{
-				EntityId:   "npc:Linus",
-				EntityType: "npc",
+				EntityId:     "npc:Linus",
+				EntityType:   "npc",
+				DefinitionId: "npc:Linus",
 			},
 			{
-				EntityId:   "npc:Robin",
-				EntityType: "npc",
+				EntityId:     "npc:Robin",
+				EntityType:   "npc",
+				DefinitionId: "npc:Robin",
 			},
 		},
 	}
@@ -488,4 +499,97 @@ func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
 	if terminal.Tool != "speak" {
 		t.Fatalf("terminal tool = %q, want %q", terminal.Tool, "speak")
 	}
+}
+
+func TestHandleEventExecutesSingleToolCallFromModelDecision(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{
+					ID:        "call_1",
+					Name:      "speak",
+					Arguments: map[string]any{"text": "from decision"},
+				}},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if env.submittedAction == nil {
+		t.Fatal("expected action to be submitted")
+	}
+	if text := env.submittedAction.Arguments.Fields["text"].GetStringValue(); text != "from decision" {
+		t.Fatalf("submitted text = %q, want from decision", text)
+	}
+	assertTraceContains(t, recorder.events, trace.EventToolCallSelected)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventCompletesOnSettleOnlyDecision(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "idle"},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if env.submittedAction != nil {
+		t.Fatalf("settle-only decision submitted action: %+v", env.submittedAction)
+	}
+	assertTraceContains(t, recorder.events, trace.EventModelResponseReceived)
+	assertTraceNotContains(t, recorder.events, trace.EventActionSubmitStarted)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventRejectsMultipleToolCallsUntilScheduler(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{
+					{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "one"}},
+					{ID: "call_2", Name: "speak", Arguments: map[string]any{"text": "two"}},
+				},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want unsupported batch error")
+	}
+	if !strings.Contains(err.Error(), "multiple tool calls") {
+		t.Fatalf("error = %v, want multiple tool calls", err)
+	}
+	if env.submittedAction != nil {
+		t.Fatalf("unsupported batch submitted action: %+v", env.submittedAction)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnFailed)
 }

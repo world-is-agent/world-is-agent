@@ -39,6 +39,11 @@ type memoryProjector interface {
 	Project(memory.ProjectInput) (memory.Record, error)
 }
 
+var (
+	errInvalidModelDecision = errors.New("invalid model response")
+	errUnsupportedToolBatch = errors.New("multiple tool calls are not supported until scheduler")
+)
+
 type LoopOption func(*Loop)
 
 // WithMemoryStore 覆盖 Loop 默认使用的 MemoryStore。
@@ -194,21 +199,38 @@ func (l *Loop) HandleEvent(
 
 	turnTracer.Emit(trace.EventModelResponseReceived, trace.EventData{})
 
-	// Provider 必须返回结构化 ToolCall；Loop 只做统一校验和协议转换。
-	if err := l.tools.ValidateToolCall(key.EntityID, rep.ToolCall); err != nil {
+	toolCall, shouldAct, err := selectExecutableToolCall(rep.Decision)
+	if err != nil {
+		stage := "model"
+		reason := "invalid_model_response"
+		if errors.Is(err, errUnsupportedToolBatch) {
+			stage = "tool"
+			reason = "tool_batch_unsupported"
+		}
+		turnTracer.Fail(stage, reason, err, trace.EventData{})
+		return err
+	}
+
+	if !shouldAct {
+		turnTracer.Complete(trace.EventData{})
+		return nil
+	}
+
+	// 当前 Loop 只执行单 ToolCall；Loop 只做统一校验和协议转换。
+	if err := l.tools.ValidateToolCall(key.EntityID, toolCall); err != nil {
 		turnTracer.Fail("tool", "tool_call_invalid", err, trace.EventData{
-			Tool: rep.ToolCall.Name,
+			Tool: toolCall.Name,
 		})
 		return err
 	}
 	turnTracer.Emit(trace.EventToolCallSelected, trace.EventData{
-		Tool: rep.ToolCall.Name,
+		Tool: toolCall.Name,
 	})
 
-	actReq, err := tool.BuildActionRequest(key.WorldID, key.EntityID, rep.ToolCall)
+	actReq, err := tool.BuildActionRequest(key.WorldID, key.EntityID, toolCall)
 	if err != nil {
 		turnTracer.Fail("action", "action_request_build_failed", err, trace.EventData{
-			Tool: rep.ToolCall.Name,
+			Tool: toolCall.Name,
 		})
 		return err
 	}
@@ -255,13 +277,34 @@ func (l *Loop) HandleEvent(
 		return fmt.Errorf("action result failed: %s", actRep.Status.String())
 	}
 
-	l.updateMemory(ctx, turnTracer, key, turnID, event, rep.ToolCall, actRep)
+	l.updateMemory(ctx, turnTracer, key, turnID, event, toolCall, actRep)
 	turnTracer.Complete(trace.EventData{
 		ActionID: actRep.ActionId,
 		Tool:     actReq.Capability,
 	})
 
 	return nil
+}
+
+func selectExecutableToolCall(decision model.ModelDecision) (model.ToolCall, bool, error) {
+	switch decision.Control.Kind {
+	case model.ControlSettle:
+	case model.ControlContinue:
+	default:
+		return model.ToolCall{}, false, fmt.Errorf("%w: control is unspecified", errInvalidModelDecision)
+	}
+
+	switch len(decision.ToolCalls) {
+	case 0:
+		if decision.Control.Kind == model.ControlSettle {
+			return model.ToolCall{}, false, nil
+		}
+		return model.ToolCall{}, false, fmt.Errorf("%w: continue control requires one tool call", errInvalidModelDecision)
+	case 1:
+		return decision.ToolCalls[0], true, nil
+	default:
+		return model.ToolCall{}, false, fmt.Errorf("%w: got %d", errUnsupportedToolBatch, len(decision.ToolCalls))
+	}
 }
 
 // loadRecentMemories 在模型调用前加载当前 AgentSession 的短期记忆。

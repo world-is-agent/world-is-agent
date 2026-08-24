@@ -45,6 +45,12 @@ func (r Renderer) Render(agentContext AgentContext) (model.Request, error) {
 			},
 		},
 		Tools: append([]model.ToolDefinition(nil), agentContext.Tools...),
+		Controls: []model.ControlDefinition{
+			{
+				Kind:        model.ControlSettle,
+				Description: "Finish the current turn without an environment action.",
+			},
+		},
 	}, nil
 }
 
@@ -69,7 +75,7 @@ Recent Memory is historical context.
 If Recent Memory conflicts with Current Observation, follow Current Observation.
 If Recent Memory is from today and current game time has not clearly advanced much, treat it as nearby conversation context, not proof that the player left and returned.
 
-Return a tool call only.
+Return tool calls only when an environment action is needed. If no action is needed, settle the current turn.
 `,
 		r.renderMemories(agentContext.RecentMemories, currentGameTime(agentContext)),
 		renderAgentDescriptor(agentContext.AgentDescriptor),

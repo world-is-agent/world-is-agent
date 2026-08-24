@@ -917,6 +917,50 @@ adapters/stardew/src/*
 
 # 6. 开发步骤
 
+## 6.0 开发里程碑与提交节奏
+
+Phase5 按可独立验收的开发块推进。每个开发块只引入当前块需要的架构变化，验收通过后再进入下一块。
+
+| 里程碑 | 覆盖步骤 | 目标 | 验收标准 |
+| --- | --- | --- | --- |
+| M1：Protocol + Adapter | Step 1 | Protocol 显式携带 definition binding 与 capability concurrency metadata，Stardew adapter 填充对应字段 | protocol static / generation check 通过；`go test ./protocol/gen/go/...` 通过；Stardew ProtocolMapper 测试与 adapter build 通过 |
+| M2：Model Contract Migration | Step 2 | Runtime model contract 从单 ToolCall 迁移到 ModelDecision，ToolCall arguments 改为 provider-neutral map | provider.go、deepseek/openai/fake provider、factory 与旧调用点迁移完成；model / llm / tool / context / agent 相关测试通过 |
+| M3：Tool Registry Metadata | Step 3 | Registry 保存 Tool kind 与 concurrency metadata，并保持 Available() 稳定排序 | `go test ./runtime/internal/tool` 通过 |
+| M4：Tool Scheduler | Step 4 | 同一 Step 内 ordered ToolCall batch 可按 Sequential / ParallelSafe 执行，并稳定返回 ToolResult | `go test ./runtime/internal/agent` 通过；preflight、ordering、parallel bound、failure drain 均被测试覆盖 |
+| M5：Context Transcript | Step 5 | ToolCall / ToolResult transcript 以 provider-neutral message 进入下一次 Model Request | `go test ./runtime/internal/context ./runtime/internal/model` 通过 |
+| M6：AgentLoop Multi-step | Step 6 | AgentTurn 进入 bounded step loop，支持 settle control、budget 与唯一终态 | `go test ./runtime/internal/agent` 通过 |
+| M7：Integration Hardening | Step 7-11 | 失败修正、Memory、Trace、Gateway integration 与全量回归收口 | `go test ./runtime/...`、protocol checks、Stardew adapter tests/build 全部通过 |
+
+提交边界：
+
+```text
+1. M1 单独提交，只包含 protocol 与 adapter 第一块开发。
+2. M2 单独提交，先完成 model contract migration，再进入 scheduler。
+3. M3-M6 可按风险拆成独立提交。
+4. M7 作为集成收口提交。
+```
+
+M1 首块开发范围：
+
+```text
+protocol/proto/gameagent.proto
+protocol/gen/go/*
+protocol/tests/*
+adapters/stardew/src/Runtime/ProtocolMapper.Core.cs
+adapters/stardew/src/Runtime/CapabilityCatalog.cs
+adapters/stardew/tests/ProtocolMapper.Tests/Program.cs
+```
+
+M1 不修改：
+
+```text
+runtime/internal/model
+runtime/internal/llm
+runtime/internal/agent
+runtime/internal/context
+runtime/internal/tool
+```
+
 ## Step 1：Protocol additive fields
 
 目标：

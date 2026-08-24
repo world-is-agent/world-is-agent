@@ -1,0 +1,379 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/model"
+	"gameagent/runtime/internal/tool"
+)
+
+const (
+	toolResultStatusSucceeded   = "succeeded"
+	toolResultStatusInvalid     = "invalid"
+	toolResultStatusSkipped     = "skipped"
+	toolResultStatusRejected    = "rejected"
+	toolResultStatusFailed      = "failed"
+	toolResultStatusCancelled   = "cancelled"
+	toolResultStatusInterrupted = "interrupted"
+
+	toolResultCodeActionSucceeded        = "action_succeeded"
+	toolResultCodeBatchValidationFailed  = "batch_validation_failed"
+	toolResultCodePriorGroupFailed       = "prior_group_failed"
+	toolResultCodeDuplicateToolCallID    = "duplicate_tool_call_id"
+	toolResultCodeToolNotRegistered      = "tool_not_registered"
+	toolResultCodeToolArgumentsMissing   = "tool_arguments_missing"
+	toolResultCodeActionRequestInvalid   = "action_request_invalid"
+	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
+)
+
+type toolBatchScheduler struct {
+	registry             *tool.Registry
+	maxParallelToolCalls int
+	actionTimeout        time.Duration
+}
+
+type toolBatchOutcome struct {
+	Results                []model.ToolResult
+	HasModelVisibleFailure bool
+}
+
+type plannedToolCall struct {
+	index   int
+	call    model.ToolCall
+	entry   tool.Entry
+	request *protocolv1alpha2.ActionRequest
+}
+
+type parallelExecutionResult struct {
+	item   plannedToolCall
+	result model.ToolResult
+	err    error
+}
+
+func (s toolBatchScheduler) Run(
+	ctx context.Context,
+	env Environment,
+	worldID string,
+	entityID string,
+	calls []model.ToolCall,
+) (toolBatchOutcome, error) {
+	plan, validationResults, validationFailed := s.preflight(worldID, entityID, calls)
+	if validationFailed {
+		return toolBatchOutcome{
+			Results:                validationResults,
+			HasModelVisibleFailure: true,
+		}, nil
+	}
+
+	results := make([]model.ToolResult, len(calls))
+	for i := 0; i < len(plan); {
+		if plan[i].entry.Concurrency == tool.ConcurrencyParallelSafe {
+			end := i + 1
+			for end < len(plan) && plan[end].entry.Concurrency == tool.ConcurrencyParallelSafe {
+				end++
+			}
+			failed, err := s.runParallelGroup(ctx, env, plan[i:end], results)
+			if err != nil {
+				return toolBatchOutcome{Results: results}, err
+			}
+			if failed {
+				fillPriorGroupSkipped(results, plan[end:])
+				return toolBatchOutcome{
+					Results:                results,
+					HasModelVisibleFailure: true,
+				}, nil
+			}
+			i = end
+			continue
+		}
+
+		result, err := s.runOne(ctx, env, plan[i])
+		if err != nil {
+			return toolBatchOutcome{Results: results}, err
+		}
+		results[plan[i].index] = result
+		if result.Status != toolResultStatusSucceeded {
+			fillPriorGroupSkipped(results, plan[i+1:])
+			return toolBatchOutcome{
+				Results:                results,
+				HasModelVisibleFailure: true,
+			}, nil
+		}
+		i++
+	}
+
+	return toolBatchOutcome{Results: results}, nil
+}
+
+func (s toolBatchScheduler) preflight(
+	worldID string,
+	entityID string,
+	calls []model.ToolCall,
+) ([]plannedToolCall, []model.ToolResult, bool) {
+	duplicateIDs := duplicateToolCallIDs(calls)
+	results := make([]model.ToolResult, len(calls))
+	invalid := make([]bool, len(calls))
+	plan := make([]plannedToolCall, 0, len(calls))
+	hasFailure := false
+
+	for i, call := range calls {
+		if duplicateIDs[strings.TrimSpace(call.ID)] {
+			results[i] = invalidToolResult(call, toolResultCodeDuplicateToolCallID, "duplicate tool call id")
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+
+		entry, ok := s.lookup(call.Name)
+		if !ok {
+			results[i] = invalidToolResult(call, toolResultCodeToolNotRegistered, fmt.Sprintf("tool %q is not registered", call.Name))
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+		if call.Arguments == nil {
+			results[i] = invalidToolResult(call, toolResultCodeToolArgumentsMissing, "tool arguments are missing")
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+
+		actionRequest, err := tool.BuildActionRequest(worldID, entityID, call)
+		if err != nil {
+			results[i] = invalidToolResult(call, toolResultCodeActionRequestInvalid, err.Error())
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+
+		plan = append(plan, plannedToolCall{
+			index:   i,
+			call:    call,
+			entry:   entry,
+			request: actionRequest,
+		})
+	}
+
+	if hasFailure {
+		for i, call := range calls {
+			if invalid[i] {
+				continue
+			}
+			results[i] = skippedToolResult(call, toolResultCodeBatchValidationFailed, "batch validation failed")
+		}
+		return nil, results, true
+	}
+
+	return plan, nil, false
+}
+
+func (s toolBatchScheduler) lookup(name string) (tool.Entry, bool) {
+	if s.registry == nil {
+		return tool.Entry{}, false
+	}
+	return s.registry.Lookup(name)
+}
+
+func (s toolBatchScheduler) runParallelGroup(
+	ctx context.Context,
+	env Environment,
+	group []plannedToolCall,
+	results []model.ToolResult,
+) (bool, error) {
+	groupCtx, cancelGroup := context.WithCancel(ctx)
+	defer cancelGroup()
+
+	limit := s.maxParallelToolCalls
+	if limit <= 0 {
+		limit = 1
+	}
+
+	resultCh := make(chan parallelExecutionResult, len(group))
+	active := 0
+	next := 0
+	launchingStopped := false
+
+	launch := func(item plannedToolCall) {
+		active++
+		go func() {
+			result, err := s.runOne(groupCtx, env, item)
+			resultCh <- parallelExecutionResult{
+				item:   item,
+				result: result,
+				err:    err,
+			}
+		}()
+	}
+
+	for active < limit && next < len(group) {
+		launch(group[next])
+		next++
+	}
+
+	var firstErr error
+	modelVisibleFailure := false
+	for active > 0 {
+		executed := <-resultCh
+		active--
+
+		if executed.err != nil {
+			firstErr = preferTechnicalError(firstErr, executed.err)
+			launchingStopped = true
+			cancelGroup()
+		} else {
+			results[executed.item.index] = executed.result
+			if executed.result.Status != toolResultStatusSucceeded {
+				modelVisibleFailure = true
+			}
+		}
+
+		for !launchingStopped && active < limit && next < len(group) {
+			launch(group[next])
+			next++
+		}
+	}
+
+	if firstErr != nil {
+		return false, firstErr
+	}
+	return modelVisibleFailure, nil
+}
+
+func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, error) {
+	if env == nil {
+		return model.ToolResult{}, errors.New("environment is nil")
+	}
+
+	actionCtx := ctx
+	cancel := func() {}
+	if s.actionTimeout > 0 {
+		actionCtx, cancel = context.WithTimeout(ctx, s.actionTimeout)
+	}
+	defer cancel()
+
+	actionResult, err := env.SubmitAction(actionCtx, item.request)
+	if err != nil {
+		return model.ToolResult{}, err
+	}
+	if actionResult == nil {
+		return model.ToolResult{}, errors.New("action result is nil")
+	}
+
+	return toolResultFromActionResult(item.call, actionResult)
+}
+
+func toolResultFromActionResult(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult) (model.ToolResult, error) {
+	switch actionResult.GetStatus() {
+	case protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED:
+		return model.ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Status:     toolResultStatusSucceeded,
+			Code:       toolResultCodeActionSucceeded,
+			Output:     actionResultOutput(actionResult),
+		}, nil
+	case protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED:
+		return terminalActionToolResult(call, actionResult, toolResultStatusRejected), nil
+	case protocolv1alpha2.ActionStatus_ACTION_STATUS_FAILED:
+		return terminalActionToolResult(call, actionResult, toolResultStatusFailed), nil
+	case protocolv1alpha2.ActionStatus_ACTION_STATUS_CANCELLED:
+		return terminalActionToolResult(call, actionResult, toolResultStatusCancelled), nil
+	case protocolv1alpha2.ActionStatus_ACTION_STATUS_INTERRUPTED:
+		return terminalActionToolResult(call, actionResult, toolResultStatusInterrupted), nil
+	default:
+		return model.ToolResult{}, fmt.Errorf("%s: %s", toolResultCodeNonTerminalActionState, actionResult.GetStatus().String())
+	}
+}
+
+func terminalActionToolResult(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult, status string) model.ToolResult {
+	code := strings.TrimSpace(actionResult.GetError().GetCode())
+	if code == "" {
+		code = "action_" + status
+	}
+	return model.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     status,
+		Code:       code,
+		Message:    truncateMessage(actionResult.GetError().GetMessage(), 120),
+		Output:     actionResultOutput(actionResult),
+	}
+}
+
+func actionResultOutput(actionResult *protocolv1alpha2.ActionResult) map[string]any {
+	if actionResult.GetOutput() == nil {
+		return nil
+	}
+	return actionResult.GetOutput().AsMap()
+}
+
+func fillPriorGroupSkipped(results []model.ToolResult, plan []plannedToolCall) {
+	for _, item := range plan {
+		results[item.index] = skippedToolResult(item.call, toolResultCodePriorGroupFailed, "prior group failed")
+	}
+}
+
+func invalidToolResult(call model.ToolCall, code string, message string) model.ToolResult {
+	return model.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     toolResultStatusInvalid,
+		Code:       code,
+		Message:    truncateMessage(message, 120),
+	}
+}
+
+func skippedToolResult(call model.ToolCall, code string, message string) model.ToolResult {
+	return model.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Status:     toolResultStatusSkipped,
+		Code:       code,
+		Message:    truncateMessage(message, 120),
+	}
+}
+
+func duplicateToolCallIDs(calls []model.ToolCall) map[string]bool {
+	counts := make(map[string]int, len(calls))
+	for _, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
+			continue
+		}
+		counts[id]++
+	}
+
+	duplicates := make(map[string]bool)
+	for id, count := range counts {
+		if count > 1 {
+			duplicates[id] = true
+		}
+	}
+	return duplicates
+}
+
+func preferTechnicalError(current error, candidate error) error {
+	if current == nil {
+		return candidate
+	}
+	if errors.Is(current, context.Canceled) && !errors.Is(candidate, context.Canceled) {
+		return candidate
+	}
+	return current
+}
+
+func truncateMessage(message string, maxRunes int) string {
+	message = strings.TrimSpace(message)
+	if maxRunes <= 0 || utf8.RuneCountInString(message) <= maxRunes {
+		return message
+	}
+
+	runes := []rune(message)
+	return string(runes[:maxRunes])
+}

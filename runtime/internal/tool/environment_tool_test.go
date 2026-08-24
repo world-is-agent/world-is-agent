@@ -23,3 +23,14 @@ func TestBuildActionRequestConvertsToolCallArgumentMapToProtocolStruct(t *testin
 		t.Fatalf("text = %q, want hello", text)
 	}
 }
+
+func TestBuildActionRequestRejectsNonStructSafeArgumentsBeforeExecution(t *testing.T) {
+	_, err := BuildActionRequest("world:test", "npc:Linus", model.ToolCall{
+		ID:        "call_1",
+		Name:      "speak",
+		Arguments: map[string]any{"bad": make(chan int)},
+	})
+	if err == nil {
+		t.Fatal("BuildActionRequest returned nil error, want struct conversion failure")
+	}
+}

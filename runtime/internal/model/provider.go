@@ -77,6 +77,8 @@ type ToolCall struct {
 type ToolResult struct {
 	ToolCallID string
 	Name       string
+	Status     string
+	Code       string
+	Message    string
 	Output     map[string]any
-	Error      string
 }

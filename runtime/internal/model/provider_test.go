@@ -61,7 +61,7 @@ func TestModelMessageSupportsToolCallsAndToolResults(t *testing.T) {
 			{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "hello"}},
 		},
 		ToolResults: []model.ToolResult{
-			{ToolCallID: "call_1", Name: "speak", Output: map[string]any{"status": "ok"}},
+			{ToolCallID: "call_1", Name: "speak", Status: "succeeded", Code: "action_succeeded", Output: map[string]any{"visible": "ok"}},
 		},
 	}
 
@@ -70,6 +70,27 @@ func TestModelMessageSupportsToolCallsAndToolResults(t *testing.T) {
 	}
 	if msg.ToolResults[0].ToolCallID != msg.ToolCalls[0].ID {
 		t.Fatalf("tool result id = %q, want %q", msg.ToolResults[0].ToolCallID, msg.ToolCalls[0].ID)
+	}
+}
+
+func TestToolResultSupportsNormalizedStatusCodeAndMessage(t *testing.T) {
+	result := model.ToolResult{
+		ToolCallID: "call_1",
+		Name:       "speak",
+		Status:     "invalid",
+		Code:       "tool_arguments_missing",
+		Message:    "tool arguments are missing",
+		Output:     map[string]any{"visible": "value"},
+	}
+
+	if result.Status != "invalid" {
+		t.Fatalf("Status = %q, want invalid", result.Status)
+	}
+	if result.Code != "tool_arguments_missing" {
+		t.Fatalf("Code = %q, want tool_arguments_missing", result.Code)
+	}
+	if result.Message != "tool arguments are missing" {
+		t.Fatalf("Message = %q, want tool arguments are missing", result.Message)
 	}
 }
 

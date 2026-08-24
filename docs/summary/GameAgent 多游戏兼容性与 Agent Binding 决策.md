@@ -2,7 +2,7 @@
 
 > **Status:** Accepted Architecture Decision
 > **Date:** 2026-08-22
-> **Applies To:** Phase5 前置架构语义；不要求立即修改 Protocol / Runtime 代码
+> **Applies To:** Phase5 前置架构语义；Phase5 Implementation Baseline 接受最小 additive Protocol 承载
 > **Related:** Runtime Architecture v0.3, Context Architecture v0.2, Roadmap v0.4
 
 ---
@@ -142,7 +142,7 @@ static binding / config
 current Observation-derived facts
 ```
 
-当前 MVP 不要求新增独立 descriptor protocol message。只要 Context Source 能明确区分 `entity_id`、`definition_id` 和 instance facts，即可满足本 ADR。
+当前 MVP 不要求新增独立 descriptor protocol message。Phase5 使用 `EntityRef.definition_id` 作为 `definition_id` 的唯一协议承载；Observation 不拥有 Agent Definition binding。
 
 ## 2.4 Agent Binding
 
@@ -181,7 +181,7 @@ Adapter / Environment 可以按需提供：
 
 ```text
 entity_id
-definition_id
+definition_id via EntityRef.definition_id
 display_name
 entity_type
 traits / attributes / metadata
@@ -370,11 +370,27 @@ Agent Binding / eligibility
 Phase5 不要求立即实现：
 
 ```text
-AgentBinding runtime package
+完整 AgentBinding runtime package
 AgentDescriptor protocol message
-definition_id proto field
 Agent Definition storage
 第二个真实 Adapter
+ActionBatchRequest / ActionBatchResult
+```
+
+Phase5 技术方案已接受以下最小 additive Protocol 更新：
+
+```text
+EntityRef.definition_id
+Capability.concurrency_mode
+```
+
+Phase5 不新增：
+
+```text
+Observation.definition_id
+target_definition_id
+AgentDescriptor protocol message
+ActionBatchRequest / ActionBatchResult
 ```
 
 但 Phase5 的技术方案和代码不得新增依赖以下假设：
@@ -390,7 +406,7 @@ AgentLoop / Gateway core 写死 game-specific event_type
 
 Phase5 Entry Gate MUST include a minimal non-Stardew fixture / contract test.
 
-该 fixture 不需要实现第二个真实 Adapter，也不需要新增 Protocol 字段。
+该 fixture 不需要实现第二个真实 Adapter，也不需要新增 game-specific Protocol 字段。
 
 它只需要证明一个非 Stardew 语义的 trigger 可以通过 Runtime core：
 
@@ -398,6 +414,7 @@ Phase5 Entry Gate MUST include a minimal non-Stardew fixture / contract test.
 game_id = test-survival
 event_type = damage_received
 entity_id = creature:uuid-1
+EntityRef.definition_id = creature/generic
 observation.state = game-specific data
 capability = test capability
 ```
@@ -412,20 +429,20 @@ runtime/internal/model
 runtime/internal/session
 ```
 
-如果 Phase5 或后续 FakeGame contract test 证明需要 protocol 字段，再单独设计 `v1alpha3` 或 additive extension。
+后续若再新增 Protocol 字段，必须重新证明它是 Runtime 与多个游戏 Environment 都需要理解的通用 contract。
 
 ---
 
-# 7. 本次不修改
+# 7. Phase5 同步裁决
 
-本 ADR 不修改：
+Phase5 技术方案对本 ADR 做最小落地：
 
 ```text
-protocol/proto/gameagent.proto
-AgentSessionKey
-MemoryStore key
-Phase4 Runtime code
-Stardew Adapter behavior
+protocol/proto/gameagent.proto additive 更新 EntityRef.definition_id 与 Capability.concurrency_mode
+AgentSessionKey 不变
+MemoryStore key 不变
+Agent Definition storage 不进入 Phase5
+Stardew Adapter 在 mapper 中填充 EntityRef.definition_id = entity_id
 ```
 
 Phase4 的 Memory scope 仍然成立：
@@ -459,6 +476,8 @@ Agent State / Memory = game_id + world_id + entity_id
 Trigger admission is not hardcoded to one game-specific event_type.
 
 Available Tools = current AgentTurn dynamic capability view.
+
+definition_id protocol source = EntityRef.definition_id.
 
 Adapter provides facts.
 

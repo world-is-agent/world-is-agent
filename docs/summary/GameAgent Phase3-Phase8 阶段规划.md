@@ -106,7 +106,7 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | Phase3 | Agent Identity 与 Adapter 泛化 | 同一实体具有稳定身份；Stardew Adapter 不再局限于单 NPC |
 | Phase4 | Context 与短期 Memory | Agent 可以在多个 Turn 之间保留隔离的上下文，并形成可复用确定性测试底座 |
 | Phase5 Entry Gate | Multi-game Compatibility / Agent Binding | Phase5 开工前先冻结 Entity、Agent Definition、Agent Instance 的长期语义 |
-| Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个 Model → Tool / Result Step |
+| Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个有界 AgentStep；单 Step 可包含 ordered ToolCall batch |
 | Phase6 | 异步 Action 与 Turn Resume | 长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
 | Phase8 | Evaluation 与产品化 | 系统可重复评估、定位、交付，并支持新 Adapter 接入 |
@@ -313,16 +313,16 @@ Trigger admission is not hardcoded to one game-specific event_type
 本 Gate 不要求立即实现：
 
 ```text
-AgentBinding runtime package
+完整 AgentBinding runtime package
 AgentDescriptor protocol message
-definition_id proto field
 第二个真实 Adapter
 Agent Definition storage
+ActionBatchRequest / ActionBatchResult
 ```
 
-如果 Phase5 技术方案或 FakeGame contract test 证明需要新增协议字段，应单独形成 Protocol v1alpha3 / additive extension 决策。
+Phase5 技术方案已接受最小 additive Protocol 更新：`EntityRef.definition_id` 与 `Capability.concurrency_mode`。`definition_id` 的协议来源是 `EntityRef.definition_id`，不新增 `Observation.definition_id` 或 `target_definition_id`。
 
-Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract test。该测试不要求真实第二 Adapter，也不要求新增 protocol 字段；它只需要证明非 Stardew 语义的 trigger 可以通过 Runtime core，并且不需要为了该 fixture 修改 `runtime/internal/{agent,context,tool,model,session}` 的 game-specific 分支。
+Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract test。该测试不要求真实第二 Adapter，也不要求新增 game-specific protocol 字段；它只需要证明非 Stardew 语义的 trigger 可以通过 Runtime core，并且不需要为了该 fixture 修改 `runtime/internal/{agent,context,tool,model,session}` 的 game-specific 分支。
 
 ## 完成条件
 
@@ -351,6 +351,11 @@ Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract tes
 
 ```text
 1 Turn = N AgentSteps
+
+1 AgentStep = 1 ModelDecision
+            + 0..N ToolCalls
+            + 0..N ToolResults
+            + optional AgentTurn Control
 ```
 
 同时保持明确的最大步数、总 timeout、失败语义和 Trace 边界。
@@ -358,11 +363,14 @@ Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract tes
 ## 主要范围
 
 - 正式引入 AgentStep 概念；
-- Tool / Action Result 可以进入下一次 Model Request；
+- Runtime model contract 从单 `Response.ToolCall` 迁移到 `ModelDecision`；
+- 一个 Step 可以包含 ordered ToolCall batch；
+- ToolResult transcript 可以进入下一次 Model Request；
 - 设置 `max_steps` 和 Turn 全局上限；
-- 每个 Step 具有顺序、ToolCall 和结果观测；
+- 每个 Step 具有顺序、ToolCalls 和结果观测；
+- Tool Scheduler 支持 `Sequential / ParallelSafe`；
 - Tool 失败可以在有限范围内由模型修正；
-- 明确 AgentTurn 的正常结束语义（settle）：模型不再调用 Tool 时，Turn 应在未达到 `max_steps` 时正常收敛，而不是只能被 `max_steps` / timeout 被动终止；具体结束信号形式由 Phase5 技术方案确定；
+- 明确 AgentTurn 的正常结束语义（settle）：`settle` 是 AgentTurn control，不是 Environment Tool；
 - 一个 Turn 仍然只有一个最终 terminal result。
 
 本阶段优先只使用短时、可快速返回结果的 Tool，不同时引入长时间异步 Action。
@@ -375,6 +383,7 @@ Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract tes
 Sub-agent / Supervisor
 长时间 move_to suspend / resume
 跨进程 continuation recovery
+ActionBatchRequest / ActionBatchResult
 ```
 
 ## 完成条件
@@ -382,8 +391,9 @@ Sub-agent / Supervisor
 - 一个 AgentTurn 可以稳定执行至少两个 AgentSteps；
 - 每个 Step 都能在同一 `turn_id` 下被追踪；
 - AgentTurn 可以在未达到 `max_steps` 时通过正常结束语义收敛为唯一终态，而不是只能依赖 `max_steps` / timeout 被动终止；
+- 单 Step 可以执行多个 ToolCall，并按原始 ToolCall order 返回 ToolResult；
 - 超过最大步数时 Turn 明确收敛；
-- Tool Result 能以 provider-neutral 方式进入下一次模型请求；
+- ToolResult 能以 provider-neutral 方式进入下一次模型请求；
 - 单步模式仍保持兼容。
 
 ## 阶段结束 Review

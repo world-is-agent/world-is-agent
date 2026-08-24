@@ -642,9 +642,9 @@ Agent Binding 负责回答：
 它有哪些 instance descriptor facts？
 ```
 
-Runtime MAY 未来以独立 Resolver / Store 实现 Agent Binding，但 v0.3 只冻结语义，不要求创建新的 package 或 protocol message。
+Runtime MAY 未来以独立 Resolver / Store 实现 Agent Binding。Phase5 Implementation Baseline 只创建最小 AgentBinding / AgentDefinition 概念，并使用 `EntityRef.definition_id` 作为 `definition_id` 的唯一协议承载。
 
-Adapter SHOULD 提供事实，例如 `entity_id`、`definition_id`、`display_name`、traits、attributes 和当前状态。
+Adapter SHOULD 提供事实，例如 `entity_id`、`EntityRef.definition_id`、`display_name`、traits、attributes 和当前状态。
 
 Adapter MUST NOT 通过 Agent Binding 直接接管完整 Agent prompt；Runtime / Context Sources 负责根据 Definition、Descriptor、State、Memory、Observation 和 Tools 组合模型上下文。
 
@@ -668,21 +668,13 @@ turn_completed
 turn_failed
 ```
 
-因此 v0.3 正式统一使用：
+因此本文档统一使用：
 
 ```text
 AgentTurn
 ```
 
 作为长期术语。
-
-旧设计中的：
-
-```text
-AgentRun
-```
-
-不再作为新的核心术语继续扩展。
 
 当前 Phase2：
 
@@ -720,28 +712,32 @@ Model
 
 AgentStep 表示：
 
-> **一个 AgentTurn 内的一次 Model → Tool / Result 推进。**
+> **一个 AgentTurn 内的一次 ModelDecision 推进。**
 
-当前：
+Phase5 的 AgentStep 形态是：
 
 ```text
-1 Turn = 1 Step
+AgentStep = 1 ModelDecision
+          + 0..N ToolCalls
+          + 0..N ToolResults
+          + optional AgentTurn Control
 ```
 
-因此 v0.3 只冻结 AgentStep 的概念，不要求当前代码创建：
+AgentStep 是 Runtime 内部概念，不进入 Environment Protocol。Phase5 不要求创建：
 
 ```text
-Step state machine
 StepStore
-step.go
+AgentStep protocol message
+独立 step state machine package
 ```
 
-未来 Multi-step 实现 MAY 引入：
+Phase5 AgentLoop MUST 维护：
 
 ```text
 step_index
-tool_call_id
-attempt
+tool_call_id per ToolCall
+intra-turn ToolResult transcript
+bounded step budget
 ```
 
 必须保持：
@@ -1275,7 +1271,7 @@ NPC.doEmote mapping
 Stardew movement semantics
 ```
 
-当前已经验证的链路：
+Environment Tool 的通用链路：
 
 ```text
 Adapter Capability
@@ -1286,11 +1282,17 @@ model.ToolDefinition
     ↓
 Model
     ↓
-model.ToolCall
+ModelDecision
     ↓
-ActionRequest
+ordered ToolCall batch
+    ↓
+Tool Scheduler
+    ↓
+ActionRequest(s)
     ↓
 Adapter
+    ↓
+ToolResult transcript
 ```
 
 新增一个简单 Environment Tool SHOULD NOT 要求修改：
@@ -1311,8 +1313,10 @@ Runtime 通用层 SHOULD 负责：
 Capability envelope 可解析
 Capability name 合法
 Tool 已注册
+ToolCall ID 在当前 batch / turn 内唯一
 ToolCall arguments 非 nil
 arguments 可被 Runtime / Protocol 动态结构承载
+ToolCall arguments 在 Protocol 边界转换为 google.protobuf.Struct
 ```
 
 Runtime 通用 Environment Tool 层 SHOULD NOT 负责：
@@ -2196,10 +2200,28 @@ LLM Provider
 Agent Memory
 Persona implementation
 Planner
+ModelDecision
 Model ToolCall raw response
+ToolResult transcript
 AgentStep internal state
 Runtime Policy internals
+settle sentinel
 Trace Recorder internals
+```
+
+Phase5 接受的通用 Environment Protocol additive 字段：
+
+```text
+EntityRef.definition_id
+Capability.concurrency_mode
+```
+
+Phase5 不把以下内容加入 Environment Protocol：
+
+```text
+Observation.definition_id
+target_definition_id
+ActionBatchRequest / ActionBatchResult
 ```
 
 新增 Protocol 概念必须回答：
@@ -2526,7 +2548,9 @@ EnvironmentSession != AgentSession
 
 AgentSession 是长期 Agent identity / state boundary
 
-1 AgentTurn 可以未来包含多个 AgentStep
+1 AgentTurn 可以包含多个有界 AgentStep
+
+1 AgentStep 可以包含 ordered ToolCall batch
 
 Event Ingress 与 TriggerDecision 应逻辑分离
 
@@ -2544,11 +2568,15 @@ Entity identity 不等于 Agent Definition
 
 Agent Definition / Archetype 使用 game_id + definition_id
 
+definition_id 的协议来源是 EntityRef.definition_id
+
 Agent Instance Descriptor / State / Memory 使用 game_id + world_id + entity_id
 
 Observation 必须保持 narrow waist，不因单个游戏字段膨胀 Protocol
 
 Available Tools 是当前 AgentTurn 的 dynamic capability view
+
+Environment Capability 可以声明 concurrency_mode
 ```
 
 这些属于：

@@ -36,11 +36,19 @@ type toolBatchScheduler struct {
 	registry             *tool.Registry
 	maxParallelToolCalls int
 	actionTimeout        time.Duration
+	onActionSubmit       func(plannedToolCall)
+	onActionResult       func(plannedToolCall, *protocolv1alpha2.ActionResult)
 }
 
 type toolBatchOutcome struct {
 	Results                []model.ToolResult
+	SuccessfulActions      []completedToolAction
 	HasModelVisibleFailure bool
+}
+
+type completedToolAction struct {
+	ToolCall     model.ToolCall
+	ActionResult *protocolv1alpha2.ActionResult
 }
 
 type plannedToolCall struct {
@@ -51,9 +59,10 @@ type plannedToolCall struct {
 }
 
 type parallelExecutionResult struct {
-	item   plannedToolCall
-	result model.ToolResult
-	err    error
+	item         plannedToolCall
+	result       model.ToolResult
+	actionResult *protocolv1alpha2.ActionResult
+	err          error
 }
 
 func (s toolBatchScheduler) Run(
@@ -72,20 +81,23 @@ func (s toolBatchScheduler) Run(
 	}
 
 	results := make([]model.ToolResult, len(calls))
+	successfulActions := make([]completedToolAction, 0, len(calls))
 	for i := 0; i < len(plan); {
 		if plan[i].entry.Concurrency == tool.ConcurrencyParallelSafe {
 			end := i + 1
 			for end < len(plan) && plan[end].entry.Concurrency == tool.ConcurrencyParallelSafe {
 				end++
 			}
-			failed, err := s.runParallelGroup(ctx, env, plan[i:end], results)
+			groupSuccessfulActions, failed, err := s.runParallelGroup(ctx, env, plan[i:end], results)
 			if err != nil {
 				return toolBatchOutcome{Results: results}, err
 			}
+			successfulActions = append(successfulActions, groupSuccessfulActions...)
 			if failed {
 				fillPriorGroupSkipped(results, plan[end:])
 				return toolBatchOutcome{
 					Results:                results,
+					SuccessfulActions:      successfulActions,
 					HasModelVisibleFailure: true,
 				}, nil
 			}
@@ -93,7 +105,7 @@ func (s toolBatchScheduler) Run(
 			continue
 		}
 
-		result, err := s.runOne(ctx, env, plan[i])
+		result, actionResult, err := s.runOne(ctx, env, plan[i])
 		if err != nil {
 			return toolBatchOutcome{Results: results}, err
 		}
@@ -102,13 +114,18 @@ func (s toolBatchScheduler) Run(
 			fillPriorGroupSkipped(results, plan[i+1:])
 			return toolBatchOutcome{
 				Results:                results,
+				SuccessfulActions:      successfulActions,
 				HasModelVisibleFailure: true,
 			}, nil
 		}
+		successfulActions = append(successfulActions, completedToolAction{
+			ToolCall:     plan[i].call,
+			ActionResult: actionResult,
+		})
 		i++
 	}
 
-	return toolBatchOutcome{Results: results}, nil
+	return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, nil
 }
 
 func (s toolBatchScheduler) preflight(
@@ -185,7 +202,7 @@ func (s toolBatchScheduler) runParallelGroup(
 	env Environment,
 	group []plannedToolCall,
 	results []model.ToolResult,
-) (bool, error) {
+) ([]completedToolAction, bool, error) {
 	groupCtx, cancelGroup := context.WithCancel(ctx)
 	defer cancelGroup()
 
@@ -202,11 +219,12 @@ func (s toolBatchScheduler) runParallelGroup(
 	launch := func(item plannedToolCall) {
 		active++
 		go func() {
-			result, err := s.runOne(groupCtx, env, item)
+			result, actionResult, err := s.runOne(groupCtx, env, item)
 			resultCh <- parallelExecutionResult{
-				item:   item,
-				result: result,
-				err:    err,
+				item:         item,
+				result:       result,
+				actionResult: actionResult,
+				err:          err,
 			}
 		}()
 	}
@@ -218,6 +236,7 @@ func (s toolBatchScheduler) runParallelGroup(
 
 	var firstErr error
 	modelVisibleFailure := false
+	successfulActionsByIndex := make(map[int]completedToolAction, len(group))
 	for active > 0 {
 		executed := <-resultCh
 		active--
@@ -230,6 +249,11 @@ func (s toolBatchScheduler) runParallelGroup(
 			results[executed.item.index] = executed.result
 			if executed.result.Status != toolResultStatusSucceeded {
 				modelVisibleFailure = true
+			} else {
+				successfulActionsByIndex[executed.item.index] = completedToolAction{
+					ToolCall:     executed.item.call,
+					ActionResult: executed.actionResult,
+				}
 			}
 		}
 
@@ -240,14 +264,20 @@ func (s toolBatchScheduler) runParallelGroup(
 	}
 
 	if firstErr != nil {
-		return false, firstErr
+		return nil, false, firstErr
 	}
-	return modelVisibleFailure, nil
+	successfulActions := make([]completedToolAction, 0, len(successfulActionsByIndex))
+	for _, item := range group {
+		if action, ok := successfulActionsByIndex[item.index]; ok {
+			successfulActions = append(successfulActions, action)
+		}
+	}
+	return successfulActions, modelVisibleFailure, nil
 }
 
-func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, error) {
+func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, *protocolv1alpha2.ActionResult, error) {
 	if env == nil {
-		return model.ToolResult{}, errors.New("environment is nil")
+		return model.ToolResult{}, nil, errors.New("environment is nil")
 	}
 
 	actionCtx := ctx
@@ -257,15 +287,23 @@ func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item pl
 	}
 	defer cancel()
 
-	actionResult, err := env.SubmitAction(actionCtx, item.request)
-	if err != nil {
-		return model.ToolResult{}, err
-	}
-	if actionResult == nil {
-		return model.ToolResult{}, errors.New("action result is nil")
+	if s.onActionSubmit != nil {
+		s.onActionSubmit(item)
 	}
 
-	return toolResultFromActionResult(item.call, actionResult)
+	actionResult, err := env.SubmitAction(actionCtx, item.request)
+	if err != nil {
+		return model.ToolResult{}, nil, err
+	}
+	if actionResult == nil {
+		return model.ToolResult{}, nil, errors.New("action result is nil")
+	}
+	if s.onActionResult != nil {
+		s.onActionResult(item, actionResult)
+	}
+
+	result, err := toolResultFromActionResult(item.call, actionResult)
+	return result, actionResult, err
 }
 
 func toolResultFromActionResult(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult) (model.ToolResult, error) {

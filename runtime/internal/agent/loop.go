@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	agentcontext "gameagent/runtime/internal/context"
 	"gameagent/runtime/internal/idgen"
@@ -41,7 +43,6 @@ type memoryProjector interface {
 
 var (
 	errInvalidModelDecision = errors.New("invalid model response")
-	errUnsupportedToolBatch = errors.New("multiple tool calls are not supported until scheduler")
 )
 
 type LoopOption func(*Loop)
@@ -93,7 +94,11 @@ func NewLoop(modelProvider model.Provider, tools *tool.Registry, recorder trace.
 		memoryProjector: memory.NewProjector(nil),
 		contextBuilder:  agentcontext.NewBuilder(),
 		contextRenderer: agentcontext.NewRenderer(agentcontext.RendererConfig{
-			MemoryContextSizeLimit: config.MemoryContextSizeLimit,
+			MemoryContextSizeLimit:        config.MemoryContextSizeLimit,
+			MaxToolResultOutputBytes:      config.MaxToolResultOutputBytes,
+			MaxToolResultOutputDepth:      config.MaxToolResultOutputDepth,
+			MaxToolResultOutputFields:     config.MaxToolResultOutputFields,
+			MaxToolResultOutputArrayItems: config.MaxToolResultOutputArrayItems,
 		}),
 	}
 	for _, option := range options {
@@ -163,6 +168,161 @@ func (l *Loop) HandleEvent(
 	turnTracer.Emit(trace.EventObservationReceived, trace.EventData{})
 
 	recentMemories := l.loadRecentMemories(ctx, turnTracer, key)
+	return l.runBoundedSteps(ctx, env, key, event, obs, recentMemories, turnID, turnTracer)
+}
+
+func (l *Loop) runBoundedSteps(
+	ctx context.Context,
+	env Environment,
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
+	obs *protocolv1alpha2.Observation,
+	recentMemories []memory.Record,
+	turnID string,
+	turnTracer trace.TurnTracer,
+) error {
+	transcript := make([]model.Message, 0)
+	successfulActions := make([]completedToolAction, 0)
+	totalToolCalls := 0
+
+	for stepIndex := 1; stepIndex <= l.config.MaxSteps; stepIndex++ {
+		req, err := l.buildModelRequest(key, event, obs, recentMemories, transcript)
+		if err != nil {
+			turnTracer.Fail("context", contextFailureReason(err), err, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex},
+			})
+			return err
+		}
+
+		turnTracer.Emit(trace.EventModelRequestStarted, trace.EventData{
+			Fields: trace.Fields{
+				"tool_count":  len(req.Tools),
+				"step_index":  stepIndex,
+				"transcript":  len(transcript),
+				"max_steps":   l.config.MaxSteps,
+				"turn_budget": l.config.MaxToolCallsPerTurn,
+			},
+		})
+		modelCtx, cancelLLM := context.WithTimeout(ctx, l.config.LLMTimeout)
+		rep, err := l.model.Generate(modelCtx, req)
+		cancelLLM()
+		if err != nil {
+			reason := "provider_failed"
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "provider_timeout"
+			}
+			turnTracer.Fail("model", reason, err, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex},
+			})
+			return err
+		}
+
+		turnTracer.Emit(trace.EventModelResponseReceived, trace.EventData{
+			Fields: trace.Fields{"step_index": stepIndex},
+		})
+
+		decision := rep.Decision
+		if err := validateControlDirective(decision.Control); err != nil {
+			turnTracer.Fail("model", "invalid_model_response", err, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex},
+			})
+			return err
+		}
+
+		calls := decision.ToolCalls
+		if len(calls) == 0 {
+			if decision.Control.Kind == model.ControlSettle {
+				l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions)
+				turnTracer.Complete(lastCompletedActionEventData(successfulActions))
+				return nil
+			}
+			err := fmt.Errorf("%w: continue control requires tool calls", errInvalidModelDecision)
+			turnTracer.Fail("model", "invalid_model_response", err, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex},
+			})
+			return err
+		}
+
+		if len(calls) > l.config.MaxToolCallsPerStep {
+			err := fmt.Errorf("max tool calls per step exceeded: got %d, max %d", len(calls), l.config.MaxToolCallsPerStep)
+			turnTracer.Fail("model", "max_tool_calls_per_step_exceeded", err, trace.EventData{
+				Fields: trace.Fields{
+					"step_index":      stepIndex,
+					"tool_call_count": len(calls),
+				},
+			})
+			return err
+		}
+		if totalToolCalls+len(calls) > l.config.MaxToolCallsPerTurn {
+			err := fmt.Errorf("max tool calls per turn exceeded: got %d, max %d", totalToolCalls+len(calls), l.config.MaxToolCallsPerTurn)
+			turnTracer.Fail("step", "max_tool_calls_per_turn_exceeded", err, trace.EventData{
+				Fields: trace.Fields{
+					"step_index":       stepIndex,
+					"tool_call_count":  len(calls),
+					"total_tool_calls": totalToolCalls + len(calls),
+				},
+			})
+			return err
+		}
+		totalToolCalls += len(calls)
+
+		transcript = append(transcript, model.Message{
+			Role:      model.RoleAssistant,
+			ToolCalls: copyToolCallsForTranscript(calls),
+		})
+		for _, call := range calls {
+			turnTracer.Emit(trace.EventToolCallSelected, trace.EventData{
+				Tool: call.Name,
+				Fields: trace.Fields{
+					"step_index":   stepIndex,
+					"tool_call_id": call.ID,
+				},
+			})
+		}
+
+		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex)
+		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
+		if err != nil {
+			reason := actionFailureReason(err)
+			turnTracer.Fail("action", reason, err, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex},
+			})
+			return err
+		}
+
+		transcript = append(transcript, model.Message{
+			Role:        model.RoleTool,
+			ToolResults: copyToolResultsForTranscript(outcome.Results),
+		})
+		successfulActions = append(successfulActions, outcome.SuccessfulActions...)
+
+		if outcome.HasModelVisibleFailure {
+			continue
+		}
+		if decision.Control.Kind == model.ControlSettle {
+			l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions)
+			turnTracer.Complete(lastCompletedActionEventData(successfulActions))
+			return nil
+		}
+	}
+
+	err := fmt.Errorf("max steps exceeded: max %d", l.config.MaxSteps)
+	turnTracer.Fail("step", "max_steps_exceeded", err, trace.EventData{
+		Fields: trace.Fields{
+			"max_steps":        l.config.MaxSteps,
+			"total_tool_calls": totalToolCalls,
+		},
+	})
+	return err
+}
+
+func (l *Loop) buildModelRequest(
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
+	obs *protocolv1alpha2.Observation,
+	recentMemories []memory.Record,
+	transcript []model.Message,
+) (model.Request, error) {
 	agentCtx, err := l.contextBuilder.Build(agentcontext.BuildInput{
 		SessionKey:     key,
 		RuntimePolicy:  BuildSystemPrompt(l.config.Prompt),
@@ -170,141 +330,107 @@ func (l *Loop) HandleEvent(
 		Observation:    obs,
 		RecentMemories: recentMemories,
 		Tools:          l.tools.Available(),
+		Transcript:     transcript,
 	})
 	if err != nil {
-		turnTracer.Fail("context", "context_build_failed", err, trace.EventData{})
-		return err
+		return model.Request{}, err
 	}
+
 	req, err := l.contextRenderer.Render(agentCtx)
 	if err != nil {
-		turnTracer.Fail("context", "context_render_failed", err, trace.EventData{})
-		return err
+		return model.Request{}, err
 	}
-	turnTracer.Emit(trace.EventModelRequestStarted, trace.EventData{
-		Fields: trace.Fields{
-			"tool_count": len(req.Tools),
-		},
-	})
-	modelCtx, cancelLLM := context.WithTimeout(ctx, l.config.LLMTimeout)
-	rep, err := l.model.Generate(modelCtx, req)
-	cancelLLM()
-	if err != nil {
-		reason := "provider_failed"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "provider_timeout"
-		}
-		turnTracer.Fail("model", reason, err, trace.EventData{})
-		return err
-	}
-
-	turnTracer.Emit(trace.EventModelResponseReceived, trace.EventData{})
-
-	toolCall, shouldAct, err := selectExecutableToolCall(rep.Decision)
-	if err != nil {
-		stage := "model"
-		reason := "invalid_model_response"
-		if errors.Is(err, errUnsupportedToolBatch) {
-			stage = "tool"
-			reason = "tool_batch_unsupported"
-		}
-		turnTracer.Fail(stage, reason, err, trace.EventData{})
-		return err
-	}
-
-	if !shouldAct {
-		turnTracer.Complete(trace.EventData{})
-		return nil
-	}
-
-	// 当前 Loop 只执行单 ToolCall；Loop 只做统一校验和协议转换。
-	if err := l.tools.ValidateToolCall(key.EntityID, toolCall); err != nil {
-		turnTracer.Fail("tool", "tool_call_invalid", err, trace.EventData{
-			Tool: toolCall.Name,
-		})
-		return err
-	}
-	turnTracer.Emit(trace.EventToolCallSelected, trace.EventData{
-		Tool: toolCall.Name,
-	})
-
-	actReq, err := tool.BuildActionRequest(key.WorldID, key.EntityID, toolCall)
-	if err != nil {
-		turnTracer.Fail("action", "action_request_build_failed", err, trace.EventData{
-			Tool: toolCall.Name,
-		})
-		return err
-	}
-
-	turnTracer.Emit(trace.EventActionSubmitStarted, trace.EventData{
-		ActionID: actReq.ActionId,
-		Tool:     actReq.Capability,
-	})
-
-	actionCtx, cancelAction := context.WithTimeout(ctx, l.config.ActionTimeout)
-	actRep, err := env.SubmitAction(actionCtx, actReq)
-	cancelAction()
-
-	if err != nil {
-		reason := "submit_action_failed"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "action_timeout"
-		}
-		turnTracer.Fail("action", reason, err, trace.EventData{
-			ActionID: actReq.ActionId,
-			Tool:     actReq.Capability,
-		})
-		return err
-	}
-
-	turnTracer.Emit(trace.EventActionResultReceived, trace.EventData{
-		ActionID: actRep.ActionId,
-		Tool:     actReq.Capability,
-		Fields: trace.Fields{
-			"action_status": actRep.Status.String(),
-		},
-	})
-
-	if actRep.Status != protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED {
-		turnTracer.Fail("action", "action_result_failed", nil, trace.EventData{
-			ActionID: actRep.ActionId,
-			Tool:     actReq.Capability,
-			Fields: trace.Fields{
-				"action_status": actRep.Status.String(),
-			},
-		})
-		// ActionResult 失败是 Adapter 返回的业务结果；trace 用 reason/fields 表达，不伪造底层 error。
-		// MVP0 仍返回 error，让 gateway 保留一条可见日志，方便联调时排查。
-		return fmt.Errorf("action result failed: %s", actRep.Status.String())
-	}
-
-	l.updateMemory(ctx, turnTracer, key, turnID, event, toolCall, actRep)
-	turnTracer.Complete(trace.EventData{
-		ActionID: actRep.ActionId,
-		Tool:     actReq.Capability,
-	})
-
-	return nil
+	return req, nil
 }
 
-func selectExecutableToolCall(decision model.ModelDecision) (model.ToolCall, bool, error) {
-	switch decision.Control.Kind {
-	case model.ControlSettle:
-	case model.ControlContinue:
-	default:
-		return model.ToolCall{}, false, fmt.Errorf("%w: control is unspecified", errInvalidModelDecision)
+func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int) toolBatchScheduler {
+	return toolBatchScheduler{
+		registry:             l.tools,
+		maxParallelToolCalls: l.config.MaxParallelToolCalls,
+		actionTimeout:        l.config.ActionTimeout,
+		onActionSubmit: func(item plannedToolCall) {
+			turnTracer.Emit(trace.EventActionSubmitStarted, trace.EventData{
+				ActionID: item.request.GetActionId(),
+				Tool:     item.request.GetCapability(),
+				Fields: trace.Fields{
+					"step_index":   stepIndex,
+					"tool_call_id": item.call.ID,
+				},
+			})
+		},
+		onActionResult: func(item plannedToolCall, result *protocolv1alpha2.ActionResult) {
+			turnTracer.Emit(trace.EventActionResultReceived, trace.EventData{
+				ActionID: result.GetActionId(),
+				Tool:     item.request.GetCapability(),
+				Fields: trace.Fields{
+					"step_index":    stepIndex,
+					"tool_call_id":  item.call.ID,
+					"action_status": result.GetStatus().String(),
+				},
+			})
+		},
 	}
+}
 
-	switch len(decision.ToolCalls) {
-	case 0:
-		if decision.Control.Kind == model.ControlSettle {
-			return model.ToolCall{}, false, nil
-		}
-		return model.ToolCall{}, false, fmt.Errorf("%w: continue control requires one tool call", errInvalidModelDecision)
-	case 1:
-		return decision.ToolCalls[0], true, nil
+func validateControlDirective(control model.ControlDirective) error {
+	switch control.Kind {
+	case model.ControlSettle, model.ControlContinue:
+		return nil
 	default:
-		return model.ToolCall{}, false, fmt.Errorf("%w: got %d", errUnsupportedToolBatch, len(decision.ToolCalls))
+		return fmt.Errorf("%w: control is unspecified", errInvalidModelDecision)
 	}
+}
+
+func contextFailureReason(err error) string {
+	if errors.Is(err, agentcontext.ErrInvalidInput) {
+		return "context_build_failed"
+	}
+	return "context_render_failed"
+}
+
+func actionFailureReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "action_timeout"
+	}
+	if strings.Contains(err.Error(), toolResultCodeNonTerminalActionState) {
+		return toolResultCodeNonTerminalActionState
+	}
+	return "submit_action_failed"
+}
+
+func copyToolCallsForTranscript(calls []model.ToolCall) []model.ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]model.ToolCall, len(calls))
+	for i, call := range calls {
+		out[i] = call
+		out[i].Arguments = copyMapForTranscript(call.Arguments)
+	}
+	return out
+}
+
+func copyToolResultsForTranscript(results []model.ToolResult) []model.ToolResult {
+	if len(results) == 0 {
+		return nil
+	}
+	out := make([]model.ToolResult, len(results))
+	for i, result := range results {
+		out[i] = result
+		out[i].Output = copyMapForTranscript(result.Output)
+	}
+	return out
+}
+
+func copyMapForTranscript(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = value
+	}
+	return out
 }
 
 // loadRecentMemories 在模型调用前加载当前 AgentSession 的短期记忆。
@@ -391,6 +517,34 @@ func (l *Loop) updateMemory(
 			"memory_id": record.MemoryID,
 		},
 	})
+}
+
+func (l *Loop) updateMemoryForCompletedTurn(
+	ctx context.Context,
+	turnTracer trace.TurnTracer,
+	key session.AgentSessionKey,
+	turnID string,
+	event *protocolv1alpha2.GameEvent,
+	successfulActions []completedToolAction,
+) {
+	if len(successfulActions) != 1 {
+		return
+	}
+
+	action := successfulActions[0]
+	l.updateMemory(ctx, turnTracer, key, turnID, event, action.ToolCall, action.ActionResult)
+}
+
+func lastCompletedActionEventData(successfulActions []completedToolAction) trace.EventData {
+	if len(successfulActions) == 0 {
+		return trace.EventData{}
+	}
+
+	last := successfulActions[len(successfulActions)-1]
+	return trace.EventData{
+		ActionID: last.ActionResult.GetActionId(),
+		Tool:     last.ToolCall.Name,
+	}
 }
 
 // memoryIDs 提取 MemoryRecord ID，用于 trace 中记录本轮加载了哪些 Memory。

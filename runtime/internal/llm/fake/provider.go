@@ -39,7 +39,7 @@ func newToolCall(name string, arguments map[string]any) (model.Response, error) 
 					Arguments: arguments,
 				},
 			},
-			Control: model.ControlDirective{Kind: model.ControlContinue},
+			Control: model.ControlDirective{Kind: model.ControlSettle},
 		},
 	}, nil
 }

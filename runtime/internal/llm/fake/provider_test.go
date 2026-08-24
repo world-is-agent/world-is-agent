@@ -15,8 +15,8 @@ func TestGenerateReturnsModelDecisionWithStableToolCallID(t *testing.T) {
 		t.Fatalf("Generate returned error: %v", err)
 	}
 
-	if resp.Decision.Control.Kind != model.ControlContinue {
-		t.Fatalf("control = %q, want continue", resp.Decision.Control.Kind)
+	if resp.Decision.Control.Kind != model.ControlSettle {
+		t.Fatalf("control = %q, want settle", resp.Decision.Control.Kind)
 	}
 	if got := len(resp.Decision.ToolCalls); got != 1 {
 		t.Fatalf("tool call count = %d, want 1", got)

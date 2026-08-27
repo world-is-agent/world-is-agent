@@ -1,7 +1,7 @@
-# GameAgent Context Architecture v0.2
+# GameAgent Context Architecture v0.3
 
 > Status: Architecture Draft — Context Model Baseline
-> Date: 2026-08-22
+> Date: 2026-08-27
 > Scope: Context Sources + Context Engine + Model Context
 > Identity Baseline: `AgentSessionKey = game_id + world_id + entity_id`
 > Compatibility Baseline: [GameAgent 多游戏兼容性与 Agent Binding 决策](./summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md)
@@ -22,7 +22,7 @@ GameAgent 的 Context 不是简单的 Prompt 拼接，也不是一个不断增�
 角色当前主观认知
 真实发生过的历史
 长期与短期 Memory
-当前这一次 AgentTurn 的 Event / Observation / Tools
+当前这一次 AgentTurn 的 Event / Observation / Turn Transcript / Tools
 ```
 
 并解决三个核心问题：
@@ -274,6 +274,7 @@ Memory 应该可以从 Experience 中形成；Model Context 应由 Context Engin
 │ Recent / Relevant Experience               │
 │ Relevant Memory                            │
 │ Current Event / Observation                │
+│ Current Turn Transcript                    │
 │ Tools                                      │
 └────────────────────────────────────────────┘
                      ↓
@@ -302,6 +303,7 @@ Context Scope Contract 是 Context Architecture 的核心 Contract。
 | Agent Memory | `game_id + world_id + entity_id` |
 | Current Event | 当前 AgentTurn |
 | Current Observation | 当前 AgentTurn |
+| Current Turn Transcript | 当前 AgentTurn |
 | Available Tools | 当前 AgentTurn |
 
 这张表回答：
@@ -349,6 +351,7 @@ Current AgentTurn
 ├── AgentSessionKey
 ├── Current Event
 ├── Current Observation
+├── Current Turn Transcript
 └── Available Tools
 ```
 
@@ -874,6 +877,7 @@ EntityID    = npc:Abigail
 
 Event
 Observation
+Turn Transcript
 Tools
 ```
 
@@ -928,6 +932,47 @@ Agent Memory
 
 ---
 
+## 10.2 Current Turn Transcript
+
+Current Turn Transcript 表示当前 AgentTurn 内已经发生的 step-local execution facts。
+
+Scope：
+
+```text
+当前 AgentTurn
+```
+
+例如 Phase5 中：
+
+```text
+Step 1
+    ToolCall speak(...)
+    ToolResult succeeded
+
+Step 2
+    ToolCall emote(...)
+    ToolResult succeeded
+```
+
+Current Turn Transcript 的来源是 Runtime 已执行的 ToolCall 和 Environment 返回的 terminal ToolResult。它用于让后续 step 看到本 Turn 前面已经发生的动作和结果。
+
+Current Turn Transcript 不等于 Memory，也不等于 Experience：
+
+```text
+Current Turn Transcript
+    当前 Turn 内早先 step 的执行事实。
+
+Experience
+    Turn 完成后可记录的实际历史。
+
+Memory
+    从历史中选择、压缩或解释后保留的长期/短期认知材料。
+```
+
+进入 Model Context 时，ToolResult 应以 provider-neutral 形式回灌，并受当前 Turn 的 step、tool result output 和 context budget 限制。
+
+---
+
 # 11. Context Authority Contract
 
 Scope 回答“属于谁”。
@@ -944,6 +989,7 @@ Authority 回答：
 | World Environment State | Game-derived |
 | Agent Environment State | Game-derived |
 | Current Observation | Game / Adapter |
+| Current Turn Transcript | Runtime Execution + Environment ToolResult |
 | Cognitive State | Runtime Agent |
 | Experience | Recorded Event / Turn |
 | Memory | Runtime Memory System |
@@ -1135,7 +1181,7 @@ Experience
 Memory
 ```
 
-Current Event / Observation / Tools 则来自本次 AgentTurn。
+Current Event / Observation / Turn Transcript / Tools 则来自本次 AgentTurn。
 
 ---
 
@@ -1274,6 +1320,7 @@ Recent
 Relevant Memory
 Current Event
 Current Observation
+Current Turn Transcript
 ```
 
 在有限模型窗口中进行分配和裁剪。
@@ -1320,7 +1367,8 @@ Model Context
 │   └── Recent Experience
 │
 ├── Current Run
-│   └── Current Event
+│   ├── Current Event
+│   └── Current Turn Transcript
 │
 └── Tools
     └── Tool Definitions
@@ -1344,6 +1392,8 @@ Relevant Retrieved Memory
 Recent Experience
 +
 Current Event
++
+Current Turn Transcript
 +
 Available Tools
 ```
@@ -1372,6 +1422,10 @@ Rain
 Town
 friendship = 2 hearts
 player nearby
+
+Turn Transcript:
+empty before Step 1
+contains prior ToolCalls / ToolResults from the same Turn in Step 2+
 
 Tools:
 speak
@@ -1435,6 +1489,9 @@ The player previously gave you an amethyst.
 
 [Current Event]
 The player has approached and interacted with you.
+
+[Current Turn Transcript]
+Step 1 tool results from this Turn, if any.
 ```
 
 这里：
@@ -1482,6 +1539,7 @@ Storage Architecture 描述：
 | Semantic Retrieval | Vector secondary index |
 | Current Observation | Current Run only / optional trace |
 | Current Event | Current Run + Experience |
+| Current Turn Transcript | Current Run only / optional trace |
 
 ---
 
@@ -1619,8 +1677,8 @@ Phase4 的 `MemoryProjector` 可以直接从当前成功 AgentTurn 的：
 ```text
 GameEvent
 GameTime / event sequence
-ToolCall
-ActionResult
+ToolCall(s)
+ToolResult(s)
 AgentSessionKey
 turn_id
 ```
@@ -1634,10 +1692,15 @@ Phase4 的最小策略是：
 Renderer -> 只渲染简短 recent interaction summary
 ```
 
-当前 one-turn loop 只有一个 ToolCall；
-未来如果一个 Turn 内支持多个 ToolCall，
-Recent Memory 可以保留为“一条 Turn 级记录包含多个 tool outcome”，
-而不是按每个 `speak` 单独形成 Memory。
+Phase5 实现说明：
+
+```text
+Current Turn Transcript
+    保存当前 Turn 内早先 step 的 ToolCall / ToolResult。
+
+Recent Memory
+    在 Turn 完成后形成，一条 Turn 级记录可以包含多个 successful tool outcome。
+```
 
 这只是 Experience 体系的最小 vertical slice；
 不代表长期架构中 Memory 必须绕过 Experience。
@@ -1813,21 +1876,24 @@ Context Engine
 
 5. Current Observation 对当前游戏事实优先于旧 Projection / Memory。
 
-6. Experience 记录真实发生历史，Memory 是对历史的选择或解释。
+6. Current Turn Transcript 记录当前 Turn 内早先 step 的执行事实，
+   不等于 Experience 或 Memory。
 
-7. Trace 不是 Memory，关闭 Trace 不改变 Agent 行为。
+7. Experience 记录真实发生历史，Memory 是对历史的选择或解释。
 
-8. Static Definition 与 World-scoped Dynamic Instance 分离。
+8. Trace 不是 Memory，关闭 Trace 不改变 Agent 行为。
 
-9. Model Context 是 Context Sources 的有限 projection，
+9. Static Definition 与 World-scoped Dynamic Instance 分离。
+
+10. Model Context 是 Context Sources 的有限 projection，
    不是所有数据的完整副本。
 
-10. Context Engine 必须同时考虑：
+11. Context Engine 必须同时考虑：
     Scope / Authority / Freshness / Relevance / Budget。
 
-11. Storage Backend 不得反向定义 Context Domain Model。
+12. Storage Backend 不得反向定义 Context Domain Model。
 
-12. Vector Index 只能是可重建的 retrieval index，不能成为 Memory 唯一真源。
+13. Vector Index 只能是可重建的 retrieval index，不能成为 Memory 唯一真源。
 ```
 
 ---

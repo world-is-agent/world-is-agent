@@ -1,11 +1,11 @@
 # GameAgent Phase3–Phase8 阶段规划
 
-> **Version:** v0.4
+> **Version:** v0.5
 > **Status:** Roadmap Baseline  
-> **Date:** 2026-08-22
+> **Date:** 2026-08-27
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted
-> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）
+> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted
+> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)（2026-08-27）
 
 ---
 
@@ -74,6 +74,7 @@ Accepted 状态的依据不在本文重复展开，以下文档作为当前 Road
 - [GameAgent MVP0 Phase1 工程设计规范](../phase1/GameAgent MVP0 Phase1 工程设计规范.md)
 - [GameAgent MVP0 Phase2 技术开发与验收方案](../phase2/GameAgent MVP0 Phase2 技术开发与验收方案.md)
 - [GameAgent MVP0 Phase2 Trace 链路观测设计](../phase2/GameAgent MVP0 Phase2 Trace 链路观测设计.md)
+- [GameAgent MVP0 Phase5 技术开发与验收方案](../phase5/GameAgent MVP0 Phase5 技术开发与验收方案.md)
 - [GameAgent Runtime 整体架构设计规范](./GameAgent Runtime 整体架构设计规范.md)
 
 ---
@@ -107,6 +108,7 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | Phase4 | Context 与短期 Memory | Agent 可以在多个 Turn 之间保留隔离的上下文，并形成可复用确定性测试底座 |
 | Phase5 Entry Gate | Multi-game Compatibility / Agent Binding | Phase5 开工前先冻结 Entity、Agent Definition、Agent Instance 的长期语义 |
 | Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个有界 AgentStep；单 Step 可包含 ordered ToolCall batch |
+| Phase5.5 | Stardew Adapter Context Enrichment | Stardew Adapter 通过 Observation narrow waist 提供成熟的游戏当前事实 |
 | Phase6 | 异步 Action 与 Turn Resume | 长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
 | Phase8 | Evaluation 与产品化 | 系统可重复评估、定位、交付，并支持新 Adapter 接入 |
@@ -402,7 +404,58 @@ ActionBatchRequest / ActionBatchResult
 
 ---
 
-# 9. Phase6：异步 Action Lifecycle 与 AgentTurn Resume
+# 9. Phase5.5：Stardew Adapter Context Enrichment
+
+## 阶段目标
+
+定义 Stardew Adapter 的正式当前事实模型，使 Runtime 在不理解 Stardew 字段含义的前提下获得更完整、结构化、可测试的游戏上下文。
+
+本阶段主要回答：
+
+> **Adapter 能否通过通用 Observation narrow waist 提供成熟的游戏当前事实，而不把 Stardew-specific 语义泄漏进 Runtime Core？**
+
+## 主要范围
+
+- 在 Stardew Adapter 内建立稳定的 `StardewObservation` 生产模型；
+- `Observation.state` 使用 `stardew` 命名空间承载 game-specific 当前事实；
+- 补充 ValleyTalk 已验证对对话质量关键的当前事实：时间、季节、日期、天气、地点、玩家/NPC 位置、关系、附近 NPC、当前触发、可获得的日程摘要；
+- 更新 Stardew capability metadata，使 `speak` 与 `emote` 的环境效果描述明确；
+- 增加 Adapter mapper / observation builder 测试，证明结构化字段稳定输出；
+- 增加 Runtime context renderer 的 game-specific nested state 回归测试，证明 Runtime 只做通用渲染，不读取 Stardew 字段。
+
+本阶段的核心产物是 Adapter Context Source，不是新的 Runtime cognition 能力。
+
+## 非目标
+
+```text
+Protocol 字段变更
+Runtime Stardew-specific parser
+AgentDefinition store
+Agent biography / traits / relationships 加载
+原版台词 sample retrieval
+长期事件记忆持久化
+ValleyTalk prompt builder 迁移
+gift / typed response 等新触发入口的完整接入
+move_to / async Action lifecycle
+```
+
+## 完成条件
+
+- Stardew Adapter 输出的 `Observation.state.stardew` 至少包含 time、weather、agent、player、relationship、scene、schedule 七类结构化事实；
+- Runtime Core 不新增任何 Stardew-specific 类型、字段判断或分支；
+- 生产路径的 canonical observation schema 为 `StardewObservation` 与 `Observation.state.stardew`；
+- `EntityRef.definition_id` 继续只表示 Agent Definition 绑定 key，Observation 不承载 Agent Definition 模板内容；
+- Adapter 测试覆盖 namespaced state、relationship hearts、weather flags、nearby NPCs、schedule summary 和 capability descriptions；
+- Runtime context renderer 测试覆盖 nested game-specific state 的稳定渲染；
+- Phase5 multi-step / tool transcript / memory 行为不因 observation 结构增强而退化。
+
+## 阶段结束 Review
+
+重点确认 Adapter Context Source 是否已经足够支撑 Phase6 的真实长 Action 场景，以及 AgentDefinition source 是否需要作为 Phase6 之后的独立阶段进入 Roadmap。
+
+---
+
+# 10. Phase6：异步 Action Lifecycle 与 AgentTurn Resume
 
 ## 阶段目标
 
@@ -449,7 +502,7 @@ Runtime 崩溃后的 continuation 恢复
 
 ---
 
-# 10. Phase7：Environment Recovery 与持久 Agent State
+# 11. Phase7：Environment Recovery 与持久 Agent State
 
 ## 阶段目标
 
@@ -494,7 +547,7 @@ Exactly-once 全链路
 
 ---
 
-# 11. Phase8：Evaluation、Developer Experience 与产品化
+# 12. Phase8：Evaluation、Developer Experience 与产品化
 
 ## 阶段目标
 
@@ -540,7 +593,7 @@ Multi-Agent 社会模拟平台
 
 ---
 
-# 12. 跨阶段不变量
+# 13. 跨阶段不变量
 
 无论处于哪个 Phase，都必须保持：
 
@@ -573,7 +626,7 @@ Trigger admission != hardcoded game-specific event_type
 
 ---
 
-# 13. 每阶段固定交付物
+# 14. 每阶段固定交付物
 
 从 Phase3 开始，每阶段至少应形成：
 
@@ -605,13 +658,17 @@ Needs Follow-up
 进入 Phase5 前
     可复用 Deterministic TestEnvironment 必须可用。
 
+进入 Phase5.5 前
+    Phase5 必须 Accepted。
+
 进入 Phase6 implementation 前
+    Phase5.5 必须 Accepted。
     Async Action Protocol Strategy ADR 必须 Accepted。
 ```
 
 ---
 
-# 14. 暂不绑定固定 Phase 的候选能力
+# 15. 暂不绑定固定 Phase 的候选能力
 
 以下能力保留为未来候选，等核心 Harness 出现真实需求后再进入阶段规划：
 
@@ -621,6 +678,8 @@ Needs Follow-up
 Advanced Permission / Safety Policy
 Long-term semantic memory
 Vector retrieval
+AgentDefinition source
+Canonical dialogue retrieval
 Skills
 Multiple concurrent actions
 Multi-Agent collaboration
@@ -632,7 +691,7 @@ Cloud deployment
 
 ---
 
-# 15. 一句话 Roadmap
+# 16. 一句话 Roadmap
 
 ```text
 Phase1
@@ -650,6 +709,9 @@ Phase4
 
 Phase5
 让一个 Turn 可以安全执行多个有界 Step
+
+Phase5.5
+让 Stardew Adapter 提供结构化、成熟、可测试的当前游戏事实
 
 Phase6
 让 Turn 能等待和恢复长时间游戏 Action

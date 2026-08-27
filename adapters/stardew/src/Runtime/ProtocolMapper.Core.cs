@@ -64,7 +64,7 @@ public static partial class ProtocolMapper
         };
     }
 
-    public static Observation BuildObservation(string entityId, ProbeObservation probe, string worldId, GameTime gameTime)
+    public static Observation BuildObservation(string entityId, StardewObservation stardewObservation, string worldId, GameTime gameTime)
     {
         return new Observation
         {
@@ -76,25 +76,166 @@ public static partial class ProtocolMapper
             {
                 Fields =
                 {
-                    ["agent_id"] = Value.ForString(probe.AgentId),
-                    ["agent_name"] = Value.ForString(probe.AgentName),
-                    ["agent_location"] = Value.ForString(probe.AgentLocation),
-                    ["agent_tile_x"] = Value.ForNumber(probe.AgentTileX),
-                    ["agent_tile_y"] = Value.ForNumber(probe.AgentTileY),
-                    ["game_time"] = Value.ForNumber(probe.GameTime),
-                    ["player_name"] = Value.ForString(probe.PlayerName),
-                    ["player_location"] = Value.ForString(probe.PlayerLocation),
-                    ["player_tile_x"] = Value.ForNumber(probe.PlayerTileX),
-                    ["player_tile_y"] = Value.ForNumber(probe.PlayerTileY),
-                    ["friendship"] = Value.ForNumber(probe.Friendship),
-                    ["trigger"] = Value.ForString(probe.Trigger),
+                    ["stardew"] = ForStruct(BuildStardewState(stardewObservation)),
                 },
             },
             NearbyEntities =
             {
-                BuildEntity(PlayerEntityId, "player", probe.PlayerName),
+                BuildEntity(PlayerEntityId, "player", stardewObservation.Player.Name),
+                stardewObservation.Scene.NearbyNpcs.Select(npc => BuildEntity(npc.EntityId, "npc", npc.Name)),
             },
         };
+    }
+
+    private static Struct BuildStardewState(StardewObservation observation)
+    {
+        Struct stardew = new()
+        {
+            Fields =
+            {
+                ["schema_version"] = Value.ForString(observation.SchemaVersion),
+                ["time"] = ForStruct(BuildTime(observation.Time)),
+                ["weather"] = ForStruct(BuildWeather(observation.Weather)),
+                ["agent"] = ForStruct(BuildStateEntity(observation.Agent)),
+                ["player"] = ForStruct(BuildPlayer(observation.Player)),
+                ["relationship"] = ForStruct(BuildRelationship(observation.Relationship)),
+                ["scene"] = ForStruct(BuildScene(observation.Scene)),
+            },
+        };
+
+        if (observation.Schedule is not null)
+            stardew.Fields["schedule"] = ForStruct(BuildSchedule(observation.Schedule));
+
+        return stardew;
+    }
+
+    private static Struct BuildTime(StardewTime time)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["year"] = Value.ForNumber(time.Year),
+                ["season"] = Value.ForString(time.Season),
+                ["day_of_month"] = Value.ForNumber(time.DayOfMonth),
+                ["weekday"] = Value.ForString(time.Weekday),
+                ["time_of_day"] = Value.ForNumber(time.TimeOfDay),
+                ["time_bucket"] = Value.ForString(time.TimeBucket),
+            },
+        };
+    }
+
+    private static Struct BuildWeather(StardewWeather weather)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["rain"] = Value.ForBool(weather.Rain),
+                ["snow"] = Value.ForBool(weather.Snow),
+                ["lightning"] = Value.ForBool(weather.Lightning),
+                ["green_rain"] = Value.ForBool(weather.GreenRain),
+            },
+        };
+    }
+
+    private static Struct BuildStateEntity(StardewEntity entity)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["entity_id"] = Value.ForString(entity.EntityId),
+                ["name"] = Value.ForString(entity.Name),
+                ["location"] = Value.ForString(entity.Location),
+                ["tile"] = ForStruct(BuildTile(entity.Tile)),
+            },
+        };
+    }
+
+    private static Struct BuildPlayer(StardewPlayer player)
+    {
+        Struct playerStruct = BuildStateEntity(new StardewEntity(player.EntityId, player.Name, player.Location, player.Tile));
+        playerStruct.Fields["gender"] = Value.ForString(player.Gender);
+        return playerStruct;
+    }
+
+    private static Struct BuildTile(StardewTile tile)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["x"] = Value.ForNumber(tile.X),
+                ["y"] = Value.ForNumber(tile.Y),
+            },
+        };
+    }
+
+    private static Struct BuildRelationship(StardewRelationship relationship)
+    {
+        Struct relationshipStruct = new()
+        {
+            Fields =
+            {
+                ["known"] = Value.ForBool(relationship.Known),
+                ["is_spouse"] = Value.ForBool(relationship.IsSpouse),
+                ["is_roommate"] = Value.ForBool(relationship.IsRoommate),
+            },
+        };
+
+        if (relationship.Known)
+        {
+            if (relationship.FriendshipPoints.HasValue)
+                relationshipStruct.Fields["friendship_points"] = Value.ForNumber(relationship.FriendshipPoints.Value);
+
+            if (relationship.Hearts.HasValue)
+                relationshipStruct.Fields["hearts"] = Value.ForNumber(relationship.Hearts.Value);
+        }
+
+        return relationshipStruct;
+    }
+
+    private static Struct BuildScene(StardewScene scene)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["trigger"] = Value.ForString(scene.Trigger),
+                ["nearby_npcs_total"] = Value.ForNumber(scene.NearbyNpcsTotal),
+                ["nearby_npcs_omitted_count"] = Value.ForNumber(scene.NearbyNpcsOmittedCount),
+                ["nearby_npcs"] = ForList(scene.NearbyNpcs.Select(npc => ForStruct(BuildStateEntity(npc)))),
+            },
+        };
+    }
+
+    private static Struct BuildSchedule(StardewSchedule schedule)
+    {
+        Struct scheduleStruct = new()
+        {
+            Fields =
+            {
+                ["future_locations"] = ForList(schedule.FutureLocations.Select(Value.ForString)),
+            },
+        };
+
+        if (!string.IsNullOrWhiteSpace(schedule.Destination))
+            scheduleStruct.Fields["destination"] = Value.ForString(schedule.Destination);
+
+        return scheduleStruct;
+    }
+
+    private static Value ForStruct(Struct structure)
+    {
+        return new Value { StructValue = structure };
+    }
+
+    private static Value ForList(IEnumerable<Value> values)
+    {
+        ListValue list = new();
+        list.Values.AddRange(values);
+        return new Value { ListValue = list };
     }
 
     public static string RequireTextArgument(ActionRequest request)

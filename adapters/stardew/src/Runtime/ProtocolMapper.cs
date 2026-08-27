@@ -25,9 +25,9 @@ public static partial class ProtocolMapper
         );
     }
 
-    public static Observation BuildObservation(string entityId, ProbeObservation probe, string worldId)
+    public static Observation BuildObservation(string entityId, StardewObservation stardewObservation, string worldId)
     {
-        return BuildObservation(entityId, probe, worldId, BuildGameTime());
+        return BuildObservation(entityId, stardewObservation, worldId, BuildGameTime());
     }
 
     private static GameTime BuildGameTime()

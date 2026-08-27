@@ -168,6 +168,60 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 	}
 }
 
+func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{MemoryContextSizeLimit: 1024})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "You are controlling an NPC in a game.",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:        "event-1",
+			WorldId:        "world-a",
+			TargetEntityId: "npc:Abigail",
+			Entities: []*protocolv1alpha2.EntityRef{
+				{EntityId: "npc:Abigail", DefinitionId: "npc:Abigail"},
+			},
+		},
+		Observation: &protocolv1alpha2.Observation{
+			WorldId:  "world-a",
+			EntityId: "npc:Abigail",
+			State: mustStruct(t, map[string]any{
+				"stardew": map[string]any{
+					"schema_version": "0.1",
+					"scene": map[string]any{
+						"nearby_npcs": []any{
+							map[string]any{"entity_id": "npc:Robin", "name": "Robin"},
+						},
+					},
+				},
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+	if len(req.Messages) != 1 {
+		t.Fatalf("len(Messages) = %d, want 1", len(req.Messages))
+	}
+
+	assertContainsAll(
+		t,
+		req.Messages[0].Content,
+		"[Current Observation]",
+		`"state":`,
+		`"stardew":`,
+		`"schema_version": "0.1"`,
+		`"nearby_npcs":`,
+		`"npc:Robin"`,
+	)
+}
+
 func TestRendererIncludesBatchToolCallTranscriptMessages(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{

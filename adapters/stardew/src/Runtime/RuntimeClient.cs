@@ -256,8 +256,8 @@ public sealed class RuntimeClient : IDisposable
             }
 
             NPC npc = this.RequireNpc(request.EntityId);
-            ProbeObservation probe = this.observationBuilder.Build(npc, Game1.player, "runtime_observe");
-            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, probe, this.currentWorldId);
+            StardewObservation stardewObservation = this.observationBuilder.Build(npc, Game1.player, "runtime_observe");
+            Observation observation = ProtocolMapper.BuildObservation(request.EntityId, stardewObservation, this.currentWorldId);
 
             this.SendFireAndForget(
                 this.SendAsync(

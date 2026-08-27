@@ -21,7 +21,7 @@ public static class CapabilityCatalog
                 {
                     Name = "speak",
                     Version = "0.1.0",
-                    Description = "Make the NPC speak.",
+                    Description = "Displays one dialogue text line from the NPC to the player.",
                     InputSchemaJson = SpeakInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
                     ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
@@ -30,7 +30,7 @@ public static class CapabilityCatalog
                 {
                     Name = "emote",
                     Version = "0.1.0",
-                    Description = "Make the NPC play an emote bubble.",
+                    Description = "Displays one emote bubble above the NPC.",
                     InputSchemaJson = EmoteInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
                     ConcurrencyMode = CapabilityConcurrencyMode.Sequential,

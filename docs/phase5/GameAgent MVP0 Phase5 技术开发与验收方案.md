@@ -1,12 +1,62 @@
 # GameAgent MVP0 Phase5 技术开发与验收方案
 
-> **Status:** Implementation Baseline
+> **Status:** Accepted with Known Limitations / Archived Implementation Baseline
 > **Date:** 2026-08-24
+> **Acceptance Date:** 2026-08-27
 > **Scope:** Bounded Multi-step AgentTurn with Tool Batch
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
 > **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.4
 > **Entry Gate:** GameAgent 多游戏兼容性与 Agent Binding 决策 Accepted
 > **Protocol Target:** gameagent.protocol.v1alpha2 additive Phase5 revision
+> **Final Commit:** 372d2b6 fix: address phase5 review findings
+> **Active Follow-up:** Phase5.5 Stardew Adapter Context Enrichment
+
+---
+
+# 0. 验收快照
+
+Phase5 已于 2026-08-27 验收为 `Accepted with Known Limitations`。本文保留为 Phase5 的开发与验收基线；当前开发已进入 `docs/phase5.5/GameAgent MVP0 Phase5.5 技术开发与验收方案.md`。
+
+最终落地口径：
+
+```text
+- AgentTurn 从“一次模型决策 + 一次动作”升级为有界 multi-step。
+- 默认预算：MaxSteps=3 / MaxToolCallsPerStep=4 / MaxToolCallsPerTurn=6 / MaxParallelToolCalls=4。
+- Model contract 统一为 ModelDecision{ToolCalls, Control}。
+- 真实 provider 使用 no-tool final response 表达 settle；__gameagent_settle 只保留 parser 兼容路径。
+- Tool Scheduler 支持 Sequential / ParallelSafe，并保持 ToolResults 按原始 ToolCall 顺序回灌。
+- Tool preflight 覆盖 tool lookup、arguments 非空、ToolCall.ID 去重和 InputSchema 常用子集校验。
+- Memory 使用 Turn-level Outcomes；技术错误前已确认成功的同组 action 仍会写入 Memory。
+```
+
+落地后代码评审修复：
+
+```text
+- 补齐 parallel group model-visible failure 覆盖。
+- 保留 parallel / sequential technical error 前已成功 action，避免 Runtime Memory 与游戏状态静默偏离。
+- 拦截同 Turn 跨 step 复用 ToolCall.ID。
+- Provider 非 2xx 错误不再暴露原始 HTTP body，Gateway stdout 日志做单行截断。
+- 删除 loop.go 孤儿 updateMemory、registry 测试专用 ValidateToolCall API、memory.Record.Outcome 单数字段。
+```
+
+验收验证：
+
+```text
+- go test ./... PASS
+- protocol/tests/check-protocol-static.ps1 PASS
+- dotnet test adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj --no-restore --verbosity minimal PASS
+- git diff --check PASS
+- go test -race ./runtime/... 受当前 Windows C toolchain 限制未作为本机硬门，需在 CI/Linux 或可用 64-bit gcc 环境补跑。
+```
+
+已知限制：
+
+```text
+- definition_id 当前只来自 EntityRef.definition_id；static binding source、fallback 和 mismatch gate 延后实现。
+- Tool Registry 当前仍按单 adapter / 单 active stream 假设运行。
+- Runtime InputSchema preflight 是浅层子集校验，不替代 Adapter 业务校验。
+- Memory renderer 仍保留 Phase4 speak / emote 兼容摘要语义，后续进入 compat roadmap。
+```
 
 ---
 
@@ -1342,7 +1392,7 @@ git diff --check
 
 # 8. 验收标准
 
-Phase5 可以验收为 `Accepted with Known Limitations` 的最低条件：
+Phase5 已按 `Accepted with Known Limitations` 验收。最低条件为：
 
 ```text
 1. 一个 AgentStep 可以承载多个 ToolCalls。
@@ -1386,36 +1436,36 @@ Phase5 可以验收为 `Accepted with Known Limitations` 的最低条件：
 
 # 9. Architecture Boundary Check
 
-验收前必须检查：
+验收时已核对：
 
 ```text
-[ ] runtime/ 不 import adapters/
-[ ] runtime/ 不 import Stardew / SMAPI
-[ ] adapter 不 import runtime/internal
-[ ] protocol/proto/gameagent.proto 只做 additive 字段变更
-[ ] protocol/proto/gameagent.proto 不包含 ActionBatchRequest / ActionBatchResult
-[ ] protocol/proto/gameagent.proto 不包含 target_definition_id
-[ ] protocol/proto/gameagent.proto 不包含 Observation.definition_id
-[ ] definition_id 只通过 target EntityRef + Agent Binding policy 进入 Agent Descriptor
-[ ] runtime/internal/model 不使用 protocol protobuf carrier 作为 ToolCall.Arguments 类型
-[ ] map[string]any 到 google.protobuf.Struct 的转换只发生在 protocol boundary
-[ ] AgentTurn Control 不进入 ActionRequest
-[ ] Tool Registry 只表达 Environment Tool
-[ ] Provider-facing settle sentinel 不进入 Tool Registry / Scheduler / Adapter
-[ ] Environment Tool 仍由 Adapter capability 声明
-[ ] Capability UNSPECIFIED concurrency 按 SEQUENTIAL 处理
-[ ] Capability SEQUENTIAL 只表达同一 ToolCall batch 内的 ordering barrier
-[ ] ASYNC capability 不进入 Phase5 AgentTurn Tool View
-[ ] Batch Preflight 成功前不发送任何 ActionRequest
-[ ] ToolResult 对每个 proposed ToolCall 一一对应
-[ ] ToolResult.output 只包含 bounded structured output
-[ ] Transcript 不包含 raw ActionRequest / ActionResult protobuf
-[ ] parallel group 技术错误 drain 后再发 terminal event
-[ ] Trace events 不改变 Agent 主流程
-[ ] AgentTurn terminal event 唯一且最后
-[ ] Memory 仍绑定 AgentSessionKey，而不是 definition_id
-[ ] non-Stardew fixture 覆盖 entity_id != definition_id
-[ ] AgentLoop / Gateway core 不含任何 game-specific event_type allowlist（含现存逻辑）
+[x] runtime/ 不 import adapters/
+[x] runtime/ 不 import Stardew / SMAPI
+[x] adapter 不 import runtime/internal
+[x] protocol/proto/gameagent.proto 只做 additive 字段变更
+[x] protocol/proto/gameagent.proto 不包含 ActionBatchRequest / ActionBatchResult
+[x] protocol/proto/gameagent.proto 不包含 target_definition_id
+[x] protocol/proto/gameagent.proto 不包含 Observation.definition_id
+[x] definition_id 只通过 target EntityRef + Agent Binding policy 进入 Agent Descriptor
+[x] runtime/internal/model 不使用 protocol protobuf carrier 作为 ToolCall.Arguments 类型
+[x] map[string]any 到 google.protobuf.Struct 的转换只发生在 protocol boundary
+[x] AgentTurn Control 不进入 ActionRequest
+[x] Tool Registry 只表达 Environment Tool
+[x] Provider-facing settle sentinel 不进入 Tool Registry / Scheduler / Adapter
+[x] Environment Tool 仍由 Adapter capability 声明
+[x] Capability UNSPECIFIED concurrency 按 SEQUENTIAL 处理
+[x] Capability SEQUENTIAL 只表达同一 ToolCall batch 内的 ordering barrier
+[x] ASYNC capability 不进入 Phase5 AgentTurn Tool View
+[x] Batch Preflight 成功前不发送任何 ActionRequest
+[x] ToolResult 对每个 proposed ToolCall 一一对应
+[x] ToolResult.output 只包含 bounded structured output
+[x] Transcript 不包含 raw ActionRequest / ActionResult protobuf
+[x] parallel group 技术错误 drain 后再发 terminal event
+[x] Trace events 不改变 Agent 主流程
+[x] AgentTurn terminal event 唯一且最后
+[x] Memory 仍绑定 AgentSessionKey，而不是 definition_id
+[x] non-Stardew fixture 覆盖 entity_id != definition_id
+[x] AgentLoop / Gateway core 不含任何 game-specific event_type allowlist（含现存逻辑）
 ```
 
 ---

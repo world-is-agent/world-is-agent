@@ -120,8 +120,7 @@ func defaultMemoryStoreMaxRecords(recentMemoryLimit int) int {
 
 // HandleEvent 处理一次 GameEvent，并在需要时执行完整的 Agent Turn。
 //
-// Phase4 的主流程仍是 Observe once、Think once、Act once；
-// 新增的 Memory / Context 只负责提供跨 Turn 的短期上下文，不改变 Action 执行协议。
+// 每个 Turn 先获取一次 Observation，再在预算内执行 0..N 个 AgentStep。
 func (l *Loop) HandleEvent(
 	ctx context.Context,
 	env Environment,
@@ -184,6 +183,7 @@ func (l *Loop) runBoundedSteps(
 	transcript := make([]model.Message, 0)
 	successfulActions := make([]completedToolAction, 0)
 	totalToolCalls := 0
+	seenToolCallIDs := make(map[string]struct{})
 
 	for stepIndex := 1; stepIndex <= l.config.MaxSteps; stepIndex++ {
 		turnTracer.Emit(trace.EventAgentStepStarted, trace.EventData{
@@ -251,7 +251,7 @@ func (l *Loop) runBoundedSteps(
 				turnTracer.Emit(trace.EventAgentStepCompleted, trace.EventData{
 					Fields: trace.Fields{"step_index": stepIndex},
 				})
-				l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions)
+				l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
 				turnTracer.Complete(lastCompletedActionEventData(successfulActions))
 				return nil
 			}
@@ -293,6 +293,8 @@ func (l *Loop) runBoundedSteps(
 			return err
 		}
 		totalToolCalls += len(calls)
+		idValidationResults, hasPriorStepDuplicateID := validateToolCallIDsAcrossSteps(calls, seenToolCallIDs)
+		rememberToolCallIDs(calls, seenToolCallIDs)
 
 		transcript = append(transcript, model.Message{
 			Role:      model.RoleAssistant,
@@ -316,9 +318,28 @@ func (l *Loop) runBoundedSteps(
 				"max_parallel_calls": l.config.MaxParallelToolCalls,
 			},
 		})
+		if hasPriorStepDuplicateID {
+			transcript = append(transcript, model.Message{
+				Role:        model.RoleTool,
+				ToolResults: copyToolResultsForTranscript(idValidationResults),
+			})
+			turnTracer.Emit(trace.EventToolBatchFailed, trace.EventData{
+				Fields: trace.Fields{
+					"step_index":           stepIndex,
+					"tool_call_count":      len(calls),
+					"tool_result_call_ids": toolResultCallIDs(idValidationResults),
+				},
+			})
+			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex, "reason": "model_visible_tool_failure"},
+			})
+			continue
+		}
 		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex)
 		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
 		if err != nil {
+			successfulActions = append(successfulActions, outcome.SuccessfulActions...)
+			l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
 			reason := actionFailureReason(err)
 			turnTracer.Emit(trace.EventToolBatchFailed, trace.EventData{
 				Fields: trace.Fields{
@@ -369,7 +390,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventTurnSettled, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
-			l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions)
+			l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
 			turnTracer.Complete(lastCompletedActionEventData(successfulActions))
 			return nil
 		}
@@ -463,6 +484,46 @@ func toolResultCallIDs(results []model.ToolResult) []string {
 		ids = append(ids, result.ToolCallID)
 	}
 	return ids
+}
+
+func validateToolCallIDsAcrossSteps(calls []model.ToolCall, seen map[string]struct{}) ([]model.ToolResult, bool) {
+	results := make([]model.ToolResult, len(calls))
+	invalid := make([]bool, len(calls))
+	hasFailure := false
+
+	for i, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; !ok {
+			continue
+		}
+		results[i] = invalidToolResult(call, toolResultCodeDuplicateToolCallID, "duplicate tool call id")
+		invalid[i] = true
+		hasFailure = true
+	}
+
+	if !hasFailure {
+		return nil, false
+	}
+	for i, call := range calls {
+		if invalid[i] {
+			continue
+		}
+		results[i] = skippedToolResult(call, toolResultCodeBatchValidationFailed, "batch validation failed")
+	}
+	return results, true
+}
+
+func rememberToolCallIDs(calls []model.ToolCall, seen map[string]struct{}) {
+	for _, call := range calls {
+		id := strings.TrimSpace(call.ID)
+		if id == "" {
+			continue
+		}
+		seen[id] = struct{}{}
+	}
 }
 
 func validateControlDirective(control model.ControlDirective) error {
@@ -564,55 +625,7 @@ func (l *Loop) loadRecentMemories(
 	return records
 }
 
-// updateMemory 在 Action 成功后把本轮结果写入短期记忆。
-// 这里不记录失败 Turn，因为 Phase4 的 P0 Memory 只表达已成功发生的行为连续性。
-func (l *Loop) updateMemory(
-	ctx context.Context,
-	turnTracer trace.TurnTracer,
-	key session.AgentSessionKey,
-	turnID string,
-	event *protocolv1alpha2.GameEvent,
-	toolCall model.ToolCall,
-	actionResult *protocolv1alpha2.ActionResult,
-) {
-	if !l.config.MemoryEnabledValue() || l.memoryStore == nil || l.memoryProjector == nil {
-		return
-	}
-
-	record, err := l.memoryProjector.Project(memory.ProjectInput{
-		SessionKey:   key,
-		TurnID:       turnID,
-		Event:        event,
-		ToolCall:     toolCall,
-		ActionResult: actionResult,
-	})
-	if err != nil {
-		turnTracer.Emit(trace.EventContextUpdateFailed, trace.EventData{
-			Fields: trace.Fields{
-				"reason": err.Error(),
-			},
-		})
-		return
-	}
-
-	if err := l.memoryStore.Append(ctx, record); err != nil {
-		turnTracer.Emit(trace.EventContextUpdateFailed, trace.EventData{
-			Fields: trace.Fields{
-				"memory_id": record.MemoryID,
-				"reason":    err.Error(),
-			},
-		})
-		return
-	}
-
-	turnTracer.Emit(trace.EventContextUpdated, trace.EventData{
-		Fields: trace.Fields{
-			"memory_id": record.MemoryID,
-		},
-	})
-}
-
-func (l *Loop) updateMemoryForCompletedTurn(
+func (l *Loop) updateMemoryForSuccessfulActions(
 	ctx context.Context,
 	turnTracer trace.TurnTracer,
 	key session.AgentSessionKey,

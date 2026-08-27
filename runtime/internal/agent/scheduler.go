@@ -28,6 +28,7 @@ const (
 	toolResultCodeDuplicateToolCallID    = "duplicate_tool_call_id"
 	toolResultCodeToolNotRegistered      = "tool_not_registered"
 	toolResultCodeToolArgumentsMissing   = "tool_arguments_missing"
+	toolResultCodeToolArgumentsInvalid   = "tool_arguments_invalid"
 	toolResultCodeActionRequestInvalid   = "action_request_invalid"
 	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
 )
@@ -90,7 +91,8 @@ func (s toolBatchScheduler) Run(
 			}
 			groupSuccessfulActions, failed, err := s.runParallelGroup(ctx, env, plan[i:end], results)
 			if err != nil {
-				return toolBatchOutcome{Results: results}, err
+				successfulActions = append(successfulActions, groupSuccessfulActions...)
+				return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, err
 			}
 			successfulActions = append(successfulActions, groupSuccessfulActions...)
 			if failed {
@@ -107,7 +109,7 @@ func (s toolBatchScheduler) Run(
 
 		result, actionResult, err := s.runOne(ctx, env, plan[i])
 		if err != nil {
-			return toolBatchOutcome{Results: results}, err
+			return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, err
 		}
 		results[plan[i].index] = result
 		if result.Status != toolResultStatusSucceeded {
@@ -156,6 +158,12 @@ func (s toolBatchScheduler) preflight(
 		}
 		if call.Arguments == nil {
 			results[i] = invalidToolResult(call, toolResultCodeToolArgumentsMissing, "tool arguments are missing")
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+		if err := tool.ValidateArguments(entry.Definition.InputSchema, call.Arguments); err != nil {
+			results[i] = invalidToolResult(call, toolResultCodeToolArgumentsInvalid, err.Error())
 			invalid[i] = true
 			hasFailure = true
 			continue
@@ -264,15 +272,19 @@ func (s toolBatchScheduler) runParallelGroup(
 	}
 
 	if firstErr != nil {
-		return nil, false, firstErr
+		return successfulActionsFromParallelGroup(group, successfulActionsByIndex), false, firstErr
 	}
-	successfulActions := make([]completedToolAction, 0, len(successfulActionsByIndex))
+	return successfulActionsFromParallelGroup(group, successfulActionsByIndex), modelVisibleFailure, nil
+}
+
+func successfulActionsFromParallelGroup(group []plannedToolCall, actionsByIndex map[int]completedToolAction) []completedToolAction {
+	successfulActions := make([]completedToolAction, 0, len(actionsByIndex))
 	for _, item := range group {
-		if action, ok := successfulActionsByIndex[item.index]; ok {
+		if action, ok := actionsByIndex[item.index]; ok {
 			successfulActions = append(successfulActions, action)
 		}
 	}
-	return successfulActions, modelVisibleFailure, nil
+	return successfulActions
 }
 
 func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, *protocolv1alpha2.ActionResult, error) {

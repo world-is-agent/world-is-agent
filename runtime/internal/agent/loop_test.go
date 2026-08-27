@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,6 +39,13 @@ type fakeEnvironment struct {
 	submittedAction  *protocolv1alpha2.ActionRequest
 	submittedActions []*protocolv1alpha2.ActionRequest
 	statusByTool     map[string]protocolv1alpha2.ActionStatus
+}
+
+type technicalActionEnvironment struct {
+	mu               sync.Mutex
+	submittedActions []*protocolv1alpha2.ActionRequest
+	submitErrors     map[string]error
+	delays           map[string]time.Duration
 }
 
 type recordingProvider struct {
@@ -413,6 +421,15 @@ func indexOfTrace(events []trace.Event, name trace.EventName) int {
 	return -1
 }
 
+func requestMessagesContain(messages []model.Message, needle string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func newSpeakRegistry() *tool.Registry {
 	registry := tool.NewRegistry()
 	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
@@ -440,6 +457,28 @@ func newSpeakEmoteRegistry() *tool.Registry {
 			Description:     "Make the NPC emote.",
 			InputSchemaJson: `{"type":"object","properties":{"emote":{"type":"string"}},"required":["emote"]}`,
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+	})
+	return registry
+}
+
+func newParallelSenseRegistry() *tool.Registry {
+	return newSenseRegistry(protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE)
+}
+
+func newSequentialSenseRegistry() *tool.Registry {
+	return newSenseRegistry(protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL)
+}
+
+func newSenseRegistry(concurrencyMode protocolv1alpha2.CapabilityConcurrencyMode) *tool.Registry {
+	registry := tool.NewRegistry()
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+		{
+			Name:            "sense",
+			Description:     "Read local environment state.",
+			InputSchemaJson: `{"type":"object","properties":{"label":{"type":"string"}}}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			ConcurrencyMode: concurrencyMode,
 		},
 	})
 	return registry
@@ -474,6 +513,47 @@ func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha
 			Message: "adapter returned " + status.String(),
 		},
 	}, nil
+}
+
+func (e *technicalActionEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
+	return &protocolv1alpha2.Observation{WorldId: worldID, EntityId: entityID}, nil
+}
+
+func (e *technicalActionEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
+	label := actionRequestLabel(req)
+	e.mu.Lock()
+	e.submittedActions = append(e.submittedActions, req)
+	e.mu.Unlock()
+
+	if delay := e.delays[label]; delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if err := e.submitErrors[label]; err != nil {
+		return nil, err
+	}
+	return &protocolv1alpha2.ActionResult{
+		ActionId: req.GetActionId(),
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+	}, nil
+}
+
+func actionRequestLabel(req *protocolv1alpha2.ActionRequest) string {
+	if req.GetArguments() == nil {
+		return req.GetCapability()
+	}
+	value := req.GetArguments().GetFields()["label"]
+	if value == nil {
+		return req.GetCapability()
+	}
+	label := strings.TrimSpace(value.GetStringValue())
+	if label == "" {
+		return req.GetCapability()
+	}
+	return label
 }
 
 func TestHandleEventRunsOneTurnNPCInteraction(t *testing.T) {
@@ -739,6 +819,59 @@ func TestHandleEventRunsMultipleStepsUntilSettle(t *testing.T) {
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }
 
+func TestHandleEventRejectsToolCallIDReusedAcrossSteps(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "first step"}}},
+					Control:   model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{
+						{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "duplicate"}},
+						{ID: "call_2", Name: "speak", Arguments: map[string]any{"text": "skipped with invalid batch"}},
+					},
+					Control: model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := len(env.submittedActions); got != 1 {
+		t.Fatalf("submitted action count = %d, want only the first step action", got)
+	}
+	if got := len(provider.requests); got != 3 {
+		t.Fatalf("provider request count = %d, want duplicate feedback followed by settle", got)
+	}
+	finalTranscript := provider.requests[2].Messages
+	if !requestMessagesContain(finalTranscript, "duplicate_tool_call_id") {
+		t.Fatalf("third request missing duplicate tool call feedback: %+v", finalTranscript)
+	}
+	if !requestMessagesContain(finalTranscript, "batch_validation_failed") {
+		t.Fatalf("third request missing skipped sibling feedback: %+v", finalTranscript)
+	}
+	assertTraceContains(t, recorder.events, trace.EventToolBatchFailed)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
 func TestHandleEventFailsWhenMaxStepsExceeded(t *testing.T) {
 	registry := newSpeakRegistry()
 	env := &fakeEnvironment{}
@@ -867,6 +1000,99 @@ func TestFailedMultiStepTurnDoesNotAppendMemory(t *testing.T) {
 	if got := len(store.appended); got != 0 {
 		t.Fatalf("appended memory count = %d, want 0 for failed turn", got)
 	}
+}
+
+func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.T) {
+	registry := newParallelSenseRegistry()
+	env := &technicalActionEnvironment{
+		delays: map[string]time.Duration{
+			"fatal": 10 * time.Millisecond,
+		},
+		submitErrors: map[string]error{
+			"fatal": errors.New("adapter transport closed"),
+		},
+	}
+	recorder := &recordingTraceRecorder{}
+	store := &failRecentStore{}
+	provider := &scriptedProvider{
+		responses: []model.Response{{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{
+					{ID: "call_success", Name: "sense", Arguments: map[string]any{"label": "success"}},
+					{ID: "call_fatal", Name: "sense", Arguments: map[string]any{"label": "fatal"}},
+				},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		}},
+	}
+	config := agent.DefaultConfig()
+	config.ActionTimeout = time.Second
+	loop := agent.NewLoop(provider, registry, recorder, config, agent.WithMemoryStore(store))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
+		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
+	}
+	if got := len(store.appended); got != 1 {
+		t.Fatalf("appended memory count = %d, want 1", got)
+	}
+	record := store.appended[0]
+	if got := len(record.Outcomes); got != 1 {
+		t.Fatalf("memory outcome count = %d, want 1", got)
+	}
+	if record.Outcomes[0].ToolName != "sense" {
+		t.Fatalf("memory outcome tool = %q, want sense", record.Outcomes[0].ToolName)
+	}
+	if got := record.Outcomes[0].ToolArguments["label"]; got != "success" {
+		t.Fatalf("memory outcome label = %v, want success", got)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnFailed)
+}
+
+func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
+	registry := newSequentialSenseRegistry()
+	env := &technicalActionEnvironment{
+		submitErrors: map[string]error{
+			"fatal": errors.New("adapter transport closed"),
+		},
+	}
+	recorder := &recordingTraceRecorder{}
+	store := &failRecentStore{}
+	provider := &scriptedProvider{
+		responses: []model.Response{{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{
+					{ID: "call_success", Name: "sense", Arguments: map[string]any{"label": "success"}},
+					{ID: "call_fatal", Name: "sense", Arguments: map[string]any{"label": "fatal"}},
+				},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		}},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
+		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
+	}
+	if got := len(store.appended); got != 1 {
+		t.Fatalf("appended memory count = %d, want 1", got)
+	}
+	record := store.appended[0]
+	if got := len(record.Outcomes); got != 1 {
+		t.Fatalf("memory outcome count = %d, want 1", got)
+	}
+	if record.Outcomes[0].ToolName != "sense" {
+		t.Fatalf("memory outcome tool = %q, want sense", record.Outcomes[0].ToolName)
+	}
+	if got := record.Outcomes[0].ToolArguments["label"]; got != "success" {
+		t.Fatalf("memory outcome label = %v, want success", got)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnFailed)
 }
 
 func TestCompletedTurnAfterRejectedActionWritesOnlySuccessfulOutcomes(t *testing.T) {

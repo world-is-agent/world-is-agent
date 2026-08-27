@@ -68,7 +68,6 @@ func (p Projector) Project(input ProjectInput) (Record, error) {
 		SourceEventSequence: input.Event.GetSequence(),
 		EventType:           input.Event.GetEventType(),
 		GameTime:            gameTimeSnapshot(input.Event.GetGameTime()),
-		Outcome:             outcomes[0],
 		Outcomes:            outcomes,
 		CreatedAt:           p.now(),
 	}, nil

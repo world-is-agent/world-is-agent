@@ -227,7 +227,7 @@ func (s *Server) dispatchGameEvent(
 		Admitted: admitted,
 		Run: func(taskCtx context.Context) {
 			if err := s.agentLoop.HandleEvent(taskCtx, env, conn, key, event); err != nil {
-				fmt.Printf("agent loop failed: %v\n", err)
+				fmt.Printf("agent loop failed: %s\n", logSafeError(err))
 			}
 		},
 		Abort: func(reason session.AbortReason) {
@@ -274,6 +274,18 @@ func (s *Server) dispatchGameEvent(
 	seenEventIDs[event.EventId] = struct{}{}
 	close(admitted)
 	return nil
+}
+
+func logSafeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.Join(strings.Fields(err.Error()), " ")
+	if len([]rune(message)) <= 240 {
+		return message
+	}
+	runes := []rune(message)
+	return strings.TrimSpace(string(runes[:240]))
 }
 
 // resolveAgentSessionKey 完成 pre-turn 校验与身份解析，被 dispatchGameEvent

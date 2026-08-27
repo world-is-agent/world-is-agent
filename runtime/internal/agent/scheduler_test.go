@@ -368,6 +368,33 @@ func TestSchedulerRejectsDuplicateToolCallIDsDuringPreflight(t *testing.T) {
 	assertToolResult(t, outcome.Results[2], "call_3", "speak", "skipped", "batch_validation_failed")
 }
 
+func TestSchedulerValidatesArgumentsAgainstInputSchemaBeforeExecution(t *testing.T) {
+	registry := schedulerRegistry(schedulerCapabilityWithSchema(
+		"speak",
+		tool.ConcurrencySequential,
+		`{"type":"object","properties":{"mood":{"type":"string","enum":["happy","sad"]}},"required":["mood"],"additionalProperties":false}`,
+	))
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		{ID: "call_bad", Name: "speak", Arguments: map[string]any{"mood": "angry"}},
+		{ID: "call_good", Name: "speak", Arguments: map[string]any{"mood": "happy"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_bad", "speak", "invalid", "tool_arguments_invalid")
+	assertToolResult(t, outcome.Results[1], "call_good", "speak", "skipped", "batch_validation_failed")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
 func TestSchedulerSkipsLaterGroupsAfterPriorGroupFailure(t *testing.T) {
 	registry := schedulerRegistry(
 		schedulerCapability("sense", tool.ConcurrencyParallelSafe),
@@ -398,6 +425,105 @@ func TestSchedulerSkipsLaterGroupsAfterPriorGroupFailure(t *testing.T) {
 	assertToolResult(t, outcome.Results[2], "call_later", "sense", "skipped", "prior_group_failed")
 	if !outcome.HasModelVisibleFailure {
 		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
+func TestSchedulerDrainsParallelGroupBeforeSkippingLaterGroupsOnModelVisibleFailure(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerCapability("sense", tool.ConcurrencyParallelSafe),
+		schedulerCapability("speak", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{
+		delays: map[string]time.Duration{
+			"success": 20 * time.Millisecond,
+			"failed":  10 * time.Millisecond,
+		},
+		statuses: map[string]protocolv1alpha2.ActionStatus{
+			"failed": protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED,
+		},
+	}
+	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_success", "sense", "success"),
+		schedulerCall("call_failed", "sense", "failed"),
+		schedulerCall("call_later", "speak", "later"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	assertContainsAll(t, env.callOrder(), []string{"success", "failed"})
+	assertNotContains(t, env.callOrder(), "later")
+	assertToolResult(t, outcome.Results[0], "call_success", "sense", "succeeded", "action_succeeded")
+	assertToolResult(t, outcome.Results[1], "call_failed", "sense", "rejected", "action_rejected")
+	assertToolResult(t, outcome.Results[2], "call_later", "speak", "skipped", "prior_group_failed")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+	if got := len(outcome.SuccessfulActions); got != 1 {
+		t.Fatalf("successful action count = %d, want 1", got)
+	}
+}
+
+func TestSchedulerReturnsCompletedSiblingActionsBeforeParallelTechnicalError(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerCapability("sense", tool.ConcurrencyParallelSafe),
+	)
+	env := &schedulerTestEnvironment{
+		delays: map[string]time.Duration{
+			"fatal": 10 * time.Millisecond,
+		},
+		submitErrors: map[string]error{
+			"fatal": errors.New("adapter transport closed"),
+		},
+	}
+	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_success", "sense", "success"),
+		schedulerCall("call_fatal", "sense", "fatal"),
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want technical failure")
+	}
+
+	assertContainsAll(t, env.callOrder(), []string{"success", "fatal"})
+	assertToolResult(t, outcome.Results[0], "call_success", "sense", "succeeded", "action_succeeded")
+	if got := len(outcome.SuccessfulActions); got != 1 {
+		t.Fatalf("successful action count = %d, want 1", got)
+	}
+	if outcome.SuccessfulActions[0].ToolCall.ID != "call_success" {
+		t.Fatalf("successful action = %+v, want call_success", outcome.SuccessfulActions[0])
+	}
+}
+
+func TestSchedulerReturnsCompletedActionsBeforeSequentialTechnicalError(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerCapability("sense", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{
+		submitErrors: map[string]error{
+			"fatal": errors.New("adapter transport closed"),
+		},
+	}
+	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_success", "sense", "success"),
+		schedulerCall("call_fatal", "sense", "fatal"),
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want technical failure")
+	}
+
+	assertStringSlice(t, env.callOrder(), []string{"success", "fatal"})
+	assertToolResult(t, outcome.Results[0], "call_success", "sense", "succeeded", "action_succeeded")
+	if got := len(outcome.SuccessfulActions); got != 1 {
+		t.Fatalf("successful action count = %d, want 1", got)
+	}
+	if outcome.SuccessfulActions[0].ToolCall.ID != "call_success" {
+		t.Fatalf("successful action = %+v, want call_success", outcome.SuccessfulActions[0])
 	}
 }
 
@@ -434,6 +560,33 @@ func TestSchedulerDrainsStartedWorkersBeforeTechnicalFailureTerminal(t *testing.
 	if indexOf(events, "finish:slow") == -1 {
 		t.Fatalf("slow worker was not drained before return: %v", events)
 	}
+}
+
+func TestPreferTechnicalErrorKeepsRealErrorOverCancellation(t *testing.T) {
+	canceled := context.Canceled
+	transportClosed := errors.New("adapter transport closed")
+
+	if got := preferTechnicalError(canceled, transportClosed); got != transportClosed {
+		t.Fatalf("preferred error = %v, want transport error", got)
+	}
+	if got := preferTechnicalError(transportClosed, canceled); got != transportClosed {
+		t.Fatalf("preferred error = %v, want first transport error", got)
+	}
+}
+
+func TestTerminalActionToolResultUsesStatusCodeWhenAdapterCodeIsEmpty(t *testing.T) {
+	result, err := toolResultFromActionResult(
+		schedulerCall("call_rejected", "sense", "rejected"),
+		&protocolv1alpha2.ActionResult{
+			Status: protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED,
+			Error:  &protocolv1alpha2.Error{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("toolResultFromActionResult returned error: %v", err)
+	}
+
+	assertToolResult(t, result, "call_rejected", "sense", "rejected", "action_rejected")
 }
 
 func TestSchedulerFailsOnNonTerminalActionStatus(t *testing.T) {
@@ -490,13 +643,17 @@ func schedulerRegistry(capabilities ...*protocolv1alpha2.Capability) *tool.Regis
 }
 
 func schedulerCapability(name string, concurrency tool.ConcurrencyMode) *protocolv1alpha2.Capability {
+	return schedulerCapabilityWithSchema(name, concurrency, `{"type":"object"}`)
+}
+
+func schedulerCapabilityWithSchema(name string, concurrency tool.ConcurrencyMode, inputSchema string) *protocolv1alpha2.Capability {
 	mode := protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL
 	if concurrency == tool.ConcurrencyParallelSafe {
 		mode = protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE
 	}
 	return &protocolv1alpha2.Capability{
 		Name:            name,
-		InputSchemaJson: `{"type":"object"}`,
+		InputSchemaJson: inputSchema,
 		ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		ConcurrencyMode: mode,
 	}

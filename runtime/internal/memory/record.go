@@ -19,7 +19,6 @@ type Record struct {
 
 	GameTime *GameTimeSnapshot
 
-	Outcome  TurnOutcome
 	Outcomes []TurnOutcome
 
 	CreatedAt time.Time

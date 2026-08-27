@@ -2,12 +2,10 @@ package tool
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
-	"gameagent/runtime/internal/model"
 )
 
 func TestRegisterEnvironmentCapabilitiesUsesAdapterSchema(t *testing.T) {
@@ -206,130 +204,5 @@ func TestRegistryAvailableReturnsDeterministicOrder(t *testing.T) {
 		if available[i].Name != want {
 			t.Fatalf("available[%d].Name = %q, want %q", i, available[i].Name, want)
 		}
-	}
-}
-
-func TestValidateToolCallOnlyChecksEnvelope(t *testing.T) {
-	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{
-			Name:            "emote",
-			InputSchemaJson: `{"type":"object","properties":{"emote":{"type":"string"}},"required":["emote"]}`,
-		},
-	})
-
-	args := map[string]any{
-		"unexpected": "adapter-validates-semantics",
-	}
-
-	err := registry.ValidateToolCall("npc:Linus", model.ToolCall{
-		Name:      "emote",
-		Arguments: args,
-	})
-	if err != nil {
-		t.Fatalf("ValidateToolCall returned error: %v", err)
-	}
-
-	err = registry.ValidateToolCall("npc:Linus", model.ToolCall{
-		Name:      "missing",
-		Arguments: args,
-	})
-	if err == nil {
-		t.Fatal("expected unregistered tool to fail")
-	}
-
-	err = registry.ValidateToolCall("npc:Linus", model.ToolCall{
-		Name: "emote",
-	})
-	if err == nil {
-		t.Fatal("expected nil arguments to fail")
-	}
-}
-
-func TestRegistryValidateToolCallRejectsNilArgumentMap(t *testing.T) {
-	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{Name: "speak", InputSchemaJson: `{"type":"object"}`},
-	})
-
-	err := registry.ValidateToolCall("npc:Linus", model.ToolCall{Name: "speak"})
-	if err == nil {
-		t.Fatal("expected nil argument map to fail")
-	}
-}
-
-func TestValidateToolCallBatchRejectsUnknownToolBeforeExecution(t *testing.T) {
-	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{Name: "speak", InputSchemaJson: `{"type":"object"}`},
-	})
-
-	entries, err := registry.ValidateToolCallBatch("npc:Linus", []model.ToolCall{
-		{Name: "speak", Arguments: map[string]any{"text": "hello"}},
-		{Name: "missing", Arguments: map[string]any{}},
-	})
-	if err == nil {
-		t.Fatal("ValidateToolCallBatch returned nil error, want unknown tool failure")
-	}
-	if len(entries) != 0 {
-		t.Fatalf("entries = %+v, want none on batch validation failure", entries)
-	}
-	if !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("error = %v, want missing tool name", err)
-	}
-}
-
-func TestValidateToolCallBatchRejectsInvalidArgumentsBeforeExecution(t *testing.T) {
-	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{Name: "speak", InputSchemaJson: `{"type":"object"}`},
-		{Name: "emote", InputSchemaJson: `{"type":"object"}`},
-	})
-
-	entries, err := registry.ValidateToolCallBatch("npc:Linus", []model.ToolCall{
-		{Name: "speak", Arguments: map[string]any{"text": "hello"}},
-		{Name: "emote"},
-	})
-	if err == nil {
-		t.Fatal("ValidateToolCallBatch returned nil error, want invalid arguments failure")
-	}
-	if len(entries) != 0 {
-		t.Fatalf("entries = %+v, want none on batch validation failure", entries)
-	}
-	if !strings.Contains(err.Error(), "tool arguments are missing") {
-		t.Fatalf("error = %v, want missing arguments", err)
-	}
-}
-
-func TestValidateToolCallBatchReturnsEntriesInToolCallOrder(t *testing.T) {
-	registry := NewRegistry()
-	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
-		{
-			Name:            "speak",
-			InputSchemaJson: `{"type":"object"}`,
-			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
-		},
-		{
-			Name:            "sense_nearby",
-			InputSchemaJson: `{"type":"object"}`,
-			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE,
-		},
-	})
-
-	entries, err := registry.ValidateToolCallBatch("npc:Linus", []model.ToolCall{
-		{Name: "sense_nearby", Arguments: map[string]any{}},
-		{Name: "speak", Arguments: map[string]any{"text": "hello"}},
-	})
-	if err != nil {
-		t.Fatalf("ValidateToolCallBatch returned error: %v", err)
-	}
-	if got := len(entries); got != 2 {
-		t.Fatalf("entry count = %d, want 2", got)
-	}
-	if entries[0].Definition.Name != "sense_nearby" || entries[0].Concurrency != ConcurrencyParallelSafe {
-		t.Fatalf("entries[0] = %+v, want sense_nearby parallel_safe", entries[0])
-	}
-	if entries[1].Definition.Name != "speak" || entries[1].Concurrency != ConcurrencySequential {
-		t.Fatalf("entries[1] = %+v, want speak sequential", entries[1])
 	}
 }

@@ -366,9 +366,6 @@ func trimMemories(records []memory.Record, limit int, currentTime *memory.GameTi
 // 存储字段用于 Runtime 追踪；模型只需要“何时 + 可见动作”的连续性信号。
 func renderMemory(record memory.Record, currentTime *memory.GameTimeSnapshot) string {
 	outcomes := record.Outcomes
-	if len(outcomes) == 0 {
-		outcomes = []memory.TurnOutcome{record.Outcome}
-	}
 
 	summaries := make([]string, 0, len(outcomes))
 	for _, outcome := range outcomes {

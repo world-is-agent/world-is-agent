@@ -99,7 +99,7 @@ continue_on_failure policy
 | Tool Registry | 保存 Environment Tool metadata 与并发策略 | AgentTurn Control 不进入 Tool Registry |
 | AgentLoop | 执行 bounded step loop 与 tool batch scheduler | 不实现 async resume |
 | Context | 回合内 transcript 包含 tool calls/results | 不用 LLM 二次摘要 ToolResult |
-| Memory | completed Turn 写入多个 successful outcomes | 失败 Turn 不写入 Memory |
+| Memory | completed Turn 写入多个 successful outcomes；action 技术错误前已确认成功的 outcomes 可写入 | unknown / failed / skipped outcomes 不写入 Memory |
 | Trace | 增加 step / batch / scheduler 可观测字段 | terminal event 仍唯一且最后 |
 | Gateway | 单 EventAck 后可发送多个 ActionRequest | 不修改 event admission 的 game-neutral 规则 |
 
@@ -165,30 +165,24 @@ Runtime 对空 `definition_id` 的处理：
 1. Stardew adapter 必须显式填充 definition_id=entity_id。
 2. fake non-Stardew fixture 必须显式填充 definition_id!=entity_id。
 3. Runtime 从 target EntityRef.definition_id 读取当前 Turn 的 definition binding。
-4. Runtime 可按 Agent Binding policy 使用 static binding 作为 fallback。
-5. Runtime 不得把缺失 definition_id 自动解释为 entity_id，除非该 adapter 的 binding policy 明确声明。
-6. target EntityRef 与 static binding 的非空 definition_id 冲突时，Runtime 必须在 context build 前失败并记录 trace diagnostic。
+4. Runtime 不得把缺失 definition_id 自动解释为 entity_id。
+5. static binding fallback 与 EntityRef/static binding mismatch gate 延后实现。
 ```
 
-`definition_id` resolution 与 mismatch 处理遵循 Agent Binding ADR。Phase5 不新增独立 Binding store，也不定义新的长期优先级体系。
+`definition_id` resolution 当前为 EntityRef-only。Phase5 不新增独立 Binding store，也不定义新的长期优先级体系。
 
 `Observation` 不携带目标实体的 `definition_id`。Observation 表达当前实体状态与局部环境事实；Agent Definition 绑定由 `EntityRef.definition_id` 和 Runtime Agent Binding policy 提供。
 
-Phase5 引入最小 Runtime 概念：
+Phase5 引入最小 Runtime descriptor：
 
 ```go
-type AgentBinding struct {
-    EntityID     string
-    DefinitionID string
-}
-
-type AgentDefinition struct {
-    GameID       string
-    DefinitionID string
+type AgentDescriptor struct {
+	EntityID     string
+	DefinitionID string
 }
 ```
 
-`AgentDefinition` 是模板本体的 Runtime 侧抽象，Scope 为 `game_id + definition_id`；`definition_id` 只是模板引用 key，不是模板内容。Phase5 可以先使用最小 in-memory/static definition source，不实现长期 Definition store。
+`definition_id` 只是模板引用 key，不是模板内容。
 
 ## 3.2 capability concurrency_mode
 
@@ -432,7 +426,9 @@ Preflight 规则：
 2. 任一 ToolCall preflight 失败时，不发送任何 ActionRequest。
 3. preflight 失败的 call 生成 `status=invalid`。
 4. preflight 成功但因 batch preflight 原子失败未执行的 call 生成 `status=skipped, code=batch_validation_failed`。
-5. ToolCall.ID duplicate 属于 preflight failure。
+5. 同一 AgentStep 内 ToolCall.ID duplicate 属于 Scheduler preflight failure。
+6. 同一 Turn 内后续 AgentStep 复用已出现过的 ToolCall.ID 时，由 Loop 生成 model-visible preflight failure，不进入 Scheduler。
+7. Runtime 仅校验 InputSchema 的 top-level object / properties.type / required / enum / additionalProperties=false 子集；Adapter 仍负责业务级与完整 schema 校验。
 ```
 
 调度规则：
@@ -565,7 +561,7 @@ Transcript 规则：
 1. assistant message 保存同一 step 的 ordered ToolCalls。
 2. tool result message 保存同一 step 的 ordered ToolResults。
 3. ToolResult 不经过 LLM 二次摘要。
-4. Runtime 不内置 speak / emote 等具体 capability 的语义摘要规则。
+4. Transcript 不内置 speak / emote 等具体 capability 的语义摘要规则。
 5. Recent Memory 只表示 previous turns；Transcript 只表示 current turn earlier steps。
 ```
 
@@ -692,9 +688,11 @@ type Record struct {
 }
 ```
 
-Memory 只在 Turn `completed` 时写入。
+Memory 记录已由 Runtime 确认为 `SUCCEEDED` 的 Environment outcomes。
 
-如果 Turn 因 `max_steps_exceeded`、budget exceeded 或技术错误失败，即使前面某些 Action 已成功，Phase5 P0 仍不写 Memory。
+如果 Turn 因 action 技术错误失败，错误发生前已确认成功的 Action 可以在 terminal failure 前写入 Memory。
+
+如果 Turn 因 `max_steps_exceeded`、budget exceeded、model 或 context 失败，Phase5 不补写未 settle 的历史 actions。
 
 completed Turn 中 rejected / failed / invalid ToolResult 不进入 Recent Memory，只保留在 current turn transcript 和 trace 中。
 
@@ -1016,14 +1014,18 @@ TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative
 TestConfigPhase5DefaultTurnTimeoutCoversWorstCaseBudget
 TestModelResponseSupportsMultipleToolCalls
 TestModelResponseSupportsSettleControl
-TestModelRequestIncludesControls
 TestModelMessageSupportsToolCallsAndToolResults
+TestToolResultSupportsNormalizedStatusCodeAndMessage
 TestToolCallArgumentsUseProviderNeutralMap
-TestProviderWrapperNormalizesNativeMultipleToolCalls
-TestProviderWrapperNormalizesNoToolFinalResponseToSettle
-TestProviderWrapperStripsInternalSettleSentinel
-TestProviderWrapperNormalizesToolCallsWithSettleSentinel
-TestProviderWrapperGeneratesStableToolCallIDsWhenMissing
+TestBuildRequestAddsAdditionalPropertiesForStrictToolSchema
+TestBuildRequestUsesDeepSeekChatCompletionsShape
+TestBuildRequestAllowsSettleOnlyWithoutEnvironmentTools
+TestGenerateHTTPErrorDoesNotExposeRawBody
+TestBuildRequestMapsToolTranscriptToProviderSafeInput
+TestBuildRequestMapsToolTranscriptToProviderSafeMessage
+TestParseResponseReturnsModelDecisionToolCalls
+TestParseResponseNoToolCallSettles
+TestParseResponseStripsSettleSentinel
 ```
 
 完成信号：
@@ -1049,8 +1051,10 @@ TestRegistryMapsParallelSafeCapability
 TestRegistryTreatsParallelSafeAsStrongAdapterCommitment
 TestRegistryExcludesAsyncCapabilitiesFromPhase5ToolView
 TestRegistryAvailableReturnsDeterministicOrder
-TestValidateToolCallBatchRejectsUnknownToolBeforeExecution
-TestValidateToolCallBatchRejectsInvalidArgumentsBeforeExecution
+TestSchedulerDoesNotExecuteWhenBatchValidationFails
+TestSchedulerProducesOneToolResultPerToolCallWhenBatchValidationFails
+TestSchedulerPreflightsBuildActionRequestBeforeAnyExecution
+TestSchedulerRejectsDuplicateToolCallIDsDuringPreflight
 ```
 
 完成信号：
@@ -1079,9 +1083,16 @@ TestSchedulerProducesOneToolResultPerToolCallWhenBatchValidationFails
 TestSchedulerPreflightsBuildActionRequestBeforeAnyExecution
 TestBuildActionRequestConvertsToolCallArgumentMapToProtocolStruct
 TestBuildActionRequestRejectsNonStructSafeArgumentsBeforeExecution
+TestValidateArgumentsAppliesCommonInputSchemaConstraints
 TestSchedulerRejectsDuplicateToolCallIDsDuringPreflight
+TestSchedulerValidatesArgumentsAgainstInputSchemaBeforeExecution
 TestSchedulerSkipsLaterGroupsAfterPriorGroupFailure
+TestSchedulerDrainsParallelGroupBeforeSkippingLaterGroupsOnModelVisibleFailure
+TestSchedulerReturnsCompletedSiblingActionsBeforeParallelTechnicalError
+TestSchedulerReturnsCompletedActionsBeforeSequentialTechnicalError
 TestSchedulerDrainsStartedWorkersBeforeTechnicalFailureTerminal
+TestPreferTechnicalErrorKeepsRealErrorOverCancellation
+TestTerminalActionToolResultUsesStatusCodeWhenAdapterCodeIsEmpty
 TestSchedulerFailsOnNonTerminalActionStatus
 TestSchedulerHonorsMaxParallelToolCalls
 ```
@@ -1133,12 +1144,13 @@ go test ./runtime/internal/context ./runtime/internal/model
 ```text
 TestHandleEventRunsBatchToolCallsThenSettle
 TestHandleEventRunsMultipleStepsUntilSettle
-TestHandleEventSettleWithoutToolCallsCompletes
+TestHandleEventCompletesOnSettleOnlyDecision
+TestHandleEventRejectsToolCallIDReusedAcrossSteps
 TestHandleEventFailsWhenMaxStepsExceeded
 TestHandleEventFailsWhenMaxToolCallsPerStepExceeded
 TestHandleEventFailsWhenMaxToolCallsPerTurnExceeded
 TestHandleEventTurnTimeoutCanPreemptBudgetsWithDelayedProvider
-TestHandleEventPreservesOneEnvironmentActionBehavior
+TestHandleEventRunsOneTurnNPCInteraction
 ```
 
 完成信号：
@@ -1159,10 +1171,7 @@ go test ./runtime/internal/agent
 
 ```text
 TestHandleEventRetriesAfterInvalidToolCallBatchWithinStepBudget
-TestHandleEventRetriesAfterActionResultRejected
-TestHandleEventRetriesAfterActionResultFailed
-TestHandleEventRetriesAfterActionResultCancelled
-TestHandleEventRetriesAfterActionResultInterrupted
+TestHandleEventRetriesAfterActionResultTerminalFailure
 TestHandleEventDoesNotSettleAfterFailedBatchEvenWhenControlSettleRequested
 TestHandleEventFailsWhenFailureLoopExhaustsMaxSteps
 ```
@@ -1178,7 +1187,7 @@ go test ./runtime/internal/agent
 目标：
 
 ```text
-成功 Turn 的多个 Environment outcomes 能进入短期 Memory。
+completed Turn 的多个 Environment outcomes 能进入短期 Memory；action 技术错误前已确认成功的 outcomes 也会进入短期 Memory。
 ```
 
 测试：
@@ -1187,6 +1196,8 @@ go test ./runtime/internal/agent
 TestProjectorBuildsRecordWithMultipleOutcomes
 TestRendererSummarizesMultiOutcomeMemory
 TestFailedMultiStepTurnDoesNotAppendMemory
+TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory
+TestActionTechnicalFailureRecordsCompletedSequentialMemory
 TestCompletedTurnAfterRejectedActionWritesOnlySuccessfulOutcomes
 ```
 
@@ -1209,11 +1220,10 @@ go test ./runtime/internal/memory ./runtime/internal/context ./runtime/internal/
 ```text
 TestMultiStepTraceEventsShareTurnIDAndIncreaseStepIndex
 TestToolBatchTraceFieldsIncludeCallCountAndConcurrency
-TestParallelToolCompletionOrderDoesNotChangeTraceResultOrder
-TestParallelToolTechnicalFailureDrainsBeforeTerminalTrace
+TestSchedulerReturnsResultsInOriginalToolCallOrder
+TestSchedulerDrainsStartedWorkersBeforeTechnicalFailureTerminal
 TestMultiStepTerminalEventIsUniqueAndLast
 TestMaxStepsTraceFailureReason
-TestTurnSettledIsNonTerminalBeforeTurnCompleted
 ```
 
 完成信号：
@@ -1299,7 +1309,8 @@ git diff --check
 | provider internal settle sentinel | provider wrapper unit | sentinel 被剥离，不进入 ToolCalls / budget / Scheduler |
 | batch preflight failure | agent/scheduler unit | 不发送任何 ActionRequest，每个 proposed ToolCall 都有 ToolResult |
 | BuildActionRequest failure in preflight | scheduler unit | 不执行任何 ActionRequest |
-| duplicate ToolCall.ID | scheduler unit | preflight failure |
+| duplicate ToolCall.ID in one step | scheduler unit | preflight failure |
+| duplicate ToolCall.ID across steps | agent unit | model-visible preflight failure，不发送任何 ActionRequest |
 | valid calls skipped by batch validation | agent unit | skipped(batch_validation_failed) 进入 transcript |
 | prior group failure | scheduler/agent unit | 当前 group 完成，后续 group skipped(prior_group_failed) |
 | ToolResult structured output | context/model unit | bounded ActionResult.output 进入 ToolResult.output |
@@ -1307,6 +1318,7 @@ git diff --check
 | technical error in parallel group | scheduler/trace unit | started workers drain 后才发 terminal trace |
 | ASYNC capability in Phase5 | tool unit | 不进入当前 AgentTurn Tool View |
 | ToolCall arguments conversion | tool/scheduler unit | map[string]any 在 BuildActionRequest 边界转为 protocol Struct |
+| ToolCall InputSchema validation | tool/scheduler unit | required / enum / additionalProperties / type 不满足时 preflight failure |
 | max_tool_calls_per_step exceeded | agent unit | turn_failed stage=model |
 | max_tool_calls_per_turn exceeded | agent unit | turn_failed stage=step |
 | max_steps exceeded | agent unit | turn_failed stage=step reason=max_steps_exceeded |
@@ -1320,7 +1332,6 @@ git diff --check
 | definition_id in EntityRef | protocol/runtime unit | Agent Descriptor 可区分 entity_id / definition_id |
 | Observation has no definition_id | protocol unit | 避免 target definition 双来源 |
 | missing definition_id | runtime unit | 按 binding policy 处理，不隐式污染 Memory key |
-| EntityRef/static binding definition mismatch | runtime/context unit | context build 前失败并记录 trace diagnostic |
 | Stardew definition_id | adapter mapper unit | 固定 NPC 填充 definition_id=entity_id |
 | non-Stardew trigger multi-step | gateway integration | damage_received 可进入 multi-step，entity_id != definition_id |
 | Gateway event admission baseline | gateway unit/integration | core 不含 game-specific event_type allowlist |
@@ -1348,9 +1359,9 @@ Phase5 可以验收为 `Accepted with Known Limitations` 的最低条件：
 12. batch validation failure 与 prior group failure 都产生 skipped ToolResult。
 13. Batch Preflight 在任何 ActionRequest 发出前完成。
 14. parallel group 技术错误在 started workers drain 后才发 terminal event。
-15. Provider wrapper 明确支持 multi tool calls / no-tool settle / settle sentinel 映射。
+15. Provider wrapper 明确支持 multi tool calls / no-tool settle，并且不提示模型调用未声明的 settle sentinel。
 16. Phase5 Tool View 不暴露 ASYNC capability。
-17. 成功 Turn 的多个 Environment outcomes 可以进入短期 Memory。
+17. 已确认成功的多个 Environment outcomes 可以进入短期 Memory。
 18. Protocol 只通过 EntityRef.definition_id 携带 definition binding。
 19. Protocol 显式携带 capability concurrency_mode。
 20. Stardew mapper 填充 definition_id=entity_id。
@@ -1360,6 +1371,15 @@ Phase5 可以验收为 `Accepted with Known Limitations` 的最低条件：
 24. Gateway core 不含任何 game-specific event_type allowlist。
 25. ActionRequest / ActionResult 保持单 action 语义。
 26. AgentTurn Control 不进入 Tool Registry / ActionRequest / Adapter。
+```
+
+已知限制：
+
+```text
+1. AgentBinding static source 与 EntityRef/static binding mismatch gate 延后实现。
+2. Tool Registry 当前按单 adapter / 单 active stream 假设运行。
+3. Windows 本机不跑 go test -race；CI/Linux 继续补 race 验收。
+4. Memory renderer 仍保留 Phase4 speak / emote 兼容摘要语义，需进入 compat roadmap。
 ```
 
 ---
@@ -1447,7 +1467,7 @@ Phase5 的 batch 边界属于 Runtime scheduler，不属于 Protocol Action mess
 definition_id 是 Agent Definition / Archetype 的引用 key。
 EntityRef 表达游戏实体身份与绑定事实。
 Observation 表达当前实体状态，不承载目标实体的 definition binding。
-AgentDefinition 模板本体由 Runtime Definition source 提供，不进入 Adapter Observation。
+AgentDefinition 模板本体后续由 Runtime Definition source 提供，不进入 Adapter Observation。
 ```
 
 ## R5：definition_id 是否进入 AgentSessionKey？
@@ -1523,16 +1543,15 @@ ActionResult 作为 ToolResult 进入下一步即可证明 multi-step。
 
 ## R11：失败 Action 已经发生但 Turn 后续失败，Memory 不写会不会丢事实？
 
-裁决：Phase5 P0 不写。
+裁决：已确认成功的 Action 写入 Memory。
 
 原因：
 
 ```text
-失败 Turn 的部分 side effect 是否应进入 Memory，是 recovery / eventual consistency 问题。
-Phase5 只保证 completed Turn 写 Memory。
+ActionResult 已确认为 SUCCEEDED 时，游戏侧事实已经发生。
+如果同一 batch 后续遇到技术错误，Runtime 仍记录已确认成功的 outcomes。
+未知、非终态、失败、取消、中断或被跳过的 action 不进入 Memory。
 ```
-
-验收记录必须将该点列为 Known Limitation。
 
 ## R12：Protocol additive 是否等于所有 Adapter 语义兼容？
 
@@ -1580,7 +1599,8 @@ AgentTurn terminal event 必须在 Runtime-owned work 清理后发出。
 
 ```text
 Runtime core 只接收 ControlSettle。
-Provider-facing 可以使用 no-tool final response 或 internal settle sentinel。
+Provider-facing 使用 no-tool final response 表达 settle。
+internal settle sentinel 只作为兼容解析路径，不在 provider tools 或 prompt 中声明。
 internal settle sentinel 不进入 Tool Registry、Scheduler、ToolCall budget、Transcript 或 Adapter。
 ```
 
@@ -1648,7 +1668,7 @@ Entity identity != Agent Definition
 Agent Definition / Archetype = game_id + definition_id
 EntityRef.definition_id is a binding key, not the template body
 Observation does not own target definition binding
-AgentDefinition belongs to Runtime Definition source
+AgentDefinition belongs to Runtime Definition source when that source is introduced
 Memory scope = game_id + world_id + entity_id
 Observation narrow waist != universal game state schema
 Available Tools == current AgentTurn capability view

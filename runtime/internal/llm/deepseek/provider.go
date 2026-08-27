@@ -86,17 +86,13 @@ func (p *Provider) Generate(ctx context.Context, req model.Request) (model.Respo
 	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return model.Response{}, fmt.Errorf("deepseek response failed: %s", string(respBody))
+		return model.Response{}, fmt.Errorf("deepseek response failed: status=%d", httpResp.StatusCode)
 	}
 
 	return parseResponse(respBody)
 }
 
 func (p *Provider) buildRequest(req model.Request) ([]byte, error) {
-	if len(req.Tools) == 0 {
-		return nil, errors.New("deepseek provider requires at least one tool")
-	}
-
 	tools := make([]map[string]any, 0, len(req.Tools))
 	for _, tool := range req.Tools {
 		var schema map[string]any
@@ -117,8 +113,10 @@ func (p *Provider) buildRequest(req model.Request) ([]byte, error) {
 	payload := map[string]any{
 		"model":    p.model,
 		"messages": buildMessages(req),
-		"tools":    tools,
 		"stream":   false,
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
 	}
 
 	return json.Marshal(payload)
@@ -234,7 +232,7 @@ func buildSystemContent(system string, controls []model.ControlDefinition) strin
 		if control.Kind != model.ControlSettle {
 			continue
 		}
-		settleInstruction := "When the current turn needs no environment action, return no tool calls or call __gameagent_settle with an optional reason."
+		settleInstruction := "When the current turn needs no environment action, return no tool calls."
 		if control.Description != "" {
 			settleInstruction += " " + control.Description
 		}

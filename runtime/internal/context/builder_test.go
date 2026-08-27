@@ -107,11 +107,11 @@ func TestRendererBuildsModelRequestWithMemoryObservationInstructionAndTools(t *t
 			SourceEventID: "event-1",
 			EventType:     "player_interacted_with_npc",
 			GameTime:      &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20},
-			Outcome: memory.TurnOutcome{
+			Outcomes: []memory.TurnOutcome{{
 				ToolName:      "speak",
 				ToolArguments: map[string]any{"text": "hello from last turn"},
 				ActionStatus:  "ACTION_STATUS_SUCCEEDED",
-			},
+			}},
 			CreatedAt: time.Unix(100, 0),
 		}},
 		Tools: []model.ToolDefinition{tool},
@@ -238,7 +238,7 @@ func TestRendererSeparatesRecentMemoryFromIntraTurnTranscript(t *testing.T) {
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-1"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
 		RecentMemories: []memory.Record{{
-			Outcome: memory.TurnOutcome{ToolName: "speak", ToolArguments: map[string]any{"text": "previous turn line"}},
+			Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": "previous turn line"}}},
 		}},
 		Transcript: []model.Message{{
 			Role: model.RoleTool,
@@ -529,8 +529,8 @@ func TestRendererMemoryBudgetKeepsLatestRecordWhenSingleRecordExceedsLimit(t *te
 		Event:         &protocolv1alpha2.GameEvent{EventId: "event-2", EventType: "player_interacted_with_npc"},
 		Observation:   &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
 		RecentMemories: []memory.Record{
-			{MemoryID: "old", Outcome: memory.TurnOutcome{ToolName: "speak", ToolArguments: map[string]any{"text": "old"}}},
-			{MemoryID: "latest", Outcome: memory.TurnOutcome{ToolName: "speak", ToolArguments: map[string]any{"text": strings.Repeat("x", 100)}}},
+			{MemoryID: "old", Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": "old"}}}},
+			{MemoryID: "latest", Outcomes: []memory.TurnOutcome{{ToolName: "speak", ToolArguments: map[string]any{"text": strings.Repeat("x", 100)}}}},
 		},
 	})
 	if err != nil {
@@ -573,10 +573,10 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 		},
 		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
 		RecentMemories: []memory.Record{{
-			Outcome: memory.TurnOutcome{
+			Outcomes: []memory.TurnOutcome{{
 				ToolName:      "emote",
 				ToolArguments: map[string]any{"emote": "happy"},
-			},
+			}},
 			GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20},
 		}},
 	})
@@ -656,10 +656,10 @@ func TestRendererMarksPreviousDayMemory(t *testing.T) {
 		},
 		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
 		RecentMemories: []memory.Record{{
-			Outcome: memory.TurnOutcome{
+			Outcomes: []memory.TurnOutcome{{
 				ToolName:      "speak",
 				ToolArguments: map[string]any{"text": "see you tomorrow"},
-			},
+			}},
 			GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 18, Minute: 20},
 		}},
 	})

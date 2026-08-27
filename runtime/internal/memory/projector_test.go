@@ -70,14 +70,17 @@ func TestProjectorBuildsRecordFromSuccessfulTurn(t *testing.T) {
 	if *record.GameTime != (memory.GameTimeSnapshot{Year: 1, Season: 2, Day: 3, Hour: 6, Minute: 20, Tick: 9001}) {
 		t.Fatalf("GameTime = %+v", *record.GameTime)
 	}
-	if record.Outcome.ToolName != "speak" {
-		t.Fatalf("ToolName = %q, want speak", record.Outcome.ToolName)
+	if got := len(record.Outcomes); got != 1 {
+		t.Fatalf("outcome count = %d, want 1", got)
 	}
-	if got := record.Outcome.ToolArguments["text"]; got != "hello" {
+	if record.Outcomes[0].ToolName != "speak" {
+		t.Fatalf("ToolName = %q, want speak", record.Outcomes[0].ToolName)
+	}
+	if got := record.Outcomes[0].ToolArguments["text"]; got != "hello" {
 		t.Fatalf("ToolArguments[text] = %v, want hello", got)
 	}
-	if record.Outcome.ActionStatus != "ACTION_STATUS_SUCCEEDED" {
-		t.Fatalf("ActionStatus = %q, want ACTION_STATUS_SUCCEEDED", record.Outcome.ActionStatus)
+	if record.Outcomes[0].ActionStatus != "ACTION_STATUS_SUCCEEDED" {
+		t.Fatalf("ActionStatus = %q, want ACTION_STATUS_SUCCEEDED", record.Outcomes[0].ActionStatus)
 	}
 	if !record.CreatedAt.Equal(now) {
 		t.Fatalf("CreatedAt = %v, want %v", record.CreatedAt, now)
@@ -105,7 +108,7 @@ func TestProjectorCopiesToolCallArgumentMap(t *testing.T) {
 	}
 
 	args["text"] = "changed"
-	if got := record.Outcome.ToolArguments["text"]; got != "hello" {
+	if got := record.Outcomes[0].ToolArguments["text"]; got != "hello" {
 		t.Fatalf("ToolArguments[text] = %v, want copied hello", got)
 	}
 }
@@ -150,9 +153,6 @@ func TestProjectorBuildsRecordWithMultipleOutcomes(t *testing.T) {
 	}
 	if record.Outcomes[0].ToolName != "speak" || record.Outcomes[1].ToolName != "emote" {
 		t.Fatalf("outcome order = %+v, want speak then emote", record.Outcomes)
-	}
-	if record.Outcome.ToolName != "speak" {
-		t.Fatalf("legacy Outcome = %+v, want first outcome", record.Outcome)
 	}
 }
 

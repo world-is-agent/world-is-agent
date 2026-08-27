@@ -216,6 +216,7 @@ public static partial class ProtocolMapper
             EntityId = entityId,
             EntityType = entityType,
             DisplayName = displayName,
+            // Stardew MVP0 uses stable game entity IDs as definition aliases.
             DefinitionId = entityId,
         };
     }

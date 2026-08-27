@@ -2,7 +2,6 @@ package tool
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -106,33 +105,6 @@ func (r *Registry) Lookup(name string) (Entry, bool) {
 
 	entry, exists := r.tools[name]
 	return entry, exists
-}
-
-// ValidateToolCall 校验模型返回的 ToolCall 是否能安全转成 ActionRequest。
-func (r *Registry) ValidateToolCall(entityID string, call model.ToolCall) error {
-	if _, ok := r.Lookup(call.Name); !ok {
-		return fmt.Errorf("tool %q is not registered", call.Name)
-	}
-	if call.Arguments == nil {
-		return errors.New("tool arguments are missing")
-	}
-
-	return nil
-}
-
-func (r *Registry) ValidateToolCallBatch(entityID string, calls []model.ToolCall) ([]Entry, error) {
-	entries := make([]Entry, 0, len(calls))
-	for _, call := range calls {
-		entry, ok := r.Lookup(call.Name)
-		if !ok {
-			return nil, fmt.Errorf("tool %q is not registered", call.Name)
-		}
-		if call.Arguments == nil {
-			return nil, errors.New("tool arguments are missing")
-		}
-		entries = append(entries, entry)
-	}
-	return entries, nil
 }
 
 func concurrencyModeFromCapability(capability *protocolv1alpha2.Capability) ConcurrencyMode {

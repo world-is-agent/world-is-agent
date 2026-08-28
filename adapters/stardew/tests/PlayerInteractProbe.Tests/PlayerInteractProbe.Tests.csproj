@@ -8,5 +8,6 @@
 
   <ItemGroup>
     <Compile Include="..\..\src\Events\PlayerInteractTargetSelector.cs" Link="PlayerInteractTargetSelector.cs" />
+    <Compile Include="..\..\src\Events\PlayerInteractTrigger.cs" Link="PlayerInteractTrigger.cs" />
   </ItemGroup>
 </Project>

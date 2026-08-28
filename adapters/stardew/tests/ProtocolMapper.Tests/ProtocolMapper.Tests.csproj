@@ -17,6 +17,10 @@
     <Compile Include="..\..\src\Runtime\CapabilityCatalog.cs" Link="CapabilityCatalog.cs" />
     <Compile Include="..\..\src\Runtime\ProtocolMapper.Core.cs" Link="ProtocolMapper.Core.cs" />
     <Compile Include="..\..\src\Runtime\RuntimeWorldScope.cs" Link="RuntimeWorldScope.cs" />
+    <Compile Include="..\..\src\Capabilities\FacePlayerDirection.cs" Link="FacePlayerDirection.cs" />
+    <Compile Include="..\..\src\Dialogue\ConversationStateStore.cs" Link="ConversationStateStore.cs" />
+    <Compile Include="..\..\src\Dialogue\PresentDialogueInput.cs" Link="PresentDialogueInput.cs" />
+    <Compile Include="..\..\src\Events\PlayerInteractTrigger.cs" Link="PlayerInteractTrigger.cs" />
     <Compile Include="..\..\src\State\StardewObservation.cs" Link="StardewObservation.cs" />
     <Compile Include="..\..\src\State\StardewObservationFactory.cs" Link="StardewObservationFactory.cs" />
   </ItemGroup>

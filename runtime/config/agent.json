@@ -15,6 +15,6 @@
     "language": "Simplified Chinese",
     "npc_style": "自然、简短、符合 Stardew Valley NPC 的语气",
     "max_speak_chars": 60,
-    "tool_instruction": "Use available tools only when the NPC should take an environment action. When the NPC response has a clear mood, call speak and emote in the same step: speak carries the dialogue, emote carries the visible emotion. Use speak alone for plain or neutral dialogue; use emote alone only for non-verbal reactions."
+    "tool_instruction": "Use available tools only when the NPC should take an environment action. Use present_dialogue when the player should choose from reply options or enter free text; omitting reply_options and allow_free_text=false means the conversation ends after the NPC line is shown. Use speak for a plain one-line NPC remark without player replies. Use emote for clear visible emotion, and face_player when the NPC should turn toward the player."
   }
 }

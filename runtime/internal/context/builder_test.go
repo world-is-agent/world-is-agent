@@ -654,6 +654,40 @@ func TestRendererSummarizesNonSpeakToolMemory(t *testing.T) {
 	}
 }
 
+func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 1024,
+	})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-2",
+			EventType: "player_said_to_npc",
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{{
+			Outcomes: []memory.TurnOutcome{
+				{ToolName: "present_dialogue", ToolArguments: map[string]any{"text": "Want to explore the mines?"}},
+				{ToolName: "face_player"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	assertContainsAll(t, content, `presented dialogue "Want to explore the mines?"`, "faced player")
+}
+
 func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{

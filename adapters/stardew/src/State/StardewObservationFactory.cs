@@ -65,7 +65,10 @@ public sealed class StardewObservationFactory
                 NearbyNpcs: nearbyNpcs
             ),
             Schedule: NormalizeSchedule(input.Schedule)
-        );
+        )
+        {
+            Conversation = NormalizeConversation(input.Conversation),
+        };
     }
 
     private static int CountNearbyNpcs(StardewObservationInput input, StardewEntity agent)
@@ -123,6 +126,40 @@ public sealed class StardewObservationFactory
             return null;
 
         return new StardewSchedule(destination, futureLocations);
+    }
+
+    private static StardewConversation? NormalizeConversation(StardewConversationInput? conversation)
+    {
+        if (conversation is null || string.IsNullOrWhiteSpace(conversation.ConversationId) || !conversation.Active)
+            return null;
+
+        StardewConversationLine[] lines = (conversation.RecentLines ?? Array.Empty<StardewConversationLineInput>())
+            .Select(NormalizeConversationLine)
+            .Where(line => line is not null)
+            .Select(line => line!)
+            .ToArray();
+
+        return new StardewConversation(
+            ConversationId: conversation.ConversationId.Trim(),
+            Active: true,
+            RecentLinesOmittedCount: Math.Max(0, conversation.RecentLinesOmittedCount),
+            RecentLines: lines
+        );
+    }
+
+    private static StardewConversationLine? NormalizeConversationLine(StardewConversationLineInput line)
+    {
+        string? text = NormalizeOptional(line.Text);
+        if (text is null)
+            return null;
+
+        return new StardewConversationLine(
+            Role: NonEmpty(line.Role, Unknown),
+            SpeakerEntityId: NonEmpty(line.SpeakerEntityId, Unknown),
+            SpeakerName: NonEmpty(line.SpeakerName, Unknown),
+            Text: text,
+            TimeOfDay: line.TimeOfDay
+        );
     }
 
     private static string WeekdayCode(DayOfWeek? dayOfWeek, int dayOfMonth)

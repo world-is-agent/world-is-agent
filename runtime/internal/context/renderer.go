@@ -386,6 +386,13 @@ func visibleActionSummary(outcome memory.TurnOutcome) string {
 			return fmt.Sprintf("used emote %q", emote)
 		}
 		return "used emote"
+	case "present_dialogue":
+		if text := stringArgument(outcome.ToolArguments, "text"); text != "" {
+			return fmt.Sprintf("presented dialogue %q", text)
+		}
+		return "presented dialogue"
+	case "face_player":
+		return "faced player"
 	default:
 		tool := strings.TrimSpace(outcome.ToolName)
 		if tool == "" {

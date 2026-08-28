@@ -13,6 +13,6 @@ public sealed class SpeakCapability
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Dialogue text must not be empty.", nameof(text));
 
-        Game1.DrawDialogue(new Dialogue(speaker, null, text));
+        Game1.DrawDialogue(new StardewValley.Dialogue(speaker, null, text));
     }
 }

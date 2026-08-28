@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using GameAgent.Protocol.V1Alpha2;
+using GameAgent.Stardew.Dialogue;
 using GameAgent.Stardew.State;
 using Google.Protobuf.WellKnownTypes;
 
@@ -8,6 +9,10 @@ namespace GameAgent.Stardew.Runtime;
 
 public static partial class ProtocolMapper
 {
+    public const int MaxDialogueTextChars = 240;
+    public const int MaxReplyOptions = 4;
+    public const int MaxReplyOptionChars = 80;
+
     private const string NpcEntityPrefix = "npc:";
     public const string PlayerEntityId = "player:local";
     private static long messageSequence;
@@ -34,25 +39,86 @@ public static partial class ProtocolMapper
         string npcDisplayName,
         string playerEntityId,
         string playerDisplayName,
+        string conversationId,
         string trigger,
         ulong sequence,
         string worldId,
-        GameTime gameTime
+        GameTime gameTime,
+        string? eventId = null
     )
     {
         return new GameEvent
         {
-            EventId = NewMessageId("event"),
+            EventId = string.IsNullOrWhiteSpace(eventId) ? NewMessageId("event") : eventId,
             EventType = "player_interacted_with_npc",
             GameTime = gameTime,
             Payload = new Struct
             {
                 Fields =
                 {
+                    ["conversation_id"] = Value.ForString(RequireNonEmpty(conversationId, "conversation_id")),
                     ["trigger"] = Value.ForString(trigger),
                     ["source"] = Value.ForString("stardew-smapi"),
                 },
             },
+            Sequence = sequence,
+            WorldId = worldId,
+            TargetEntityId = npcEntityId,
+            Entities =
+            {
+                BuildEntity(playerEntityId, "player", playerDisplayName),
+                BuildEntity(npcEntityId, "npc", npcDisplayName),
+            },
+        };
+    }
+
+    public static GameEvent BuildPlayerSaidToNpcEvent(
+        string npcEntityId,
+        string npcDisplayName,
+        string playerEntityId,
+        string playerDisplayName,
+        string conversationId,
+        string inputKind,
+        string text,
+        int? selectedOptionIndex,
+        string trigger,
+        ulong sequence,
+        string worldId,
+        GameTime gameTime,
+        string? eventId = null
+    )
+    {
+        string normalizedInputKind = RequireNonEmpty(inputKind, "input_kind");
+        if (normalizedInputKind != "option" && normalizedInputKind != "free_text")
+            throw new ArgumentException("input_kind must be option or free_text");
+
+        if (normalizedInputKind == "option" && !selectedOptionIndex.HasValue)
+            throw new ArgumentException("selected_option_index is required for option input");
+        if (normalizedInputKind == "free_text" && selectedOptionIndex.HasValue)
+            throw new ArgumentException("selected_option_index must be omitted for free_text input");
+
+        string normalizedText = RequireBoundedText(text, "text", MaxDialogueTextChars);
+        Struct payload = new()
+        {
+            Fields =
+            {
+                ["conversation_id"] = Value.ForString(RequireNonEmpty(conversationId, "conversation_id")),
+                ["input_kind"] = Value.ForString(normalizedInputKind),
+                ["text"] = Value.ForString(normalizedText),
+                ["trigger"] = Value.ForString(trigger),
+                ["source"] = Value.ForString("stardew-smapi"),
+            },
+        };
+
+        if (selectedOptionIndex.HasValue)
+            payload.Fields["selected_option_index"] = Value.ForNumber(selectedOptionIndex.Value);
+
+        return new GameEvent
+        {
+            EventId = string.IsNullOrWhiteSpace(eventId) ? NewMessageId("event") : eventId,
+            EventType = "player_said_to_npc",
+            GameTime = gameTime,
+            Payload = payload,
             Sequence = sequence,
             WorldId = worldId,
             TargetEntityId = npcEntityId,
@@ -105,6 +171,9 @@ public static partial class ProtocolMapper
 
         if (observation.Schedule is not null)
             stardew.Fields["schedule"] = ForStruct(BuildSchedule(observation.Schedule));
+
+        if (observation.Conversation is not null)
+            stardew.Fields["conversation"] = ForStruct(BuildConversation(observation.Conversation));
 
         return stardew;
     }
@@ -226,6 +295,35 @@ public static partial class ProtocolMapper
         return scheduleStruct;
     }
 
+    private static Struct BuildConversation(StardewConversation conversation)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["conversation_id"] = Value.ForString(conversation.ConversationId),
+                ["active"] = Value.ForBool(conversation.Active),
+                ["recent_lines_omitted_count"] = Value.ForNumber(conversation.RecentLinesOmittedCount),
+                ["recent_lines"] = ForList(conversation.RecentLines.Select(line => ForStruct(BuildConversationLine(line)))),
+            },
+        };
+    }
+
+    private static Struct BuildConversationLine(StardewConversationLine line)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["role"] = Value.ForString(line.Role),
+                ["speaker_entity_id"] = Value.ForString(line.SpeakerEntityId),
+                ["speaker_name"] = Value.ForString(line.SpeakerName),
+                ["text"] = Value.ForString(line.Text),
+                ["time_of_day"] = Value.ForNumber(line.TimeOfDay),
+            },
+        };
+    }
+
     private static Value ForStruct(Struct structure)
     {
         return new Value { StructValue = structure };
@@ -243,11 +341,7 @@ public static partial class ProtocolMapper
         if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("text", out Value? value))
             throw new ArgumentException("missing required speak argument: text");
 
-        string text = value.StringValue;
-        if (string.IsNullOrWhiteSpace(text))
-            throw new ArgumentException("speak argument text must not be empty");
-
-        return text;
+        return RequireBoundedText(value.StringValue, "speak argument text", MaxDialogueTextChars);
     }
 
     public static string RequireEmoteArgument(ActionRequest request)
@@ -260,6 +354,38 @@ public static partial class ProtocolMapper
             throw new ArgumentException("emote argument must not be empty");
 
         return emote;
+    }
+
+    public static PresentDialogueInput RequirePresentDialogueArgument(ActionRequest request)
+    {
+        if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("text", out Value? textValue))
+            throw new ArgumentException("missing required present_dialogue argument: text");
+
+        string text = RequireBoundedText(textValue.StringValue, "present_dialogue text", MaxDialogueTextChars);
+        string[] replyOptions = Array.Empty<string>();
+        if (request.Arguments.Fields.TryGetValue("reply_options", out Value? optionsValue))
+        {
+            if (optionsValue.KindCase != Value.KindOneofCase.ListValue)
+                throw new ArgumentException("present_dialogue reply_options must be a list");
+
+            if (optionsValue.ListValue.Values.Count > MaxReplyOptions)
+                throw new ArgumentException($"present_dialogue reply_options must include {MaxReplyOptions} options or fewer");
+
+            replyOptions = optionsValue.ListValue.Values
+                .Select(option => RequireBoundedText(option.StringValue, "present_dialogue reply option", MaxReplyOptionChars))
+                .ToArray();
+        }
+
+        bool allowFreeText = false;
+        if (request.Arguments.Fields.TryGetValue("allow_free_text", out Value? allowFreeTextValue))
+        {
+            if (allowFreeTextValue.KindCase != Value.KindOneofCase.BoolValue)
+                throw new ArgumentException("present_dialogue allow_free_text must be a boolean");
+
+            allowFreeText = allowFreeTextValue.BoolValue;
+        }
+
+        return new PresentDialogueInput(text, replyOptions, allowFreeText);
     }
 
     public static ActionResult BuildSucceededActionResult(ActionRequest request, string displayedText)
@@ -278,6 +404,25 @@ public static partial class ProtocolMapper
                 Fields =
                 {
                     [outputFieldName] = Value.ForString(outputValue),
+                },
+            },
+        };
+    }
+
+    public static ActionResult BuildPresentDialogueSucceededActionResult(ActionRequest request, string conversationId, PresentDialogueInput input)
+    {
+        return new ActionResult
+        {
+            ActionId = request.ActionId,
+            Status = ActionStatus.Succeeded,
+            Output = new Struct
+            {
+                Fields =
+                {
+                    ["conversation_id"] = Value.ForString(conversationId),
+                    ["displayed_text"] = Value.ForString(input.Text),
+                    ["reply_options_count"] = Value.ForNumber(input.ReplyOptions.Count),
+                    ["allow_free_text"] = Value.ForBool(input.AllowFreeText),
                 },
             },
         };
@@ -348,6 +493,23 @@ public static partial class ProtocolMapper
     {
         long sequence = Interlocked.Increment(ref messageSequence);
         return $"{prefix}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{sequence}";
+    }
+
+    private static string RequireBoundedText(string value, string name, int maxChars)
+    {
+        string text = RequireNonEmpty(value, name);
+        if (text.Length > maxChars)
+            throw new ArgumentException($"{name} must be {maxChars} chars or fewer");
+
+        return text;
+    }
+
+    private static string RequireNonEmpty(string value, string name)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"{name} must not be empty");
+
+        return value.Trim();
     }
 
     private static EntityRef BuildEntity(string entityId, string entityType, string displayName)

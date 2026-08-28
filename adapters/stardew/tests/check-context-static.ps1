@@ -14,6 +14,13 @@ $requiredFiles = @(
     'src/State/ObservationBuilder.cs',
     'src/Capabilities/SpeakCapability.cs',
     'src/Capabilities/EmoteCapability.cs',
+    'src/Capabilities/PresentDialogueCapability.cs',
+    'src/Capabilities/FacePlayerCapability.cs',
+    'src/Capabilities/FacePlayerDirection.cs',
+    'src/Dialogue/ConversationStateStore.cs',
+    'src/Dialogue/PresentDialogueInput.cs',
+    'src/Dialogue/DialogueInteractionController.cs',
+    'src/Dialogue/DialogueInteractionMenu.cs',
     'src/Runtime/CapabilityCatalog.cs',
     'src/Runtime/ProtocolMapper.Core.cs',
     'src/Runtime/RuntimeClient.cs',
@@ -57,16 +64,32 @@ function Reject-Content {
 }
 
 Require-Content 'src/State/StardewObservation.cs' 'sealed record StardewObservation' 'StardewObservation model must be the adapter current-fact schema.'
+Require-Content 'src/State/StardewObservation.cs' 'StardewConversation' 'StardewObservation model must include conversation state.'
 Require-Content 'src/State/StardewObservationFactory.cs' 'sealed class StardewObservationFactory' 'StardewObservationFactory must normalize Stardew facts.'
 Require-Content 'src/State/StardewObservationFactory.cs' 'day_of_month % 7|dayOfMonth % 7|DayOfMonth % 7' 'Factory must preserve deterministic weekday fallback.'
 Require-Content 'src/State/ObservationBuilder.cs' 'Game1\.Date\.DayOfWeek' 'ObservationBuilder must prefer Stardew native DayOfWeek.'
 Require-Content 'src/State/ObservationBuilder.cs' 'friendshipData\.ContainsKey' 'ObservationBuilder must use friendshipData.ContainsKey for relationship known.'
+Require-Content 'src/State/ObservationBuilder.cs' 'ConversationStateStore' 'ObservationBuilder must use adapter conversation state as an observation source.'
+Require-Content 'src/Dialogue/ConversationStateStore.cs' 'IConversationIdGenerator' 'ConversationStateStore must accept an injected conversation id generator.'
+Require-Content 'src/Dialogue/ConversationStateStore.cs' 'CommitPending' 'ConversationStateStore must commit pending mutation after EventAck.ACCEPTED.'
+Require-Content 'src/Events/PlayerInteractTrigger.cs' 'action_button' 'Player interaction trigger must include action_button.'
+Require-Content 'src/Events/PlayerInteractTrigger.cs' 'mouse_left' 'Player interaction trigger must include mouse_left.'
+Require-Content 'src/Events/PlayerInteractTrigger.cs' 'mouse_right' 'Player interaction trigger must include mouse_right.'
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' '"stardew"' 'ProtocolMapper must write Observation.state.stardew.'
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'NearbyEntities' 'ProtocolMapper must publish nearby entity refs.'
+Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'player_said_to_npc' 'ProtocolMapper must build player_said_to_npc events.'
+Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'conversation_id' 'ProtocolMapper must carry conversation_id in dialogue events and observation.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'present_dialogue' 'CapabilityCatalog must register present_dialogue.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'face_player' 'CapabilityCatalog must register face_player.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'EventAckStatus\.Accepted' 'RuntimeClient must commit conversation state after accepted EventAck.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId\)' 'RuntimeClient must let delayed dialogue display honor CancelAction.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'nearby_npcs_omitted_count' 'ProtocolMapper tests must cover nearby NPC truncation.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'friendship_points' 'ProtocolMapper tests must cover relationship visibility.'
+Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'present_dialogue' 'ProtocolMapper tests must cover present_dialogue.'
+Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'ConversationStateStore' 'ProtocolMapper tests must cover conversation state.'
 
 Reject-Content 'src/State/StardewObservationFactory.cs' 'using StardewValley|StardewValley\.|Game1\.|\bNPC\b|\bFarmer\b' 'StardewObservationFactory must not reference Stardew live objects.'
+Reject-Content 'src/Capabilities/PresentDialogueCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper' 'PresentDialogueCapability must not depend on Runtime mapper.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' '\["agent_id"\]|\["agent_tile_x"\]|\["player_tile_x"\]|\["friendship"\]' 'ProtocolMapper must not write legacy flat observation state.'
 Reject-Content 'src/Runtime/RuntimeClient.cs' 'ProbeObservation' 'RuntimeClient must use StardewObservation in the production observation path.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ProbeObservation' 'ProtocolMapper must not consume ProbeObservation.'

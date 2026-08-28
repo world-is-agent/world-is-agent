@@ -15,6 +15,8 @@ public sealed record StardewObservation(
 )
 {
     public const string CurrentSchemaVersion = "0.1";
+
+    public StardewConversation? Conversation { get; init; }
 }
 
 public sealed record StardewTime(
@@ -73,6 +75,21 @@ public sealed record StardewSchedule(
     IReadOnlyList<string> FutureLocations
 );
 
+public sealed record StardewConversation(
+    string ConversationId,
+    bool Active,
+    int RecentLinesOmittedCount,
+    IReadOnlyList<StardewConversationLine> RecentLines
+);
+
+public sealed record StardewConversationLine(
+    string Role,
+    string SpeakerEntityId,
+    string SpeakerName,
+    string Text,
+    int TimeOfDay
+);
+
 public sealed record StardewObservationInput(
     int Year,
     string Season,
@@ -100,7 +117,10 @@ public sealed record StardewObservationInput(
     string Trigger,
     IReadOnlyList<StardewNearbyNpcInput> NearbyNpcs,
     StardewScheduleInput? Schedule
-);
+)
+{
+    public StardewConversationInput? Conversation { get; init; }
+}
 
 public sealed record StardewNearbyNpcInput(
     string Name,
@@ -113,4 +133,19 @@ public sealed record StardewNearbyNpcInput(
 public sealed record StardewScheduleInput(
     string? Destination,
     IReadOnlyList<string> FutureLocations
+);
+
+public sealed record StardewConversationInput(
+    string ConversationId,
+    bool Active,
+    int RecentLinesOmittedCount,
+    IReadOnlyList<StardewConversationLineInput> RecentLines
+);
+
+public sealed record StardewConversationLineInput(
+    string Role,
+    string SpeakerEntityId,
+    string SpeakerName,
+    string Text,
+    int TimeOfDay
 );

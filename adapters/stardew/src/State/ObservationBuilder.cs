@@ -1,17 +1,30 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GameAgent.Stardew.Dialogue;
 using StardewValley;
 
 namespace GameAgent.Stardew.State;
 
 public sealed class ObservationBuilder
 {
-    public StardewObservation Build(NPC agent, Farmer player, string trigger)
+    private const string NpcEntityPrefix = "npc:";
+    private const string PlayerEntityId = "player:local";
+
+    private readonly ConversationStateStore conversationStore;
+
+    public ObservationBuilder(ConversationStateStore conversationStore)
+    {
+        this.conversationStore = conversationStore;
+    }
+
+    public StardewObservation Build(NPC agent, Farmer player, string trigger, string worldId)
     {
         string agentLocation = agent.currentLocation?.Name ?? "unknown";
         string playerLocation = player.currentLocation?.Name ?? "unknown";
         bool relationshipKnown = player.friendshipData.ContainsKey(agent.Name);
+        string npcEntityId = ToNpcEntityId(agent.Name);
+        ConversationSnapshot? conversation = this.conversationStore.GetActiveConversation(worldId, npcEntityId, PlayerEntityId);
 
         int friendshipPoints = relationshipKnown ? player.getFriendshipLevelForNPC(agent.Name) : 0;
         bool isSpouse = false;
@@ -49,7 +62,15 @@ public sealed class ObservationBuilder
             Trigger: trigger,
             NearbyNpcs: BuildNearbyNpcInputs(agent),
             Schedule: BuildScheduleInput(agent)
-        ));
+        )
+        {
+            Conversation = conversation?.ToObservationInput(),
+        });
+    }
+
+    private static string ToNpcEntityId(string npcName)
+    {
+        return $"{NpcEntityPrefix}{npcName}";
     }
 
     private static IReadOnlyList<StardewNearbyNpcInput> BuildNearbyNpcInputs(NPC agent)

@@ -75,4 +75,8 @@ selected = PlayerInteractTargetSelector.Select(
 );
 Assert(selected?.Name == "Linus", "left-click mode should still select direct bounding-box hits");
 
+Assert(PlayerInteractTrigger.FromButton("action") == "action_button", "action trigger should map to action_button");
+Assert(PlayerInteractTrigger.FromButton("mouse_left") == "mouse_left", "left mouse trigger should map to mouse_left");
+Assert(PlayerInteractTrigger.FromButton("mouse_right") == "mouse_right", "right mouse trigger should map to mouse_right");
+
 Console.WriteLine("PlayerInteractProbe selector tests passed.");

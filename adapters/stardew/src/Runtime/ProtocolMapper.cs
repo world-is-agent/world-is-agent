@@ -11,17 +11,49 @@ public static partial class ProtocolMapper
         return ToNpcEntityId(npc.Name);
     }
 
-    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string trigger, ulong sequence, string worldId)
+    public static GameEvent BuildPlayerInteractedWithNpcEvent(NPC npc, Farmer player, string conversationId, string trigger, ulong sequence, string worldId, string? eventId = null)
     {
         return BuildPlayerInteractedWithNpcEvent(
             npcEntityId: ToNpcEntityId(npc),
             npcDisplayName: npc.displayName,
             playerEntityId: PlayerEntityId,
             playerDisplayName: player.Name,
+            conversationId: conversationId,
             trigger: trigger,
             sequence: sequence,
             worldId: worldId,
-            gameTime: BuildGameTime()
+            gameTime: BuildGameTime(),
+            eventId: eventId
+        );
+    }
+
+    public static GameEvent BuildPlayerSaidToNpcEvent(
+        NPC npc,
+        Farmer player,
+        string conversationId,
+        string inputKind,
+        string text,
+        int? selectedOptionIndex,
+        string trigger,
+        ulong sequence,
+        string worldId,
+        string? eventId = null
+    )
+    {
+        return BuildPlayerSaidToNpcEvent(
+            npcEntityId: ToNpcEntityId(npc),
+            npcDisplayName: npc.displayName,
+            playerEntityId: PlayerEntityId,
+            playerDisplayName: player.Name,
+            conversationId: conversationId,
+            inputKind: inputKind,
+            text: text,
+            selectedOptionIndex: selectedOptionIndex,
+            trigger: trigger,
+            sequence: sequence,
+            worldId: worldId,
+            gameTime: BuildGameTime(),
+            eventId: eventId
         );
     }
 

@@ -51,7 +51,7 @@ public sealed class PlayerInteractProbe
         }
 
         this.input.Suppress(e.Button);
-        this.runtimeClient.SendPlayerInteracted(target, Game1.player, "player_interact");
+        this.runtimeClient.SendPlayerInteracted(target, Game1.player, TriggerForButton(e.Button));
         this.monitor.Log($"GameAgent interaction event queued for {target.Name}.", LogLevel.Debug);
 
         return true;
@@ -60,6 +60,16 @@ public sealed class PlayerInteractProbe
     private bool IsCandidateInteractionButton(SButton button)
     {
         return button.IsActionButton() || button is SButton.MouseLeft or SButton.MouseRight;
+    }
+
+    private static string TriggerForButton(SButton button)
+    {
+        return button switch
+        {
+            SButton.MouseLeft => PlayerInteractTrigger.MouseLeft,
+            SButton.MouseRight => PlayerInteractTrigger.MouseRight,
+            _ => PlayerInteractTrigger.ActionButton,
+        };
     }
 
     private NPC? FindClickedTarget(ICursorPosition cursor, bool allowAdjacentTile)

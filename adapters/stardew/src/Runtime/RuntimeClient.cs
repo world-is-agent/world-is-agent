@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GameAgent.Protocol.V1Alpha2;
 using GameAgent.Stardew.Capabilities;
+using GameAgent.Stardew.Dialogue;
 using GameAgent.Stardew.State;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -18,8 +19,11 @@ public sealed class RuntimeClient : IDisposable
     private readonly AdapterConfig config;
     private readonly MainThreadDispatcher dispatcher;
     private readonly ObservationBuilder observationBuilder;
+    private readonly ConversationStateStore conversationStore;
     private readonly SpeakCapability speakCapability;
     private readonly EmoteCapability emoteCapability;
+    private readonly PresentDialogueCapability presentDialogueCapability;
+    private readonly FacePlayerCapability facePlayerCapability;
     private readonly ActionCancellationRegistry actionCancellationRegistry = new();
     private readonly IMonitor monitor;
     private readonly SemaphoreSlim sendMu = new(1, 1);
@@ -39,16 +43,22 @@ public sealed class RuntimeClient : IDisposable
         AdapterConfig config,
         MainThreadDispatcher dispatcher,
         ObservationBuilder observationBuilder,
+        ConversationStateStore conversationStore,
         SpeakCapability speakCapability,
         EmoteCapability emoteCapability,
+        PresentDialogueCapability presentDialogueCapability,
+        FacePlayerCapability facePlayerCapability,
         IMonitor monitor
     )
     {
         this.config = config;
         this.dispatcher = dispatcher;
         this.observationBuilder = observationBuilder;
+        this.conversationStore = conversationStore;
         this.speakCapability = speakCapability;
         this.emoteCapability = emoteCapability;
+        this.presentDialogueCapability = presentDialogueCapability;
+        this.facePlayerCapability = facePlayerCapability;
         this.monitor = monitor;
     }
 
@@ -89,18 +99,88 @@ public sealed class RuntimeClient : IDisposable
         }
 
         ulong sequence = unchecked((ulong)Interlocked.Increment(ref this.eventSequence));
-        GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, trigger, sequence, this.currentWorldId);
-
-        await this.SendAsync(
-            new AdapterMessage
-            {
-                MessageId = ProtocolMapper.NewMessageId("event_msg"),
-                Event = gameEvent,
-            },
-            this.cancellation?.Token ?? CancellationToken.None
-        );
+        string npcEntityId = ProtocolMapper.ToNpcEntityId(npc);
+        this.presentDialogueCapability.CloseForNpc(npcEntityId);
+        string eventId = ProtocolMapper.NewMessageId("event");
+        GameEvent gameEvent;
+        try
+        {
+            string conversationId = this.conversationStore.PrepareInteraction(this.currentWorldId, npcEntityId, ProtocolMapper.PlayerEntityId, eventId);
+            gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, conversationId, trigger, sequence, this.currentWorldId, eventId);
+            await this.SendAsync(
+                new AdapterMessage
+                {
+                    MessageId = ProtocolMapper.NewMessageId("event_msg"),
+                    Event = gameEvent,
+                },
+                this.cancellation?.Token ?? CancellationToken.None
+            );
+        }
+        catch
+        {
+            this.conversationStore.DiscardPending(eventId);
+            throw;
+        }
 
         this.monitor.Log($"GameAgent GameEvent sent: {gameEvent.EventId}", LogLevel.Debug);
+    }
+
+    private void SendPlayerDialogueSubmission(NPC npc, Farmer player, PlayerDialogueSubmission submission)
+    {
+        this.SendFireAndForget(this.SendPlayerDialogueSubmissionAsync(npc, player, submission), "Player dialogue GameEvent");
+    }
+
+    private async Task SendPlayerDialogueSubmissionAsync(NPC npc, Farmer player, PlayerDialogueSubmission submission)
+    {
+        if (!this.IsReady || !RuntimeWorldScope.IsAvailable(this.currentWorldId))
+            return;
+
+        ulong sequence = unchecked((ulong)Interlocked.Increment(ref this.eventSequence));
+        string npcEntityId = ProtocolMapper.ToNpcEntityId(npc);
+        string eventId = ProtocolMapper.NewMessageId("event");
+        int timeOfDay = Game1.timeOfDay;
+        GameEvent gameEvent;
+        try
+        {
+            gameEvent = ProtocolMapper.BuildPlayerSaidToNpcEvent(
+                npc,
+                player,
+                submission.ConversationId,
+                submission.InputKind,
+                submission.Text,
+                submission.SelectedOptionIndex,
+                submission.Trigger,
+                sequence,
+                this.currentWorldId,
+                eventId
+            );
+            this.conversationStore.PreparePlayerLine(
+                this.currentWorldId,
+                npcEntityId,
+                ProtocolMapper.PlayerEntityId,
+                submission.ConversationId,
+                eventId,
+                ProtocolMapper.PlayerEntityId,
+                player.Name,
+                submission.Text,
+                timeOfDay
+            );
+            await this.SendAsync(
+                new AdapterMessage
+                {
+                    MessageId = ProtocolMapper.NewMessageId("event_msg"),
+                    Event = gameEvent,
+                },
+                this.cancellation?.Token ?? CancellationToken.None
+            );
+        }
+        catch
+        {
+            this.conversationStore.DiscardPending(eventId);
+            throw;
+        }
+
+        this.monitor.Log($"GameAgent player dialogue GameEvent sent: {gameEvent.EventId}", LogLevel.Debug);
     }
 
     public void Dispose()
@@ -148,6 +228,7 @@ public sealed class RuntimeClient : IDisposable
         finally
         {
             this.isReady = false;
+            this.conversationStore.Clear();
         }
     }
 
@@ -188,7 +269,7 @@ public sealed class RuntimeClient : IDisposable
                 break;
 
             case RuntimeMessage.PayloadOneofCase.EventAck:
-                this.monitor.Log($"GameAgent EventAck received: {message.EventAck?.EventId}", LogLevel.Debug);
+                this.HandleEventAck(message.EventAck);
                 break;
 
             case RuntimeMessage.PayloadOneofCase.Observe:
@@ -256,7 +337,7 @@ public sealed class RuntimeClient : IDisposable
             }
 
             NPC npc = this.RequireNpc(request.EntityId);
-            StardewObservation stardewObservation = this.observationBuilder.Build(npc, Game1.player, "runtime_observe");
+            StardewObservation stardewObservation = this.observationBuilder.Build(npc, Game1.player, "runtime_observe", this.currentWorldId);
             Observation observation = ProtocolMapper.BuildObservation(request.EntityId, stardewObservation, this.currentWorldId);
 
             this.SendFireAndForget(
@@ -303,12 +384,24 @@ public sealed class RuntimeClient : IDisposable
         {
             try
             {
+                if (request.Capability == "present_dialogue")
+                {
+                    this.HandlePresentDialogueAction(request);
+                    return;
+                }
+
                 result = request.Capability switch
                 {
                     "speak" => this.HandleSpeakAction(request),
                     "emote" => this.HandleEmoteAction(request),
+                    "face_player" => this.HandleFacePlayerAction(request),
                     _ => throw new InvalidOperationException($"unsupported capability: {request.Capability}"),
                 };
+            }
+            catch (ArgumentException ex)
+            {
+                this.monitor.Log($"GameAgent ActionRequest rejected: {ex.Message}", LogLevel.Warn);
+                result = ProtocolMapper.BuildRejectedActionResult(request, "invalid_action_arguments", ex.Message);
             }
             catch (Exception ex)
             {
@@ -317,19 +410,27 @@ public sealed class RuntimeClient : IDisposable
             }
         }
 
-        this.SendFireAndForget(
-            this.SendAsync(
-                new AdapterMessage
-                {
-                    MessageId = ProtocolMapper.NewMessageId("action_result_msg"),
-                    ActionResult = result,
-                },
-                this.cancellation?.Token ?? CancellationToken.None
-            ),
-            "ActionResult"
-        );
+        this.SendActionResult(result);
+    }
 
-        this.monitor.Log($"GameAgent ActionResult sent: {result.ActionId} {result.Status}.", LogLevel.Debug);
+    private void HandleEventAck(EventAck? ack)
+    {
+        if (ack is null)
+            return;
+
+        switch (ack.Status)
+        {
+            case EventAckStatus.Accepted:
+                this.conversationStore.CommitPending(ack.EventId);
+                break;
+            case EventAckStatus.Duplicate:
+            case EventAckStatus.Rejected:
+            case EventAckStatus.Unspecified:
+                this.conversationStore.DiscardPending(ack.EventId);
+                break;
+        }
+
+        this.monitor.Log($"GameAgent EventAck received: {ack.EventId} {ack.Status}", LogLevel.Debug);
     }
 
     private NPC RequireNpc(string entityId)
@@ -356,6 +457,12 @@ public sealed class RuntimeClient : IDisposable
     public void ClearWorldContext()
     {
         this.currentWorldId = string.Empty;
+        this.conversationStore.Clear();
+    }
+
+    public void ClearConversations()
+    {
+        this.conversationStore.Clear();
     }
 
     private string ResolveCurrentWorldId()
@@ -458,6 +565,60 @@ public sealed class RuntimeClient : IDisposable
         return ProtocolMapper.BuildSucceededActionResult(request, "emote", appliedEmote);
     }
 
+    private void HandlePresentDialogueAction(ActionRequest request)
+    {
+        try
+        {
+            NPC npc = this.RequireNpc(request.EntityId);
+            PresentDialogueInput input = ProtocolMapper.RequirePresentDialogueArgument(request);
+            this.presentDialogueCapability.Present(
+                npc,
+                Game1.player,
+                this.currentWorldId,
+                input,
+                isCancelled: () => this.actionCancellationRegistry.TryConsumeCancelled(request.ActionId),
+                onCancelled: () => this.SendActionResult(ProtocolMapper.BuildCancelledActionResult(request, "action cancelled before dialogue display")),
+                onDisplayed: conversationId => this.SendActionResult(ProtocolMapper.BuildPresentDialogueSucceededActionResult(request, conversationId, input)),
+                onFailed: ex => this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex)),
+                onSubmitted: submission => this.SendPlayerDialogueSubmission(npc, Game1.player, submission)
+            );
+        }
+        catch (ArgumentException ex)
+        {
+            this.monitor.Log($"GameAgent present_dialogue rejected: {ex.Message}", LogLevel.Warn);
+            this.SendActionResult(ProtocolMapper.BuildRejectedActionResult(request, "invalid_action_arguments", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            this.monitor.Log($"GameAgent present_dialogue failed: {ex.Message}", LogLevel.Error);
+            this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex));
+        }
+    }
+
+    private ActionResult HandleFacePlayerAction(ActionRequest request)
+    {
+        NPC npc = this.RequireNpc(request.EntityId);
+        string direction = this.facePlayerCapability.FacePlayer(npc, Game1.player);
+        return ProtocolMapper.BuildSucceededActionResult(request, "facing_direction", direction);
+    }
+
+    private void SendActionResult(ActionResult result)
+    {
+        this.SendFireAndForget(
+            this.SendAsync(
+                new AdapterMessage
+                {
+                    MessageId = ProtocolMapper.NewMessageId("action_result_msg"),
+                    ActionResult = result,
+                },
+                this.cancellation?.Token ?? CancellationToken.None
+            ),
+            "ActionResult"
+        );
+
+        this.monitor.Log($"GameAgent ActionResult sent: {result.ActionId} {result.Status}.", LogLevel.Debug);
+    }
+
     private static string FormatEntities(GameEvent? gameEvent)
     {
         if (gameEvent is null)
@@ -472,6 +633,7 @@ public sealed class RuntimeClient : IDisposable
         {
             "speak" => $"text=\"{FormatStringArgument(request, "text")}\"",
             "emote" => $"emote=\"{FormatStringArgument(request, "emote")}\"",
+            "present_dialogue" => $"text=\"{FormatStringArgument(request, "text")}\"",
             _ => string.Empty,
         };
     }

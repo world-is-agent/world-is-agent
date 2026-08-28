@@ -1,5 +1,8 @@
 using System;
 using GameAgent.Protocol.V1Alpha2;
+using GameAgent.Stardew.Capabilities;
+using GameAgent.Stardew.Dialogue;
+using GameAgent.Stardew.Events;
 using GameAgent.Stardew.Runtime;
 using GameAgent.Stardew.State;
 using Google.Protobuf.WellKnownTypes;
@@ -38,6 +41,27 @@ static double RequireNumber(Struct parent, string fieldName)
     return value.NumberValue;
 }
 
+static void ExpectArgumentException(Action action, string expectedMessage)
+{
+    try
+    {
+        action();
+    }
+    catch (ArgumentException ex) when (ex.Message.Contains(expectedMessage, StringComparison.OrdinalIgnoreCase))
+    {
+        return;
+    }
+
+    throw new InvalidOperationException($"expected ArgumentException containing {expectedMessage}");
+}
+
+static Value ValueList(params Value[] values)
+{
+    ListValue list = new();
+    list.Values.AddRange(values);
+    return new Value { ListValue = list };
+}
+
 GameTime gameTime = new()
 {
     Year = 2,
@@ -54,15 +78,43 @@ Assert(npcName == "Abigail", "parsed npc name should match");
 Assert(!ProtocolMapper.TryParseNpcEntityId("player:local", out _), "non-npc entity id should not parse as npc");
 Assert(!ProtocolMapper.TryParseNpcEntityId("npc:", out _), "empty npc name should not parse");
 
+ConversationStateStore store = new(new FixedConversationIdGenerator("conv_1", "conv_2", "conv_3"));
+string conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_1");
+Assert(conversationId == "conv_1", "first NPC interaction should reserve deterministic conversation id");
+Assert(store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local") is null, "conversation should not be active before EventAck.ACCEPTED");
+store.CommitPending("event_interact_1");
+ConversationSnapshot? activeConversation = store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local");
+Assert(activeConversation?.ConversationId == "conv_1", "accepted interaction should activate conversation");
+string reusedConversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_2");
+Assert(reusedConversationId == "conv_1", "same-day active NPC interaction should reuse conversation id");
+store.DiscardPending("event_interact_2");
+store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", "event_player_1", "player:local", "Local Farmer", "Let's go fishing.", 1820);
+store.CommitPending("event_player_1");
+activeConversation = store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local");
+Assert(activeConversation?.RecentLines.Single().Text == "Let's go fishing.", "accepted player line should enter conversation state");
+ExpectArgumentException(
+    () => store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", "event_player_2", "player:local", "Local Farmer", new string('x', 241), 1820),
+    "240"
+);
+store.Close("Farm_123456", "npc:Abigail", "player:local");
+conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_3");
+Assert(conversationId == "conv_2", "closed conversation should not be reused for a new interaction");
+store.DiscardPending("event_interact_3");
+store.Clear();
+conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_4");
+Assert(conversationId == "conv_3", "cleared store should start a new conversation id");
+
 GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(
     npcEntityId: "npc:Abigail",
     npcDisplayName: "Abigail",
     playerEntityId: "player:local",
     playerDisplayName: "Local Farmer",
-    trigger: "player_interact",
+    conversationId: "conv_1",
+    trigger: "action_button",
     sequence: 42,
     worldId: "Farm_123456",
-    gameTime: gameTime
+    gameTime: gameTime,
+    eventId: "event_interact_4"
 );
 
 Assert(gameEvent.EventType == "player_interacted_with_npc", "event type should be player_interacted_with_npc");
@@ -73,8 +125,54 @@ Assert(gameEvent.Entities.Any(entity => entity.EntityId == "npc:Abigail" && enti
 Assert(gameEvent.Entities.Any(entity => entity.EntityId == "npc:Abigail" && entity.DefinitionId == "npc:Abigail"), "target npc should carry definition_id");
 Assert(gameEvent.Entities.Any(entity => entity.EntityId == "player:local" && entity.EntityType == "player"), "player should be in entities");
 Assert(gameEvent.Entities.Any(entity => entity.EntityId == "player:local" && entity.DefinitionId == "player:local"), "player should carry definition_id");
-Assert(gameEvent.Payload.Fields["trigger"].StringValue == "player_interact", "payload should keep trigger");
+Assert(gameEvent.Payload.Fields["conversation_id"].StringValue == "conv_1", "payload should carry conversation_id");
+Assert(gameEvent.Payload.Fields["source"].StringValue == "stardew-smapi", "payload should identify adapter source");
+Assert(gameEvent.Payload.Fields["trigger"].StringValue == "action_button", "payload should keep trigger");
 Assert(!gameEvent.Payload.Fields.ContainsKey("target_entity_id"), "payload must not duplicate target_entity_id");
+
+GameEvent playerSaid = ProtocolMapper.BuildPlayerSaidToNpcEvent(
+    npcEntityId: "npc:Abigail",
+    npcDisplayName: "Abigail",
+    playerEntityId: "player:local",
+    playerDisplayName: "Local Farmer",
+    conversationId: "conv_1",
+    inputKind: "option",
+    text: "Let's go fishing.",
+    selectedOptionIndex: 1,
+    trigger: "dialogue_option",
+    sequence: 43,
+    worldId: "Farm_123456",
+    gameTime: gameTime,
+    eventId: "event_player_2"
+);
+Assert(playerSaid.EventType == "player_said_to_npc", "event type should be player_said_to_npc");
+Assert(playerSaid.Payload.Fields["conversation_id"].StringValue == "conv_1", "player input should carry conversation_id");
+Assert(playerSaid.Payload.Fields["input_kind"].StringValue == "option", "player input should carry input kind");
+Assert(playerSaid.Payload.Fields["selected_option_index"].NumberValue == 1, "option input should carry selected option index");
+Assert(playerSaid.Payload.Fields["trigger"].StringValue == "dialogue_option", "player input should carry trigger");
+GameEvent freeTextSaid = ProtocolMapper.BuildPlayerSaidToNpcEvent(
+    "npc:Abigail",
+    "Abigail",
+    "player:local",
+    "Local Farmer",
+    "conv_1",
+    "free_text",
+    "I need a moment.",
+    null,
+    "dialogue_free_text",
+    44,
+    "Farm_123456",
+    gameTime
+);
+Assert(!freeTextSaid.Payload.Fields.ContainsKey("selected_option_index"), "free_text input should not carry selected option index");
+ExpectArgumentException(
+    () => ProtocolMapper.BuildPlayerSaidToNpcEvent("npc:Abigail", "Abigail", "player:local", "Local Farmer", "conv_1", "option", "Let's go", null, "dialogue_option", 45, "Farm_123456", gameTime),
+    "selected_option_index"
+);
+ExpectArgumentException(
+    () => ProtocolMapper.BuildPlayerSaidToNpcEvent("npc:Abigail", "Abigail", "player:local", "Local Farmer", "conv_1", "free_text", new string('x', 241), null, "dialogue_free_text", 44, "Farm_123456", gameTime),
+    "240"
+);
 
 StardewObservation observationModel = StardewObservationFactory.Build(new StardewObservationInput(
     Year: 2,
@@ -114,7 +212,19 @@ StardewObservation observationModel = StardewObservationFactory.Build(new Starde
         new StardewNearbyNpcInput("Clint", "Clint", "Town", 14, 10),
     },
     Schedule: new StardewScheduleInput("Saloon", new[] { "Saloon", "Town", "", "Saloon" })
-));
+)
+{
+    Conversation = new StardewConversationInput(
+        ConversationId: "conv_1",
+        Active: true,
+        RecentLinesOmittedCount: 0,
+        RecentLines: new[]
+        {
+            new StardewConversationLineInput("npc", "npc:Abigail", "Abigail", "Want to explore the mines?", 1810),
+            new StardewConversationLineInput("player", "player:local", "Local Farmer", "Maybe after fishing.", 1820),
+        }
+    ),
+});
 
 Observation observation = ProtocolMapper.BuildObservation("npc:Abigail", observationModel, "Farm_123456", gameTime);
 Assert(observation.EntityId == "npc:Abigail", "observation should carry entity_id");
@@ -182,6 +292,17 @@ ListValue futureLocations = RequireList(schedule, "future_locations");
 Assert(futureLocations.Values.Count == 2, "schedule future locations should be non-empty and distinct");
 Assert(futureLocations.Values[0].StringValue == "Saloon", "future location order should be preserved");
 Assert(futureLocations.Values[1].StringValue == "Town", "future locations should keep distinct values");
+
+Struct conversation = RequireStruct(stardew, "conversation");
+Assert(RequireString(conversation, "conversation_id") == "conv_1", "conversation state should carry active conversation id");
+Assert(conversation.Fields["active"].BoolValue, "conversation should be active");
+ListValue recentLines = RequireList(conversation, "recent_lines");
+Assert(recentLines.Values.Count == 2, "conversation should expose recent lines");
+Struct firstLine = recentLines.Values[0].StructValue;
+Assert(RequireString(firstLine, "speaker_entity_id") == "npc:Abigail", "conversation line should carry speaker entity id");
+Assert(RequireString(firstLine, "speaker_name") == "Abigail", "conversation line should carry speaker display name");
+Assert(RequireString(firstLine, "text") == "Want to explore the mines?", "conversation line should carry text");
+Assert(RequireNumber(firstLine, "time_of_day") == 1810, "conversation line should carry append time");
 
 StardewObservation fallbackWeekday = StardewObservationFactory.Build(new StardewObservationInput(
     Year: 2,
@@ -251,10 +372,56 @@ Assert(!RequireStruct(unknownRelationshipObservation.State, "stardew").Fields.Co
 CapabilityList capabilities = CapabilityCatalog.BuildEnvironmentCapabilities();
 Capability speak = capabilities.Capabilities.Single(capability => capability.Name == "speak");
 Capability emote = capabilities.Capabilities.Single(capability => capability.Name == "emote");
+Capability presentDialogue = capabilities.Capabilities.Single(capability => capability.Name == "present_dialogue");
+Capability facePlayer = capabilities.Capabilities.Single(capability => capability.Name == "face_player");
 Assert(speak.Description.Contains("dialogue text", StringComparison.OrdinalIgnoreCase), "speak description should describe dialogue text effect");
 Assert(emote.Description.Contains("emote bubble", StringComparison.OrdinalIgnoreCase), "emote description should describe emote bubble effect");
+Assert(presentDialogue.Description.Contains("reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe reply options");
+Assert(facePlayer.Description.Contains("face the player", StringComparison.OrdinalIgnoreCase), "face_player description should describe facing effect");
 Assert(speak.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "speak capability should be sequential");
 Assert(emote.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "emote capability should be sequential");
+Assert(presentDialogue.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "present_dialogue capability should be sequential");
+Assert(facePlayer.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "face_player capability should be sequential");
+
+ActionRequest presentDialogueRequest = new()
+{
+    ActionId = "act_present",
+    EntityId = "npc:Abigail",
+    WorldId = "Farm_123456",
+    Capability = "present_dialogue",
+    Arguments = new Struct
+    {
+        Fields =
+        {
+            ["text"] = Value.ForString("Want to explore the mines?"),
+            ["reply_options"] = ValueList(Value.ForString("Yes"), Value.ForString("Maybe later")),
+            ["allow_free_text"] = Value.ForBool(true),
+        },
+    },
+};
+PresentDialogueInput presentInput = ProtocolMapper.RequirePresentDialogueArgument(presentDialogueRequest);
+Assert(presentInput.Text == "Want to explore the mines?", "present_dialogue text should parse");
+Assert(presentInput.ReplyOptions.SequenceEqual(new[] { "Yes", "Maybe later" }), "present_dialogue reply options should parse in order");
+Assert(presentInput.AllowFreeText, "present_dialogue allow_free_text should parse");
+ActionResult presentResult = ProtocolMapper.BuildPresentDialogueSucceededActionResult(presentDialogueRequest, "conv_1", presentInput);
+Assert(presentResult.Status == ActionStatus.Succeeded, "present_dialogue result should succeed after menu display");
+Assert(presentResult.Output.Fields["conversation_id"].StringValue == "conv_1", "present_dialogue result should carry conversation id");
+Assert(presentResult.Output.Fields["reply_options_count"].NumberValue == 2, "present_dialogue result should carry option count");
+ExpectArgumentException(
+    () =>
+    {
+        ActionRequest invalid = presentDialogueRequest.Clone();
+        invalid.Arguments.Fields["text"] = Value.ForString(new string('x', 241));
+        ProtocolMapper.RequirePresentDialogueArgument(invalid);
+    },
+    "240"
+);
+
+Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 12, playerTileY: 10) == "right", "face_player should prefer horizontal delta when larger");
+Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 10, playerTileY: 12) == "down", "face_player should map positive y to down");
+Assert(PlayerInteractTrigger.FromButton("action") == "action_button", "action button should map to action_button trigger");
+Assert(PlayerInteractTrigger.FromButton("mouse_left") == "mouse_left", "left mouse should map to mouse_left trigger");
+Assert(PlayerInteractTrigger.FromButton("mouse_right") == "mouse_right", "right mouse should map to mouse_right trigger");
 
 ActionRequest actionRequest = new()
 {
@@ -277,3 +444,21 @@ Assert(!RuntimeWorldScope.IsAvailable(""), "empty current world_id should not be
 Assert(!RuntimeWorldScope.IsAvailable("   "), "blank current world_id should not be available");
 
 Console.WriteLine("ProtocolMapper tests passed.");
+
+public sealed class FixedConversationIdGenerator : IConversationIdGenerator
+{
+    private readonly Queue<string> ids;
+
+    public FixedConversationIdGenerator(params string[] ids)
+    {
+        this.ids = new Queue<string>(ids);
+    }
+
+    public string NextConversationId()
+    {
+        if (this.ids.Count == 0)
+            throw new InvalidOperationException("no fixed conversation ids remain");
+
+        return this.ids.Dequeue();
+    }
+}

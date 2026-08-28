@@ -1,5 +1,6 @@
 using System;
 using GameAgent.Stardew.Capabilities;
+using GameAgent.Stardew.Dialogue;
 using GameAgent.Stardew.Events;
 using GameAgent.Stardew.Runtime;
 using GameAgent.Stardew.State;
@@ -14,9 +15,13 @@ public sealed class ModEntry : Mod
 {
     private AdapterConfig? config;
     private MainThreadDispatcher? dispatcher;
+    private ConversationStateStore? conversationStore;
+    private DialogueInteractionController? dialogueController;
     private ObservationBuilder? observationBuilder;
     private SpeakCapability? speakCapability;
     private EmoteCapability? emoteCapability;
+    private PresentDialogueCapability? presentDialogueCapability;
+    private FacePlayerCapability? facePlayerCapability;
     private PlayerInteractProbe? playerInteractProbe;
     private RuntimeClient? runtimeClient;
 
@@ -24,15 +29,22 @@ public sealed class ModEntry : Mod
     {
         this.config = helper.ReadConfig<AdapterConfig>();
         this.dispatcher = new MainThreadDispatcher(this.Monitor);
-        this.observationBuilder = new ObservationBuilder();
+        this.conversationStore = new ConversationStateStore(new ConversationIdGenerator());
+        this.dialogueController = new DialogueInteractionController();
+        this.observationBuilder = new ObservationBuilder(this.conversationStore);
         this.speakCapability = new SpeakCapability();
         this.emoteCapability = new EmoteCapability();
+        this.presentDialogueCapability = new PresentDialogueCapability(this.conversationStore, this.dialogueController);
+        this.facePlayerCapability = new FacePlayerCapability();
         this.runtimeClient = new RuntimeClient(
             this.config,
             this.dispatcher,
             this.observationBuilder,
+            this.conversationStore,
             this.speakCapability,
             this.emoteCapability,
+            this.presentDialogueCapability,
+            this.facePlayerCapability,
             this.Monitor
         );
         this.playerInteractProbe = new PlayerInteractProbe(
@@ -44,6 +56,7 @@ public sealed class ModEntry : Mod
 
         helper.Events.GameLoop.GameLaunched += this.OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += this.OnSaveLoaded;
+        helper.Events.GameLoop.DayStarted += this.OnDayStarted;
         helper.Events.GameLoop.ReturnedToTitle += this.OnReturnedToTitle;
         helper.Events.GameLoop.UpdateTicked += this.OnUpdateTicked;
         helper.Events.Input.ButtonPressed += this.OnButtonPressed;
@@ -76,6 +89,13 @@ public sealed class ModEntry : Mod
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
+        this.runtimeClient?.ClearConversations();
+        this.runtimeClient?.RefreshWorldContext();
+    }
+
+    private void OnDayStarted(object? sender, DayStartedEventArgs e)
+    {
+        this.runtimeClient?.ClearConversations();
         this.runtimeClient?.RefreshWorldContext();
     }
 
@@ -87,6 +107,7 @@ public sealed class ModEntry : Mod
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
         this.dispatcher?.Drain();
+        this.dialogueController?.Update();
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -125,6 +146,6 @@ public sealed class ModEntry : Mod
             return;
         }
 
-        this.runtimeClient.SendPlayerInteracted(target, Game1.player, "console_probe");
+        this.runtimeClient.SendPlayerInteracted(target, Game1.player, PlayerInteractTrigger.ConsoleProbe);
     }
 }

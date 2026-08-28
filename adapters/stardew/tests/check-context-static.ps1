@@ -19,6 +19,8 @@ $requiredFiles = @(
     'src/Capabilities/FacePlayerDirection.cs',
     'src/Dialogue/ConversationStateStore.cs',
     'src/Dialogue/PresentDialogueInput.cs',
+    'src/Dialogue/DialogueReplyChoice.cs',
+    'src/Dialogue/DialogueResponseMenuLayout.cs',
     'src/Dialogue/DialogueInteractionController.cs',
     'src/Dialogue/DialogueInteractionMenu.cs',
     'src/Runtime/CapabilityCatalog.cs',
@@ -83,6 +85,13 @@ Require-Content 'src/Runtime/CapabilityCatalog.cs' 'present_dialogue' 'Capabilit
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'face_player' 'CapabilityCatalog must register face_player.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'EventAckStatus\.Accepted' 'RuntimeClient must commit conversation state after accepted EventAck.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId\)' 'RuntimeClient must let delayed dialogue display honor CancelAction.'
+Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'Game1\.DrawDialogue\(new StardewValley\.Dialogue' 'Dialogue UI must show the NPC line through Stardew native dialogue first.'
+Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'new DialogueInteractionMenu' 'Dialogue UI must show reply choices in the adapter bottom response menu after the native NPC dialogue advances.'
+Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'IKeyboardSubscriber' 'Dialogue response menu must own a keyboard subscriber for inline free-text input.'
+Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'keyboardDispatcher\.Subscriber' 'Dialogue response menu must route keyboard input to its inline free-text row.'
+Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'BodyFont\s*=>\s*Game1\.dialogueFont' 'Dialogue response body text must use Stardew dialogueFont for NPC-dialogue visual consistency.'
+Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'dialogue_option' 'Dialogue response menu must submit clicked generated reply options.'
+Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'dialogue_free_text' 'Dialogue response menu must submit inline free-text replies.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'nearby_npcs_omitted_count' 'ProtocolMapper tests must cover nearby NPC truncation.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'friendship_points' 'ProtocolMapper tests must cover relationship visibility.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'present_dialogue' 'ProtocolMapper tests must cover present_dialogue.'
@@ -94,6 +103,30 @@ Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' '\["agent_id"\]|\["agent_til
 Reject-Content 'src/Runtime/RuntimeClient.cs' 'ProbeObservation' 'RuntimeClient must use StardewObservation in the production observation path.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ProbeObservation' 'ProtocolMapper must not consume ProbeObservation.'
 Reject-Content 'tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj' 'ProbeObservation' 'ProtocolMapper tests must not compile ProbeObservation.'
+Reject-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'DrawWrappedText\(b, this\.input\.Text' 'DialogueInteractionMenu must not draw the NPC line in the same custom menu as choices/input.'
+Reject-Content 'src/Dialogue/DialogueInteractionController.cs' 'createQuestionDialogue' 'Dialogue UI must not use Stardew native question UI for replies because its rows cannot accept inline text input.'
+Reject-Content 'src/Dialogue/DialogueReplyChoice.cs' 'Something else' 'Inline free text must not be exposed as a clickable Something else choice.'
+Reject-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'DrawWrappedText\(b, label, Game1\.smallFont|DrawWrappedText\(b, this\.Text, Game1\.smallFont|DrawWrappedText\(b, Placeholder, Game1\.smallFont|WrapText\(text, Game1\.smallFont|Game1\.smallFont\.MeasureString\(lastLine\)' 'Dialogue response and input body text must not be drawn with smallFont.'
+
+$dialogueControllerPath = Join-Path $Root 'src/Dialogue/DialogueInteractionController.cs'
+if (Test-Path -LiteralPath $dialogueControllerPath) {
+    $dialogueControllerSource = Get-Content -LiteralPath $dialogueControllerPath -Raw
+    if ($dialogueControllerSource -notmatch 'flow\.Start\(\(\) => Game1\.DrawDialogue\(new StardewValley\.Dialogue') {
+        $failures.Add('DialogueInteractionController must start DialoguePresentationFlow with Stardew native DrawDialogue as the NPC-line display action.') | Out-Null
+    }
+}
+
+$dialogueFlowPath = Join-Path $Root 'src/Dialogue/DialoguePresentationFlow.cs'
+if (Test-Path -LiteralPath $dialogueFlowPath) {
+    $dialogueFlowSource = Get-Content -LiteralPath $dialogueFlowPath -Raw
+    if ($dialogueFlowSource -notmatch 'showNpcLine\(\);\s*\r?\n\s*this\.MarkDisplayed\(\);') {
+        $failures.Add('DialoguePresentationFlow must mark displayed immediately after showing the NPC line.') | Out-Null
+    }
+
+    if ($dialogueFlowSource -match 'shouldShowReplyMenu[\s\S]{0,120}MarkDisplayed') {
+        $failures.Add('present_dialogue ActionResult must not be gated on reply menu availability; sync action timeout is shorter than player reading time.') | Out-Null
+    }
+}
 
 if ($failures.Count -gt 0) {
     Write-Host 'Stardew adapter context static check failed:'

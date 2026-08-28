@@ -19,72 +19,55 @@ public sealed record PlayerDialogueSubmission(
 
 public sealed class DialogueInteractionMenu : IClickableMenu
 {
-    private const int MenuWidth = 1100;
-    private const int Margin = 24;
-    private const int OptionHeight = 64;
-    private const int TextInputHeight = 72;
-    private const int ButtonWidth = 180;
-    private const int ButtonHeight = 56;
-
-    private readonly PresentDialogueInput input;
+    private readonly string title;
+    private readonly IReadOnlyList<DialogueReplyChoice> optionChoices;
     private readonly Action<PlayerDialogueSubmission> onSubmitted;
     private readonly Action onAbandoned;
-    private readonly List<OptionButton> optionButtons = new();
-    private readonly Rectangle textArea;
-    private readonly Rectangle closeButton;
-    private readonly Rectangle submitButton;
+    private readonly DialogueResponseMenuLayout layout;
     private readonly DialogueFreeTextInput? textInput;
     private bool submitted;
     private bool closedWithoutSubmission;
     private bool abandonmentNotified;
 
+    private static SpriteFont BodyFont => Game1.dialogueFont;
+
     public DialogueInteractionMenu(
         string npcEntityId,
         string conversationId,
-        PresentDialogueInput input,
+        string title,
+        IReadOnlyList<DialogueReplyChoice> optionChoices,
+        bool allowFreeText,
         Action<PlayerDialogueSubmission> onSubmitted,
         Action onAbandoned
     )
     {
         this.NpcEntityId = npcEntityId;
         this.ConversationId = conversationId;
-        this.input = input;
+        this.title = string.IsNullOrWhiteSpace(title) ? "Respond:" : title;
+        this.optionChoices = (optionChoices ?? Array.Empty<DialogueReplyChoice>()).ToArray();
         this.onSubmitted = onSubmitted;
         this.onAbandoned = onAbandoned;
+        this.layout = DialogueResponseMenuLayout.Build(
+            Game1.uiViewport.Width,
+            Game1.uiViewport.Height,
+            this.optionChoices.Count,
+            allowFreeText
+        );
 
-        int width = Math.Min(MenuWidth, Math.Max(720, Game1.uiViewport.Width - 128));
-        int textHeight = Math.Max(96, MeasureWrappedHeight(input.Text, Game1.dialogueFont, width - Margin * 2));
-        int optionsHeight = input.ReplyOptions.Count * (OptionHeight + 12);
-        int inputHeight = input.AllowFreeText ? TextInputHeight + ButtonHeight + 24 : 0;
-        int height = Math.Min(Game1.uiViewport.Height - 96, Margin * 3 + textHeight + optionsHeight + inputHeight + ButtonHeight);
+        this.xPositionOnScreen = this.layout.MenuBounds.X;
+        this.yPositionOnScreen = this.layout.MenuBounds.Y;
+        this.width = this.layout.MenuBounds.Width;
+        this.height = this.layout.MenuBounds.Height;
 
-        this.xPositionOnScreen = (Game1.uiViewport.Width - width) / 2;
-        this.yPositionOnScreen = (Game1.uiViewport.Height - height) / 2;
-        this.width = width;
-        this.height = height;
-        this.textArea = new Rectangle(this.xPositionOnScreen + Margin, this.yPositionOnScreen + Margin, this.width - Margin * 2, textHeight);
-
-        int currentY = this.yPositionOnScreen + Margin + textHeight + 16;
-        for (int i = 0; i < input.ReplyOptions.Count; i++)
+        if (allowFreeText && this.layout.TextInputRow is DialogueMenuRectangle textInputRow && this.layout.TextInputTextArea is DialogueMenuRectangle textInputTextArea)
         {
-            this.optionButtons.Add(new OptionButton(
-                i,
-                input.ReplyOptions[i],
-                new Rectangle(this.xPositionOnScreen + Margin, currentY, width - Margin * 2, OptionHeight)
-            ));
-            currentY += OptionHeight + 12;
-        }
-
-        if (input.AllowFreeText)
-        {
-            this.textInput = new DialogueFreeTextInput(ConversationStateStore.MaxLineTextChars);
-            this.textInput.Bounds = new Rectangle(this.xPositionOnScreen + Margin, currentY, width - Margin * 2, TextInputHeight);
+            this.textInput = new DialogueFreeTextInput(ConversationStateStore.MaxLineTextChars)
+            {
+                Bounds = ToXna(textInputRow),
+                TextArea = ToXna(textInputTextArea),
+            };
             Game1.keyboardDispatcher.Subscriber = this.textInput;
-            currentY += TextInputHeight + 12;
         }
-
-        this.submitButton = new Rectangle(this.xPositionOnScreen + width - Margin - ButtonWidth, currentY, ButtonWidth, ButtonHeight);
-        this.closeButton = new Rectangle(this.xPositionOnScreen + Margin, currentY, ButtonWidth, ButtonHeight);
     }
 
     public string NpcEntityId { get; }
@@ -98,25 +81,29 @@ public sealed class DialogueInteractionMenu : IClickableMenu
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
     {
-        foreach (OptionButton option in this.optionButtons)
+        for (int i = 0; i < this.layout.OptionRows.Count; i++)
         {
-            if (!option.Bounds.Contains(x, y))
-                continue;
+            if (this.layout.OptionRows[i].Contains(x, y))
+            {
+                this.SubmitOption(this.optionChoices[i]);
+                return;
+            }
+        }
 
-            this.Submit("option", option.Text, option.Index, "dialogue_option");
+        if (this.textInput is not null && this.layout.SendButton?.Contains(x, y) == true)
+        {
+            this.TrySubmitFreeText();
             return;
         }
 
-        if (this.textInput is not null && this.submitButton.Contains(x, y))
+        if (this.layout.CloseButton.Contains(x, y))
         {
-            string text = this.textInput.Text.Trim();
-            if (text.Length > 0)
-                this.Submit("free_text", text, null, "dialogue_free_text");
-            return;
-        }
-
-        if (this.closeButton.Contains(x, y))
             this.exitThisMenu();
+            return;
+        }
+
+        if (this.textInput?.Bounds.Contains(x, y) == true)
+            Game1.keyboardDispatcher.Subscriber = this.textInput;
     }
 
     public override void receiveKeyPress(Keys key)
@@ -127,46 +114,34 @@ public sealed class DialogueInteractionMenu : IClickableMenu
             return;
         }
 
-        if (this.textInput is not null)
+        if (key == Keys.Enter)
         {
-            if (key == Keys.Enter)
-            {
-                string text = this.textInput.Text.Trim();
-                if (text.Length > 0)
-                    this.Submit("free_text", text, null, "dialogue_free_text");
-                return;
-            }
-
-            this.textInput.RecieveSpecialInput(key);
+            this.TrySubmitFreeText();
+            return;
         }
+
+        this.textInput?.RecieveSpecialInput(key);
     }
 
     public override void draw(SpriteBatch b)
     {
-        b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.35f);
-        Game1.drawDialogueBox(this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, false, true);
+        IClickableMenu.drawTextureBox(b, this.xPositionOnScreen, this.yPositionOnScreen, this.width, this.height, Color.White);
+        DrawLeftText(b, this.title, BodyFont, ToXna(this.layout.TitleArea), Game1.textColor);
 
-        DrawWrappedText(b, this.input.Text, Game1.dialogueFont, Game1.textColor, this.textArea);
+        for (int i = 0; i < this.layout.OptionRows.Count; i++)
+            DrawOptionRow(b, ToXna(this.layout.OptionRows[i]), this.optionChoices[i].Text);
 
-        foreach (OptionButton option in this.optionButtons)
-        {
-            IClickableMenu.drawTextureBox(b, option.Bounds.X, option.Bounds.Y, option.Bounds.Width, option.Bounds.Height, Color.White);
-            b.DrawString(Game1.smallFont, option.Text, new Vector2(option.Bounds.X + 20, option.Bounds.Y + 18), Game1.textColor);
-        }
+        this.textInput?.Draw(b);
 
-        if (this.textInput is not null)
-            this.textInput.Draw(b);
-
-        DrawButton(b, this.closeButton, "Close");
-        if (this.textInput is not null)
-            DrawButton(b, this.submitButton, "Send");
-
+        DrawButton(b, ToXna(this.layout.CloseButton), "Close", enabled: true);
+        if (this.textInput is not null && this.layout.SendButton is DialogueMenuRectangle sendButton)
+            DrawButton(b, ToXna(sendButton), "Send", enabled: this.textInput.HasText);
         drawMouse(b);
     }
 
     protected override void cleanupBeforeExit()
     {
-        if (Game1.keyboardDispatcher.Subscriber == this.textInput)
+        if (this.textInput is not null && Game1.keyboardDispatcher.Subscriber == this.textInput)
             Game1.keyboardDispatcher.Subscriber = null;
 
         if (!this.submitted && !this.closedWithoutSubmission)
@@ -175,10 +150,27 @@ public sealed class DialogueInteractionMenu : IClickableMenu
         base.cleanupBeforeExit();
     }
 
-    private void Submit(string inputKind, string text, int? selectedOptionIndex, string trigger)
+    private void SubmitOption(DialogueReplyChoice choice)
     {
         this.submitted = true;
-        this.onSubmitted(new PlayerDialogueSubmission(this.ConversationId, inputKind, text, selectedOptionIndex, trigger));
+        this.onSubmitted(new PlayerDialogueSubmission(
+            this.ConversationId,
+            "option",
+            choice.Text,
+            choice.SelectedOptionIndex,
+            "dialogue_option"
+        ));
+        this.exitThisMenu();
+    }
+
+    private void TrySubmitFreeText()
+    {
+        string text = this.textInput?.Text.Trim() ?? string.Empty;
+        if (text.Length == 0)
+            return;
+
+        this.submitted = true;
+        this.onSubmitted(new PlayerDialogueSubmission(this.ConversationId, "free_text", text, null, "dialogue_free_text"));
         this.exitThisMenu();
     }
 
@@ -191,65 +183,85 @@ public sealed class DialogueInteractionMenu : IClickableMenu
         this.onAbandoned();
     }
 
-    private static void DrawButton(SpriteBatch b, Rectangle bounds, string label)
+    private static Rectangle ToXna(DialogueMenuRectangle rectangle)
     {
-        IClickableMenu.drawTextureBox(b, bounds.X, bounds.Y, bounds.Width, bounds.Height, Color.White);
-        Vector2 size = Game1.smallFont.MeasureString(label);
+        return new Rectangle(rectangle.X, rectangle.Y, rectangle.Width, rectangle.Height);
+    }
+
+    private static void DrawButton(SpriteBatch b, Rectangle bounds, string label, bool enabled)
+    {
+        Color boxColor = enabled ? Color.White : Color.White * 0.55f;
+        Color textColor = enabled ? Game1.textColor : Color.Gray;
+        IClickableMenu.drawTextureBox(b, bounds.X, bounds.Y, bounds.Width, bounds.Height, boxColor);
+        Vector2 size = BodyFont.MeasureString(label);
         Vector2 position = new(bounds.X + (bounds.Width - size.X) / 2, bounds.Y + (bounds.Height - size.Y) / 2);
-        b.DrawString(Game1.smallFont, label, position, Game1.textColor);
+        b.DrawString(BodyFont, label, position, textColor);
     }
 
-    private static int MeasureWrappedHeight(string text, SpriteFont font, int maxWidth)
+    private static void DrawOptionRow(SpriteBatch b, Rectangle bounds, string label)
     {
-        return WrapText(text, font, maxWidth).Count * (int)font.MeasureString("A").Y;
+        b.Draw(Game1.staminaRect, bounds, Color.Black * 0.08f);
+        Rectangle textArea = new(bounds.X + 18, bounds.Y, bounds.Width - 36, bounds.Height);
+        DrawFirstWrappedLine(b, label, BodyFont, Game1.textColor, textArea);
     }
 
-    private static void DrawWrappedText(SpriteBatch b, string text, SpriteFont font, Color color, Rectangle area)
+    private static void DrawLeftText(SpriteBatch b, string text, SpriteFont font, Rectangle area, Color color)
+    {
+        Vector2 size = font.MeasureString(text);
+        Vector2 position = new(area.X, area.Y + (area.Height - size.Y) / 2);
+        b.DrawString(font, text, position, color);
+    }
+
+    private static void DrawFirstWrappedLine(SpriteBatch b, string text, SpriteFont font, Color color, Rectangle area)
     {
         int lineHeight = (int)font.MeasureString("A").Y;
-        int y = area.Y;
-        foreach (string line in WrapText(text, font, area.Width))
-        {
-            if (y + lineHeight > area.Bottom)
-                break;
-
-            b.DrawString(font, line, new Vector2(area.X, y), color);
-            y += lineHeight;
-        }
+        int y = GetCenteredTextY(area, lineHeight);
+        string line = WrapText(text, font, area.Width).FirstOrDefault() ?? string.Empty;
+        b.DrawString(font, line, new Vector2(area.X, y), color);
     }
 
     private static IReadOnlyList<string> WrapText(string text, SpriteFont font, int maxWidth)
     {
         var lines = new List<string>();
         string current = string.Empty;
-        foreach (string word in (text ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        foreach (char c in text ?? string.Empty)
         {
-            string candidate = string.IsNullOrEmpty(current) ? word : $"{current} {word}";
-            if (font.MeasureString(candidate).X <= maxWidth)
+            if (c == '\r')
+                continue;
+
+            if (c == '\n')
             {
-                current = candidate;
+                AddLine(lines, ref current);
                 continue;
             }
 
-            if (!string.IsNullOrEmpty(current))
-                lines.Add(current);
+            string candidate = current + c;
+            if (current.Length > 0 && font.MeasureString(candidate).X > maxWidth)
+            {
+                AddLine(lines, ref current);
+                current = c.ToString();
+                continue;
+            }
 
-            current = word;
+            current = candidate;
         }
 
-        if (!string.IsNullOrEmpty(current))
-            lines.Add(current);
-
-        if (lines.Count == 0)
-            lines.Add(string.Empty);
-
+        AddLine(lines, ref current);
         return lines;
     }
 
-    private sealed record OptionButton(int Index, string Text, Rectangle Bounds);
+    private static void AddLine(List<string> lines, ref string current)
+    {
+        if (current.Length == 0)
+            return;
+
+        lines.Add(current);
+        current = string.Empty;
+    }
 
     private sealed class DialogueFreeTextInput : IKeyboardSubscriber
     {
+        private const string Placeholder = "Type your response...";
         private readonly int characterLimit;
 
         public DialogueFreeTextInput(int characterLimit)
@@ -257,26 +269,42 @@ public sealed class DialogueInteractionMenu : IClickableMenu
             this.characterLimit = characterLimit;
         }
 
-        public Rectangle Bounds { get; set; }
+        public Rectangle Bounds { get; init; }
+        public Rectangle TextArea { get; init; }
         public string Text { get; private set; } = string.Empty;
         public bool Selected { get; set; } = true;
+        public bool HasText => !string.IsNullOrWhiteSpace(this.Text);
 
         public void Draw(SpriteBatch b)
         {
             IClickableMenu.drawTextureBox(b, this.Bounds.X, this.Bounds.Y, this.Bounds.Width, this.Bounds.Height, Color.White);
-            b.DrawString(Game1.smallFont, this.Text, new Vector2(this.Bounds.X + 16, this.Bounds.Y + 18), Game1.textColor);
+            Rectangle textArea = this.TextArea;
+
+            if (this.Text.Length == 0)
+            {
+                DrawInputLine(b, Placeholder, Color.Gray, textArea);
+                DrawCaret(b, textArea, 0);
+                return;
+            }
+
+            DialogueSingleLineText line = DialogueSingleLineText.FitTrailingText(
+                this.Text,
+                textArea.Width,
+                text => BodyFont.MeasureString(text).X
+            );
+            DrawInputLine(b, line.VisibleText, Game1.textColor, textArea);
+            DrawCaret(b, textArea, line.CaretOffset);
         }
 
         public void RecieveTextInput(char inputChar)
         {
             if (inputChar == '\b')
             {
-                if (this.Text.Length > 0)
-                    this.Text = this.Text[..^1];
+                this.RemoveLastCharacter();
                 return;
             }
 
-            if (char.IsControl(inputChar) || this.Text.Length >= this.characterLimit)
+            if (inputChar == '\r' || inputChar == '\n' || char.IsControl(inputChar) || this.Text.Length >= this.characterLimit)
                 return;
 
             this.Text += inputChar;
@@ -290,13 +318,40 @@ public sealed class DialogueInteractionMenu : IClickableMenu
 
         public void RecieveCommandInput(char command)
         {
-            this.RecieveTextInput(command);
+            if (command == '\b')
+                this.RemoveLastCharacter();
         }
 
         public void RecieveSpecialInput(Keys key)
         {
-            if (key == Keys.Back && this.Text.Length > 0)
+            if (key == Keys.Back)
+                this.RemoveLastCharacter();
+        }
+
+        private void RemoveLastCharacter()
+        {
+            if (this.Text.Length > 0)
                 this.Text = this.Text[..^1];
         }
+
+        private static void DrawInputLine(SpriteBatch b, string text, Color color, Rectangle textArea)
+        {
+            int lineHeight = (int)BodyFont.MeasureString("A").Y;
+            int y = GetCenteredTextY(textArea, lineHeight);
+            b.DrawString(BodyFont, text, new Vector2(textArea.X, y), color);
+        }
+
+        private static void DrawCaret(SpriteBatch b, Rectangle textArea, float caretOffset)
+        {
+            int lineHeight = (int)BodyFont.MeasureString("A").Y;
+            int caretX = Math.Min(textArea.Right - 2, textArea.X + (int)Math.Ceiling(caretOffset) + 2);
+            int caretY = GetCenteredTextY(textArea, lineHeight);
+            b.Draw(Game1.staminaRect, new Rectangle(caretX, caretY, 2, lineHeight), Game1.textColor);
+        }
+    }
+
+    private static int GetCenteredTextY(Rectangle area, int lineHeight)
+    {
+        return area.Y + Math.Max(0, (area.Height - lineHeight) / 2);
     }
 }

@@ -31,6 +31,7 @@ const (
 	toolResultCodeToolArgumentsInvalid   = "tool_arguments_invalid"
 	toolResultCodeActionRequestInvalid   = "action_request_invalid"
 	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
+	toolResultCodePresentDialogueBatch   = "present_dialogue_must_be_only_tool_call"
 )
 
 type toolBatchScheduler struct {

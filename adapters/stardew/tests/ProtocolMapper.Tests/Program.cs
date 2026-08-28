@@ -13,6 +13,22 @@ static void Assert(bool condition, string message)
         throw new InvalidOperationException(message);
 }
 
+static void AssertInside(DialogueMenuRectangle inner, DialogueMenuRectangle outer, string label)
+{
+    Assert(inner.Left >= outer.Left, $"{label} should stay inside parent left edge");
+    Assert(inner.Top >= outer.Top, $"{label} should stay inside parent top edge");
+    Assert(inner.Right <= outer.Right, $"{label} should stay inside parent right edge");
+    Assert(inner.Bottom <= outer.Bottom, $"{label} should stay inside parent bottom edge");
+}
+
+static void AssertInsideViewport(DialogueMenuRectangle rectangle, int viewportWidth, int viewportHeight, string label)
+{
+    Assert(rectangle.Left >= 0, $"{label} should stay inside viewport left edge");
+    Assert(rectangle.Top >= 0, $"{label} should stay inside viewport top edge");
+    Assert(rectangle.Right <= viewportWidth, $"{label} should stay inside viewport right edge");
+    Assert(rectangle.Bottom <= viewportHeight, $"{label} should stay inside viewport bottom edge");
+}
+
 static Struct RequireStruct(Struct parent, string fieldName)
 {
     Assert(parent.Fields.TryGetValue(fieldName, out Value? value), $"missing struct field: {fieldName}");
@@ -391,6 +407,7 @@ Capability facePlayer = capabilities.Capabilities.Single(capability => capabilit
 Assert(speak.Description.Contains("dialogue text", StringComparison.OrdinalIgnoreCase), "speak description should describe dialogue text effect");
 Assert(emote.Description.Contains("emote bubble", StringComparison.OrdinalIgnoreCase), "emote description should describe emote bubble effect");
 Assert(presentDialogue.Description.Contains("reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe reply options");
+Assert(presentDialogue.Description.Contains("wait for player_said_to_npc", StringComparison.OrdinalIgnoreCase), "present_dialogue description should tell the agent to wait for player input");
 Assert(facePlayer.Description.Contains("face the player", StringComparison.OrdinalIgnoreCase), "face_player description should describe facing effect");
 Assert(speak.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "speak capability should be sequential");
 Assert(emote.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "emote capability should be sequential");
@@ -417,6 +434,141 @@ PresentDialogueInput presentInput = ProtocolMapper.RequirePresentDialogueArgumen
 Assert(presentInput.Text == "Want to explore the mines?", "present_dialogue text should parse");
 Assert(presentInput.ReplyOptions.SequenceEqual(new[] { "Yes", "Maybe later" }), "present_dialogue reply options should parse in order");
 Assert(presentInput.AllowFreeText, "present_dialogue allow_free_text should parse");
+IReadOnlyList<DialogueReplyChoice> inlineTextChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
+    "Question?",
+    new[] { "One", "Two", "Three", "Four" },
+    true
+));
+Assert(inlineTextChoices.Count == 3, "inline free text should reserve the fourth row without becoming a clickable choice");
+Assert(inlineTextChoices.Select(choice => choice.Text).SequenceEqual(new[] { "One", "Two", "Three" }), "inline free text should only show the first three generated reply options");
+Assert(inlineTextChoices[0].SelectedOptionIndex == 0 && inlineTextChoices[2].SelectedOptionIndex == 2, "generated visible choices should keep their source option indexes");
+IReadOnlyList<DialogueReplyChoice> shortInlineTextChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
+    "Question?",
+    new[] { "Only option" },
+    true
+));
+Assert(shortInlineTextChoices.Count == 1, "free text should not add a clickable row when fewer than three generated options exist");
+Assert(shortInlineTextChoices[0].Text == "Only option", "generated choice should remain visible before the inline free text row");
+IReadOnlyList<DialogueReplyChoice> freeTextOnlyChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
+    "Question?",
+    Array.Empty<string>(),
+    true
+));
+Assert(freeTextOnlyChoices.Count == 0, "free-text-only dialogue should open the text row without a Something else choice");
+IReadOnlyList<DialogueReplyChoice> generatedOnlyChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
+    "Question?",
+    new[] { "One", "Two", "Three", "Four" },
+    false
+));
+Assert(generatedOnlyChoices.Count == 4, "without free text all four generated options should remain visible");
+int npcLineShows = 0;
+int displayedCallbacks = 0;
+int replyMenuShows = 0;
+int abandonCallbacks = 0;
+DialoguePresentationFlow replyFlow = new(
+    shouldShowReplyMenu: true,
+    onDisplayed: () => displayedCallbacks++,
+    onAbandoned: () => abandonCallbacks++
+);
+replyFlow.Start(() => npcLineShows++);
+Assert(npcLineShows == 1, "dialogue flow should show the NPC line when started");
+Assert(displayedCallbacks == 1, "dialogue flow should mark displayed immediately after showing the NPC line");
+replyFlow.Update(isDialogueUiBusy: true, isReplyMenuActive: false, showReplyMenu: () => replyMenuShows++);
+Assert(replyMenuShows == 0, "dialogue flow should wait while the native NPC dialogue is still active");
+replyFlow.Update(isDialogueUiBusy: false, isReplyMenuActive: false, showReplyMenu: () => replyMenuShows++);
+Assert(replyMenuShows == 1, "dialogue flow should show the reply menu after the native NPC dialogue closes");
+replyFlow.MarkSubmitted();
+replyFlow.Update(isDialogueUiBusy: false, isReplyMenuActive: false, showReplyMenu: () => replyMenuShows++);
+Assert(replyFlow.IsFinished && abandonCallbacks == 0, "submitted dialogue flow should finish without abandonment");
+
+int plainDialogueShows = 0;
+DialoguePresentationFlow plainFlow = new(
+    shouldShowReplyMenu: false,
+    onDisplayed: () => { },
+    onAbandoned: () => throw new InvalidOperationException("plain dialogue should not abandon")
+);
+plainFlow.Start(() => plainDialogueShows++);
+plainFlow.Update(isDialogueUiBusy: true, isReplyMenuActive: false, showReplyMenu: () => throw new InvalidOperationException("plain dialogue should not show reply menu"));
+plainFlow.Update(isDialogueUiBusy: false, isReplyMenuActive: false, showReplyMenu: () => throw new InvalidOperationException("plain dialogue should not show reply menu"));
+Assert(plainDialogueShows == 1 && plainFlow.IsFinished, "dialogue flow without replies should finish after the native NPC dialogue closes");
+
+int closedVisibleUi = 0;
+int preemptedAbandonCallbacks = 0;
+DialoguePresentationFlow preemptedFlow = new(
+    shouldShowReplyMenu: true,
+    onDisplayed: () => { },
+    onAbandoned: () => preemptedAbandonCallbacks++
+);
+preemptedFlow.Start(() => { });
+preemptedFlow.CloseWithoutSubmission(() => closedVisibleUi++);
+Assert(preemptedFlow.IsFinished && closedVisibleUi == 1 && preemptedAbandonCallbacks == 0, "preempted dialogue flow should close visible UI without abandoning conversation");
+
+int closedMenuAbandonCallbacks = 0;
+DialoguePresentationFlow closedMenuFlow = new(
+    shouldShowReplyMenu: true,
+    onDisplayed: () => { },
+    onAbandoned: () => closedMenuAbandonCallbacks++
+);
+closedMenuFlow.Start(() => { });
+closedMenuFlow.Update(isDialogueUiBusy: true, isReplyMenuActive: false, showReplyMenu: () => { });
+closedMenuFlow.Update(isDialogueUiBusy: false, isReplyMenuActive: false, showReplyMenu: () => { });
+closedMenuFlow.Update(isDialogueUiBusy: false, isReplyMenuActive: false, showReplyMenu: () => throw new InvalidOperationException("reply menu should only show once"));
+Assert(closedMenuFlow.IsFinished && closedMenuAbandonCallbacks == 1, "closed reply menu should abandon the active conversation once");
+DialogueResponseMenuLayout compactReplyLayout = DialogueResponseMenuLayout.Build(
+    viewportWidth: 1226,
+    viewportHeight: 489,
+    optionCount: 3,
+    allowFreeText: true
+);
+Assert(compactReplyLayout.MenuBounds.Top >= 12, "compact response menu should stay inside the top of the viewport");
+Assert(compactReplyLayout.MenuBounds.Bottom <= 489, "compact response menu should stay inside the bottom of the viewport");
+Assert(compactReplyLayout.TextInputRow is not null, "free-text response layout should include an inline input row");
+Assert(compactReplyLayout.SendButton is not null, "free-text response layout should include Send");
+Assert(compactReplyLayout.OptionRows.Count == 3, "free-text response layout should still show three generated options");
+DialogueResponseMenuLayout generatedOnlyLayout = DialogueResponseMenuLayout.Build(
+    viewportWidth: 1226,
+    viewportHeight: 489,
+    optionCount: 4,
+    allowFreeText: false
+);
+Assert(generatedOnlyLayout.TextInputRow is null, "generated-only response layout should not include an input row");
+Assert(generatedOnlyLayout.SendButton is null, "generated-only response layout should not include Send");
+DialogueResponseMenuLayout smallViewportLayout = DialogueResponseMenuLayout.Build(
+    viewportWidth: 640,
+    viewportHeight: 360,
+    optionCount: 3,
+    allowFreeText: true
+);
+AssertInsideViewport(smallViewportLayout.MenuBounds, 640, 360, "small viewport response menu");
+AssertInside(smallViewportLayout.TitleArea, smallViewportLayout.MenuBounds, "small viewport title area");
+AssertInside(smallViewportLayout.CloseButton, smallViewportLayout.MenuBounds, "small viewport close button");
+foreach (DialogueMenuRectangle optionRow in smallViewportLayout.OptionRows)
+    AssertInside(optionRow, smallViewportLayout.MenuBounds, "small viewport option row");
+if (smallViewportLayout.TextInputRow is not DialogueMenuRectangle smallTextInputRow)
+    throw new InvalidOperationException("small viewport free-text response layout should include an input row");
+if (smallViewportLayout.TextInputTextArea is not DialogueMenuRectangle smallTextInputTextArea)
+    throw new InvalidOperationException("small viewport free-text response layout should include an input text area");
+if (smallViewportLayout.SendButton is not DialogueMenuRectangle smallSendButton)
+    throw new InvalidOperationException("small viewport free-text response layout should include Send");
+AssertInside(smallTextInputRow, smallViewportLayout.MenuBounds, "small viewport text input row");
+AssertInside(smallTextInputTextArea, smallTextInputRow, "small viewport text input text area");
+AssertInside(smallSendButton, smallTextInputRow, "small viewport send button");
+Assert(smallTextInputTextArea.Width > 0, "small viewport text input text area should keep positive width");
+
+DialogueSingleLineText trailingText = DialogueSingleLineText.FitTrailingText(
+    "ABCDEFGHIJ",
+    maxWidth: 5,
+    measureText: text => text.Length
+);
+Assert(trailingText.VisibleText == "FGHIJ", "single-line input should show the trailing text that fits");
+Assert(trailingText.CaretOffset == 5, "single-line input caret should align with the visible trailing text");
+DialogueSingleLineText exactText = DialogueSingleLineText.FitTrailingText(
+    "ABCD",
+    maxWidth: 4,
+    measureText: text => text.Length
+);
+Assert(exactText.VisibleText == "ABCD" && exactText.CaretOffset == 4, "single-line input should keep text that already fits");
+
 ActionResult presentResult = ProtocolMapper.BuildPresentDialogueSucceededActionResult(presentDialogueRequest, "conv_1", presentInput);
 Assert(presentResult.Status == ActionStatus.Succeeded, "present_dialogue result should succeed after menu display");
 Assert(presentResult.Output.Fields["conversation_id"].StringValue == "conv_1", "present_dialogue result should carry conversation id");

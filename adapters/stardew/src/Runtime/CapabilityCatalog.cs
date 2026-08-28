@@ -45,7 +45,7 @@ public static class CapabilityCatalog
                 {
                     Name = "present_dialogue",
                     Version = "0.1.0",
-                    Description = "Displays NPC dialogue with optional reply options or free-text input for the player.",
+                    Description = "Displays NPC dialogue with optional reply options or free-text input for the player; after using it, wait for player_said_to_npc before continuing that conversation.",
                     InputSchemaJson = PresentDialogueInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
                     ConcurrencyMode = CapabilityConcurrencyMode.Sequential,

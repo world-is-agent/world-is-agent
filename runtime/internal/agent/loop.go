@@ -45,6 +45,8 @@ var (
 	errInvalidModelDecision = errors.New("invalid model response")
 )
 
+const terminalDialogueToolName = "present_dialogue"
+
 type LoopOption func(*Loop)
 
 // WithMemoryStore 覆盖 Loop 默认使用的 MemoryStore。
@@ -294,6 +296,8 @@ func (l *Loop) runBoundedSteps(
 		}
 		totalToolCalls += len(calls)
 		idValidationResults, hasPriorStepDuplicateID := validateToolCallIDsAcrossSteps(calls, seenToolCallIDs)
+		terminalDialogueValidationResults, hasTerminalDialogueBatchViolation := validateTerminalDialogueToolCallBatch(calls)
+		hasTerminalDialogueToolCall := containsToolCallNamed(calls, terminalDialogueToolName)
 		rememberToolCallIDs(calls, seenToolCallIDs)
 
 		transcript = append(transcript, model.Message{
@@ -328,6 +332,23 @@ func (l *Loop) runBoundedSteps(
 					"step_index":           stepIndex,
 					"tool_call_count":      len(calls),
 					"tool_result_call_ids": toolResultCallIDs(idValidationResults),
+				},
+			})
+			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex, "reason": "model_visible_tool_failure"},
+			})
+			continue
+		}
+		if hasTerminalDialogueBatchViolation {
+			transcript = append(transcript, model.Message{
+				Role:        model.RoleTool,
+				ToolResults: copyToolResultsForTranscript(terminalDialogueValidationResults),
+			})
+			turnTracer.Emit(trace.EventToolBatchFailed, trace.EventData{
+				Fields: trace.Fields{
+					"step_index":           stepIndex,
+					"tool_call_count":      len(calls),
+					"tool_result_call_ids": toolResultCallIDs(terminalDialogueValidationResults),
 				},
 			})
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
@@ -386,7 +407,7 @@ func (l *Loop) runBoundedSteps(
 		turnTracer.Emit(trace.EventAgentStepCompleted, trace.EventData{
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
-		if decision.Control.Kind == model.ControlSettle {
+		if decision.Control.Kind == model.ControlSettle || hasTerminalDialogueToolCall {
 			turnTracer.Emit(trace.EventTurnSettled, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
@@ -476,6 +497,31 @@ func (l *Loop) concurrencyModesForCalls(calls []model.ToolCall) []string {
 		modes = append(modes, string(entry.Concurrency))
 	}
 	return modes
+}
+
+func validateTerminalDialogueToolCallBatch(calls []model.ToolCall) ([]model.ToolResult, bool) {
+	if !containsToolCallNamed(calls, terminalDialogueToolName) || len(calls) == 1 {
+		return nil, false
+	}
+
+	results := make([]model.ToolResult, len(calls))
+	for i, call := range calls {
+		results[i] = invalidToolResult(
+			call,
+			toolResultCodePresentDialogueBatch,
+			"present_dialogue must be the only tool call in the model response; settle after it and wait for player_said_to_npc",
+		)
+	}
+	return results, true
+}
+
+func containsToolCallNamed(calls []model.ToolCall, name string) bool {
+	for _, call := range calls {
+		if call.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func toolResultCallIDs(results []model.ToolResult) []string {

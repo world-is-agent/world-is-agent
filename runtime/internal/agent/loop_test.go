@@ -462,6 +462,25 @@ func newSpeakEmoteRegistry() *tool.Registry {
 	return registry
 }
 
+func newSpeakPresentDialogueRegistry() *tool.Registry {
+	registry := tool.NewRegistry()
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+		{
+			Name:            "speak",
+			Description:     "Make the NPC speak.",
+			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+		{
+			Name:            "present_dialogue",
+			Description:     "Show NPC dialogue and wait for player input.",
+			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+		},
+	})
+	return registry
+}
+
 func newParallelSenseRegistry() *tool.Registry {
 	return newSenseRegistry(protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE)
 }
@@ -770,6 +789,97 @@ func TestHandleEventRunsBatchToolCallsThenSettle(t *testing.T) {
 	}
 	if got := len(provider.requests); got != 1 {
 		t.Fatalf("provider request count = %d, want 1 because settle completed same step", got)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventRejectsPresentDialogueMixedWithOtherToolCalls(t *testing.T) {
+	registry := newSpeakPresentDialogueRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{
+						{ID: "call_1", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+						{ID: "call_2", Name: "speak", Arguments: map[string]any{"text": "This would overwrite the menu."}},
+					},
+					Control: model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{
+						{ID: "call_3", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+					},
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	if got := len(env.submittedActions); got != 1 {
+		t.Fatalf("submitted action count = %d, want only retried present_dialogue", got)
+	}
+	if env.submittedActions[0].Capability != "present_dialogue" {
+		t.Fatalf("submitted capability = %q, want present_dialogue", env.submittedActions[0].Capability)
+	}
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want retry after invalid present_dialogue batch", got)
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "present_dialogue_must_be_only_tool_call") {
+		t.Fatalf("retry request should explain present_dialogue batch validation; messages=%+v", provider.requests[1].Messages)
+	}
+	assertTraceContains(t, recorder.events, trace.EventToolBatchFailed)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventSettlesAfterPresentDialogueEvenWhenModelContinues(t *testing.T) {
+	registry := newSpeakPresentDialogueRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{
+						{ID: "call_1", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+					},
+					Control: model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{
+						{ID: "call_2", Name: "speak", Arguments: map[string]any{"text": "Too early."}},
+					},
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	if got := len(env.submittedActions); got != 1 {
+		t.Fatalf("submitted action count = %d, want only present_dialogue", got)
+	}
+	if env.submittedActions[0].Capability != "present_dialogue" {
+		t.Fatalf("submitted capability = %q, want present_dialogue", env.submittedActions[0].Capability)
+	}
+	if got := len(provider.requests); got != 1 {
+		t.Fatalf("provider request count = %d, want present_dialogue to settle the turn", got)
 	}
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }

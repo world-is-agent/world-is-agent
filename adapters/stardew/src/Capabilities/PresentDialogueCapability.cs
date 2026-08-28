@@ -40,7 +40,7 @@ public sealed class PresentDialogueCapability
         this.dialogueController.CloseForNpc(npcEntityId);
         this.dialogueController.QueueOrShow(
             npcEntityId,
-            createMenu: () =>
+            createPresentation: () =>
             {
                 if (isCancelled())
                 {
@@ -49,12 +49,13 @@ public sealed class PresentDialogueCapability
                 }
 
                 conversationId = this.conversationStore.EnsureConversationId(worldId, npcEntityId, PlayerEntityId);
-                return new DialogueInteractionMenu(
+                return new DialoguePresentation(
+                    npc,
                     npcEntityId,
                     conversationId,
                     input,
                     onSubmitted,
-                    onAbandoned: () => this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, conversationId)
+                    OnAbandoned: () => this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, conversationId)
                 );
             },
             onDisplayed: () =>

@@ -44,10 +44,10 @@ Phase5.6 做这些工作：
 1. 定义 Stardew 对话会话为多 Turn session。
 2. 新增玩家对话事件 player_said_to_npc。
 3. 新增 Adapter 内存 conversation state，并把最近对话行注入 Observation.state.stardew.conversation。
-4. 新增 present_dialogue capability，用于展示 NPC 台词、最多 4 个玩家回复选项和自定义输入入口。
+4. 新增 present_dialogue capability，用于通过 Stardew 原生对话节奏展示 NPC 台词、最多 4 个可见玩家回复行和内联自定义输入行。
 5. 新增 face_player capability，用于让 NPC 面向玩家。
 6. 更新 speak / emote / present_dialogue 的工具描述，使模型能稳定选择对话展示或简单动作。
-7. 新增 Stardew 对话 UI，支持选择回复和自由输入。
+7. 新增 Stardew 对话 UI，NPC 台词先走原生 dialogue box，玩家推进后再出现底部回复菜单；自由输入作为最后一行直接接收输入。
 8. 更新 Runtime 配置提示词，使模型理解玩家输入事件、回复选项和当前可用能力。
 9. 更新 Runtime memory 可见摘要，使 `present_dialogue` 的 NPC 台词可进入 Recent Memory。
 10. 明确交互发起到 UI 展示之间的上下文校验边界，作为 Phase6 Turn lifecycle 的接入点。
@@ -97,7 +97,7 @@ conversation_id: conv_12
 - 一个 `GameEvent` 启动一个新的 AgentTurn；
 - 一个 `conversation_id` 可以关联多个 AgentTurn；
 - 一个 AgentTurn 不等待玩家选择或输入；
-- `present_dialogue` 的 ActionResult 表示 NPC 台词和回复入口已真正显示；
+- `present_dialogue` 的 ActionResult 表示 NPC 台词已进入 Stardew 原生 UI；回复入口如果存在，会在玩家推进台词后由 Adapter 状态机继续展示；
 - 玩家选择或输入后，Adapter 发送新的 `player_said_to_npc` 事件；
 - 同一 NPC 的事件继续由 Runtime `ExecutionLane` 串行处理。
 
@@ -113,9 +113,11 @@ Player clicks NPC
   -> Adapter commits conversation open state
   -> Runtime Observe
   -> Model calls present_dialogue
-  -> Adapter displays NPC line + reply options / free-text entry
+  -> Adapter displays NPC line in Stardew's native dialogue box
   -> ActionResult(SUCCEEDED)
   -> Runtime settle
+  -> Player advances the NPC line
+  -> Adapter displays reply options / inline free-text row
 ```
 
 玩家回复：
@@ -405,8 +407,12 @@ Execution rules：
 - Action handler 使用 `world_id + ActionRequest.entity_id + player:local` 查找 active conversation；
 - 如果不存在 active conversation，Action handler 创建新的 active conversation；
 - 当 `reply_options` 为空且 `allow_free_text=false` 时，只展示 NPC 台词；
+- 当 `allow_free_text=true` 时，可见回复菜单最后一个槽位保留给内联自定义输入行；Adapter 最多显示前 3 个 `reply_options` 加 1 个输入行；
+- 当 `allow_free_text=false` 时，Adapter 最多显示 4 个 `reply_options`；
+- NPC 台词、回复选项、自由输入框不得同时出现在同一个居中自绘 modal 中；
 - `DialogueInteractionController` 持有 pending action；
-- Adapter 真正显示 UI 后返回 terminal `ActionResult(SUCCEEDED)`；
+- Adapter 在 NPC 原生对话进入 Stardew UI 流程后返回 terminal `ActionResult(SUCCEEDED)`；
+- 当存在回复选项或内联自定义输入行时，后续回复菜单由 Adapter 状态机在玩家推进 NPC 台词后继续展示，但不延迟 sync `ActionResult`；
 - Adapter 在 UI 显示成功后把 `text` 追加为 NPC conversation line；
 - 当 `reply_options` 为空且 `allow_free_text=false` 时，UI 展示完成后关闭 active conversation；
 - 玩家后续选择或输入由 UI 发送 `player_said_to_npc` 事件。
@@ -494,9 +500,12 @@ UI 行为：
 - 使用 SMAPI/Stardew 主线程显示；
 - 如果 `Game1.activeClickableMenu` 非空，延迟到下一帧再显示；
 - Adapter 准备发送同一 NPC 新 GameEvent 前，先关闭该 NPC 未决 dialogue UI；
-- 显示 NPC 台词；
-- 显示最多 4 个回复选项；
-- 当 `allow_free_text=true` 时显示自定义输入入口；
+- 先使用 Stardew 原生 NPC dialogue box 显示 NPC 台词；
+- 玩家点击推进 NPC 台词后，再显示底部回复菜单；
+- 可见回复行最多 4 个；
+- 当 `allow_free_text=true` 时，第 4 个可见槽位保留给内联自定义输入行，Adapter 最多显示 3 个生成选项；
+- 内联自定义输入行默认获得键盘焦点；
+- 启用内联自定义输入时，底部回复菜单保留 `Close` 和 `Send`；
 - 玩家选择选项时关闭菜单并发送 `player_said_to_npc`；
 - 玩家提交自定义输入时关闭菜单并发送 `player_said_to_npc`；
 - 玩家取消或关闭菜单时不发送 `player_said_to_npc`；
@@ -704,10 +713,14 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 
 - UI 在主线程显示；
 - active menu 存在时延迟显示；
-- 菜单真正显示后才发送 `ActionResult(SUCCEEDED)`；
+- NPC 原生对话进入 Stardew UI 流程后才发送 `ActionResult(SUCCEEDED)`；
+- 回复选项或内联自定义输入行不得阻塞 sync `ActionResult`；它们由 Adapter 状态机在玩家推进 NPC 台词后继续展示；
 - Adapter 准备发送同一 NPC 新 GameEvent 前关闭该 NPC 未决 dialogue UI；
-- 最多展示 4 个回复选项；
-- `allow_free_text=true` 时可以输入自定义文本；
+- NPC 台词先出现在 Stardew 原生 dialogue box；
+- 玩家推进 NPC 台词后才出现回复入口；
+- NPC 台词、回复菜单和自由输入框不会同时显示在居中自绘 modal 里；
+- 最多展示 4 个可见回复入口；
+- `allow_free_text=true` 时，最后一个可见行是内联自定义文本输入；当生成选项足够多时，该输入行占用第 4 个可见槽位；
 - 玩家选择 option 后发送 `player_said_to_npc`；
 - 玩家提交 free text 后发送 `player_said_to_npc`；
 - 玩家关闭菜单不发送事件，并关闭 active conversation；
@@ -811,7 +824,7 @@ git diff --check
 通过标准：
 
 - 全部命令通过；
-- Stardew 手工 smoke 通过：点 NPC、选择 option、输入 free text、关闭菜单；
+- Stardew 手工 smoke 通过：点 NPC、确认原生 NPC 对话先出现、推进后选择 option、通过最后一个可见输入行输入 free text、关闭菜单；
 - Phase5.6 commit 只包含 Stardew interaction surface 和通用 Runtime prompt/context regression；
 - 不包含 Phase6 async lifecycle；
 - 不包含 movement capability；

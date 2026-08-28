@@ -3,6 +3,7 @@ package agent_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,6 +149,47 @@ func TestConfigWithDefaultsFillsPromptConfig(t *testing.T) {
 	}
 	if cfg.MemoryContextSizeLimit <= 0 {
 		t.Fatalf("expected positive default memory context size limit, got %d", cfg.MemoryContextSizeLimit)
+	}
+}
+
+func TestDefaultPromptGuidesOngoingDialogueChoices(t *testing.T) {
+	cfg := agent.DefaultConfig()
+	instruction := cfg.Prompt.ToolInstruction
+
+	for _, want := range []string{"player_said_to_npc", "2-3", "reply_options", "allow_free_text=true"} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("expected default tool instruction to mention %q, got %q", want, instruction)
+		}
+	}
+}
+
+func TestDefaultPromptSettlesAfterPresentDialogue(t *testing.T) {
+	cfg := agent.DefaultConfig()
+
+	assertPresentDialogueSettleInstruction(t, cfg.Prompt.ToolInstruction)
+}
+
+func TestConfigPromptSettlesAfterPresentDialogue(t *testing.T) {
+	cfg, err := agent.LoadConfigFile(filepath.Join("..", "..", "config", "agent.json"))
+	if err != nil {
+		t.Fatalf("load bundled config: %v", err)
+	}
+
+	assertPresentDialogueSettleInstruction(t, cfg.Prompt.ToolInstruction)
+}
+
+func assertPresentDialogueSettleInstruction(t *testing.T, instruction string) {
+	t.Helper()
+
+	for _, want := range []string{
+		"After calling present_dialogue",
+		"must be the only tool call",
+		"settle the current turn",
+		"wait for the next player_said_to_npc",
+	} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("expected present_dialogue settle instruction to mention %q, got %q", want, instruction)
+		}
 	}
 }
 

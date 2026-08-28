@@ -50,6 +50,7 @@ Phase5.6 做这些工作：
 7. 新增 Stardew 对话 UI，支持选择回复和自由输入。
 8. 更新 Runtime 配置提示词，使模型理解玩家输入事件、回复选项和当前可用能力。
 9. 更新 Runtime memory 可见摘要，使 `present_dialogue` 的 NPC 台词可进入 Recent Memory。
+10. 明确交互发起到 UI 展示之间的上下文校验边界，作为 Phase6 Turn lifecycle 的接入点。
 ```
 
 Phase5.6 不做这些工作：
@@ -68,6 +69,8 @@ ValleyTalk prompt builder 迁移
 Adapter 内部 LLM 调用
 Harmony patch 改写 Stardew 原生 Dialogue 流程
 Stardojo player-centric inventory / menu / shop / craft actions
+等待 LLM 期间冻结玩家或 NPC
+Interaction Context Guard 执行态校验
 ```
 
 ---
@@ -141,6 +144,10 @@ Player selects option or enters text
 - reserved conversation 只有在 `EventAck.ACCEPTED` 后进入 active 状态；
 - `EventAck.REJECTED` 时丢弃 reserved conversation；
 - `EventAck.DUPLICATE` 不创建、不重复写入 conversation state；
+- `present_dialogue` 准备显示时预留 `conversation_id`，UI 真正显示后才追加 NPC line；
+- 玩家通过 Close / Escape 放弃菜单时按 `conversation_id` 精确关闭 active conversation；
+- 玩家提交 option / free text 时不关闭 active conversation；
+- Adapter 抢占同一 NPC 的旧菜单时不关闭 active conversation；
 - `DayStarted` 到达时执行 `ConversationStateStore.Clear()`，所有 `conversation_id` 失效；
 - 新一天对同一 NPC 的首次交互总是创建新的 `conversation_id`；
 - world change、returned to title、Runtime reconnect 时执行 `ConversationStateStore.Clear()`；
@@ -215,6 +222,27 @@ Adapter 对 conversation state 的写入必须与 Runtime `EventAck` 对齐。
 - 收到匹配的 `EventAck.DUPLICATE` 后不重复 commit；
 - gRPC server-to-adapter 消息顺序要求 Adapter 在处理同一 stream 后续 `ObservationRequest` 前先处理已收到的 `EventAck`；
 - pending mutation 不写入 `Observation.state.stardew.conversation`。
+
+## 4.4 Interaction Context Guard 边界
+
+`Interaction Context Guard` 是 Phase6 前需要接入的 Adapter 执行前校验边界。
+
+目标：
+
+```text
+防止玩家点击 NPC 后，在 LLM 响应前玩家或 NPC 已经离开，随后 dialogue UI 又在错误位置弹出。
+```
+
+设计规则：
+
+- Phase5.6 不实现执行态校验，只明确边界；
+- Phase6 在 Adapter 发送 `player_interacted_with_npc` 和 `player_said_to_npc` 时记录当前 interaction context；
+- interaction context 至少包含 `world_id`、`conversation_id`、`npc_entity_id`、`player_entity_id`、location、NPC tile、player tile 和最大交互距离；
+- `present_dialogue` 显示 UI 前校验当前世界、location 和距离仍满足该 interaction context；
+- 校验通过后显示 UI，并在 UI 显示成功后追加 NPC conversation line；
+- 校验失败时返回 `ActionResult(REJECTED)`，错误码为 `interaction_context_changed`，并关闭匹配的 active conversation；
+- 该 guard 不冻结玩家或 NPC，不等待同一 Turn 内玩家输入，不引入 Runtime Stardew-specific parser；
+- Phase6 在该 guard 基础上增加 `turn_id / action_id` 绑定、等待锁和 Turn terminal 释放信号。
 
 ---
 
@@ -390,7 +418,7 @@ ActionResult output：
   "conversation_id": "conv_12",
   "displayed_text": "The mountain is quiet tonight.",
   "reply_options_count": 2,
-  "free_text_enabled": true
+  "allow_free_text": true
 }
 ```
 
@@ -473,6 +501,7 @@ UI 行为：
 - 玩家提交自定义输入时关闭菜单并发送 `player_said_to_npc`；
 - 玩家取消或关闭菜单时不发送 `player_said_to_npc`；
 - 玩家取消或关闭菜单时关闭 active conversation；
+- Adapter 抢占关闭旧菜单时不关闭 active conversation；
 - 文本输入为空时不发送事件。
 
 实现边界：
@@ -640,7 +669,7 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 - `RuntimeClient` 能处理 `present_dialogue` ActionRequest；
 - `reply_options` 最多 4 个；
 - 超长 `text` 或 option 返回 `ActionResult(REJECTED)`，错误信息说明对应 limit；
-- `ActionResult.output` 包含 `conversation_id`、`displayed_text`、`reply_options_count` 和 `free_text_enabled`；
+- `ActionResult.output` 包含 `conversation_id`、`displayed_text`、`reply_options_count` 和 `allow_free_text`；
 - `present_dialogue` 成功显示 UI 后追加 NPC conversation line；
 - 无 active conversation 时 `present_dialogue` 创建新的 active conversation；
 - 无 `reply_options` 且 `allow_free_text=false` 时，展示完成后关闭 active conversation。
@@ -682,6 +711,7 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 - 玩家选择 option 后发送 `player_said_to_npc`；
 - 玩家提交 free text 后发送 `player_said_to_npc`；
 - 玩家关闭菜单不发送事件，并关闭 active conversation；
+- Adapter 抢占同一 NPC 旧菜单不关闭 active conversation；
 - UI 组件不直接调用 LLM；
 - 本阶段不新增 Harmony patch；
 - 手工加载 mod 到 Stardew 实测：点 NPC、选择 option、输入 free text、关闭菜单，确认事件发送与 conversation 状态符合预期。

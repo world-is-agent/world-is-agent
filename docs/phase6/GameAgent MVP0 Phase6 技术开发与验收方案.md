@@ -1,13 +1,13 @@
 # GameAgent MVP0 Phase6 技术开发与验收方案
 
 > **Status:** Implementation Baseline Draft
-> **Date:** 2026-08-27
-> **Scope:** Async Action Lifecycle and AgentTurn Resume
-> **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.5
+> **Date:** 2026-08-28
+> **Scope:** Turn Completion, Interaction Guard, Async Action Lifecycle and AgentTurn Resume
+> **Architecture Baseline:** GameAgent Runtime Architecture v0.4
+> **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.6
 > **Entry ADR:** [Async Action Protocol Strategy ADR](GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)
-> **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5
-> **Previous Phase:** Phase5.5 Stardew Adapter Context Enrichment Accepted
+> **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5.6
+> **Previous Phase Gate:** Phase5.6 Stardew Dialogue Interaction Surface Accepted or Accepted with Known Limitations
 
 ---
 
@@ -15,29 +15,38 @@
 
 Phase5 已经证明一个 AgentTurn 可以包含多个有界 AgentStep，同一 Step 可以执行 ordered ToolCall batch，并把 ToolResult 回灌给模型。
 
-Phase5.5 已经证明 Stardew Adapter 可以通过 `Observation.state.stardew` 提供更成熟的当前事实，Runtime 不需要理解 Stardew 字段。
+Phase5.5 已经证明 Stardew Adapter 可以通过 `Observation.state.stardew` 提供成熟的当前事实，Runtime 不需要理解 Stardew 字段。
+
+Phase5.6 已经证明 Stardew Adapter 可以维护跨 Turn conversation，并通过 `present_dialogue` / `player_said_to_npc` 打通 NPC 台词、玩家回复和 Runtime AgentTurn。
 
 Phase6 要证明：
 
 > **长时间运行的 Environment Action 不等于同步函数；Runtime 可以启动异步 Action，等待 terminal result，刷新 Observation，并恢复同一个 AgentTurn 继续推进。**
 
+Phase6 还要补齐 Phase5.6 暴露出的交互生命周期缺口：
+
+> **Adapter 可以知道一个已接受 GameEvent 对应的 Turn 已经终结，并释放等待态交互上下文。**
+
 目标链路：
 
 ```text
-GameEvent
+GameEvent(player_interacted_with_npc / player_said_to_npc)
+  -> EventAck(ACCEPTED)
+  -> Adapter records interaction context snapshot
   -> Observe
   -> AgentStep #1
-  -> ModelDecision(move_to)
+  -> ModelDecision(move_to or present_dialogue or settle)
   -> ActionRequest(move_to)
   -> ActionStatusUpdate(ACCEPTED / RUNNING)
-  -> AgentTurn waiting
+  -> AgentTurn suspended
   -> ActionResult(SUCCEEDED / FAILED / REJECTED / CANCELLED / INTERRUPTED)
   -> re-observe target entity
-  -> AgentTurn resume
+  -> AgentTurn resumed
   -> AgentStep #2
   -> ToolResult transcript visible to model
-  -> settle or bounded continuation
-  -> unique terminal trace event
+  -> settle
+  -> TurnCompletion(COMPLETED / FAILED / CANCELLED)
+  -> Adapter releases interaction context
 ```
 
 ---
@@ -48,21 +57,24 @@ Phase6 做这些工作：
 
 ```text
 1. 接受 Async Action Protocol Strategy ADR。
-2. Runtime Gateway 分发 ActionStatusUpdate。
-3. Runtime Environment Port 支持 async action start / wait / cancel。
-4. Tool Registry 暴露 ASYNC capability，并保存 execution mode metadata。
-5. Tool Scheduler 支持单 async ToolCall 的 start -> wait -> terminal result。
-6. AgentLoop 支持 waiting / suspended / resumed trace，并在 async terminal result 后 re-observe。
-7. Context transcript 继续只接收 terminal ToolResult，不把 ActionStatusUpdate 当作 ToolResult。
-8. Memory 只记录 terminal SUCCEEDED 的 async action outcome。
-9. Stardew Adapter 增加一个真实异步 Environment Tool：move_to。
-10. 确定性测试夹具覆盖 status update、延迟 terminal result、timeout cancel、late result、resume。
+2. Protocol additive 增加 Runtime -> Adapter 的 TurnCompletion 终态信号。
+3. Runtime Gateway 在每个 accepted GameEvent 对应 Turn 终结时发送 TurnCompletion。
+4. Stardew Adapter 使用 TurnCompletion 释放 pending interaction context。
+5. Stardew Adapter 在 present_dialogue 显示前执行 Interaction Context Guard。
+6. Runtime Gateway 分发 ActionStatusUpdate。
+7. Runtime Environment Port 支持 async action start / wait / cancel。
+8. Tool Registry 暴露 ASYNC capability，并保存 execution mode metadata。
+9. Tool Scheduler 支持单 async ToolCall 的 start -> wait -> terminal result。
+10. AgentLoop 支持 waiting / suspended / resumed trace，并在 async terminal result 后 re-observe。
+11. Context transcript 继续只接收 terminal ToolResult，不把 ActionStatusUpdate 当作 ToolResult。
+12. Memory 只记录 terminal SUCCEEDED 的 async action outcome。
+13. Stardew Adapter 增加一个真实异步 Environment Tool：move_to。
+14. 确定性测试夹具覆盖 TurnCompletion、status update、延迟 terminal result、timeout cancel、late result、resume。
 ```
 
 Phase6 不做这些工作：
 
 ```text
-Protocol 字段变更
 ActionBatchRequest / ActionBatchResult
 多个并发长 Action
 一个 Step 内混合同步和异步 ToolCall
@@ -72,16 +84,48 @@ Workflow Engine
 复杂行为树
 路径规划进入 Runtime
 事务回滚
+同一 Turn 内等待玩家输入
+长期 conversation persistence
 AgentDefinition store
 canonical dialogue retrieval
 long-term event memory persistence
 ```
 
+等待 LLM 或等待异步 Action 期间，游戏世界继续运行。Phase6 不把“冻结玩家或 NPC”作为 Runtime 能力；Stardew Adapter 通过 interaction context snapshot 和执行前 guard 保证 UI 与 Action 不落到过期上下文。
+
 ---
 
 # 3. 架构边界
 
-## 3.1 Action 不是同步函数
+## 3.1 TurnCompletion 是 Turn 终态，不是 Action 结果
+
+`EventAck(ACCEPTED)` 只表示 Runtime 接受了 GameEvent，不表示 Turn 已经完成。
+
+`ActionResult` 只表示某个 Action 的终态，不表示整个 AgentTurn 已经完成。
+
+Phase6 新增 Runtime -> Adapter 的 `TurnCompletion`：
+
+```text
+TurnCompletion
+  turn_id
+  event_id
+  world_id
+  entity_id
+  status = COMPLETED / FAILED / CANCELLED
+  error
+```
+
+语义：
+
+```text
+- 每个 accepted GameEvent 最多对应一个 TurnCompletion；
+- TurnCompletion 必须在 Runtime terminal outcome 已确定后、唯一 terminal trace 之前发送；
+- TurnCompletion 是 Adapter 释放 interaction context / pending lock 的正式信号；
+- TurnCompletion 不进入 model transcript；
+- TurnCompletion 不替代 ActionResult。
+```
+
+## 3.2 Action 不是同步函数
 
 整体架构已定义：
 
@@ -89,7 +133,7 @@ long-term event memory persistence
 Action = Runtime 请求 Environment 执行的一次具有独立业务身份和生命周期的副作用操作。
 ```
 
-Phase6 需要把当前同步假设拆开：
+Phase6 将当前同步假设拆开：
 
 ```text
 Phase5:
@@ -103,7 +147,7 @@ Phase6:
 
 `action_id` 是 Runtime 与 Adapter 之间关联异步生命周期的唯一业务 ID。
 
-## 3.2 AgentStep 仍然不进入 Protocol
+## 3.3 AgentStep 仍然不进入 Protocol
 
 `AgentStep` 是 Runtime 内部推理推进单位。Adapter 不需要知道：
 
@@ -122,9 +166,10 @@ ActionRequest
 ActionStatusUpdate
 ActionResult
 CancelActionRequest
+TurnCompletion
 ```
 
-## 3.3 Runtime 不接管路径规划
+## 3.4 Runtime 不接管路径规划
 
 `move_to` 的目标解析、可达性判断、寻路、主线程执行、中断和失败原因都属于 Stardew Adapter。
 
@@ -137,10 +182,11 @@ action lifecycle correlation
 timeout / cancel
 ToolResult transcript
 AgentTurn continuation
+TurnCompletion
 trace
 ```
 
-## 3.4 Current Observation 在 async resume 后刷新
+## 3.5 Current Observation 在 async resume 后刷新
 
 长 Action 可能改变游戏状态。Phase6 规定：
 
@@ -152,7 +198,7 @@ Runtime 必须重新 Observe 当前 target entity，
 
 这样模型看到的是 action 后的当前事实，而不是 action 启动前的旧位置、旧场景或旧 schedule。
 
-## 3.5 Status Update 是 trace，不是 ToolResult
+## 3.6 Status Update 是 trace，不是 ToolResult
 
 `ActionStatusUpdate(ACCEPTED / RUNNING)` 表示 Adapter 已接管异步 Action 或正在执行。
 
@@ -168,9 +214,83 @@ turn_resumed
 
 ---
 
-# 4. Runtime 设计
+# 4. Protocol 设计
 
-## 4.1 Environment Port
+## 4.1 Additive Proto
+
+修改范围：
+
+```text
+protocol/proto/gameagent.proto
+protocol/tests/check-protocol-static.ps1
+protocol/gen/go/...
+adapters/stardew/src/Generated/...
+```
+
+新增：
+
+```protobuf
+enum TurnCompletionStatus {
+  TURN_COMPLETION_STATUS_UNSPECIFIED = 0;
+  TURN_COMPLETION_STATUS_COMPLETED = 1;
+  TURN_COMPLETION_STATUS_FAILED = 2;
+  TURN_COMPLETION_STATUS_CANCELLED = 3;
+}
+
+message TurnCompletion {
+  string turn_id = 1;
+  string event_id = 2;
+  string world_id = 3;
+  string entity_id = 4;
+  TurnCompletionStatus status = 5;
+  Error error = 6;
+}
+```
+
+`RuntimeMessage.oneof payload` 增加：
+
+```protobuf
+TurnCompletion turn_completion = 17;
+```
+
+字段策略：
+
+```text
+- 使用 RuntimeMessage 当前 oneof 的下一个可用字段号；
+- 不修改 AdapterMessage；
+- 不修改 ActionRequest / ActionResult；
+- 不新增 ActionBatchRequest / ActionBatchResult；
+- 不引入 TurnStep / transcript / Runtime internal 字段。
+```
+
+## 4.2 TurnCompletion Semantics
+
+映射规则：
+
+```text
+Runtime turn_completed      -> TURN_COMPLETION_STATUS_COMPLETED
+Runtime turn_failed         -> TURN_COMPLETION_STATUS_FAILED
+Runtime turn_cancelled      -> TURN_COMPLETION_STATUS_CANCELLED
+```
+
+发送规则：
+
+```text
+- 仅对 EventAck(ACCEPTED) 后真实创建的 AgentTurn 发送；
+- Duplicate / rejected GameEvent 不发送；
+- TurnCompletion 与原 GameEvent 使用相同 event_id；
+- TurnCompletion.world_id / entity_id 来自 Turn target；
+- TurnCompletion.error 仅在 failed / cancelled 时携带；
+- Adapter 使用 event_id 释放 EventAck(ACCEPTED) 后记录的 interaction context；
+- TurnCompletion.turn_id 只作为诊断字段，不作为 Adapter context matching 主键；
+- Adapter 必须能接受未知 event_id 或已释放 context 的 TurnCompletion，并安全忽略。
+```
+
+---
+
+# 5. Runtime 设计
+
+## 5.1 Environment Port
 
 修改范围：
 
@@ -199,6 +319,7 @@ type Environment interface {
     StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (ActionStart, error)
     WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error)
     CancelAction(actionID string, reason string)
+    SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error
 }
 ```
 
@@ -217,9 +338,12 @@ WaitActionResult
 
 CancelAction
     发送 best-effort CancelActionRequest。
+
+SendTurnCompletion
+    在 AgentTurn 进入唯一终态后发送 Runtime -> Adapter terminal Turn signal。
 ```
 
-`streamEnvironment` 内部 pending action 建议统一为 lifecycle waiter：
+`streamEnvironment` 内部 pending action 统一为 lifecycle waiter：
 
 ```text
 pendingActions[action_id]
@@ -234,7 +358,7 @@ AdapterMessage_ActionStatus -> resolveActionStatusUpdate(action_id, update)
 AdapterMessage_ActionResult -> resolveActionResult(action_id, result)
 ```
 
-## 4.2 Tool Registry Execution Metadata
+## 5.2 Tool Registry Execution Metadata
 
 修改范围：
 
@@ -273,7 +397,7 @@ Phase6 开始，`RegisterEnvironmentCapabilities` 不再排除 `EXECUTION_MODE_A
 
 `Available()` 仍只返回 `[]model.ToolDefinition`，不把 execution metadata 暴露到 provider-specific contract。
 
-## 4.3 Scheduler Async Path
+## 5.3 Scheduler Async Path
 
 修改范围：
 
@@ -316,7 +440,7 @@ CANCELLED     -> ToolResult.status = cancelled
 INTERRUPTED   -> ToolResult.status = interrupted
 ```
 
-## 4.4 AgentLoop Resume
+## 5.4 AgentLoop Resume
 
 修改范围：
 
@@ -325,6 +449,8 @@ runtime/internal/agent/loop.go
 runtime/internal/agent/loop_test.go
 runtime/internal/context/builder_test.go
 runtime/internal/memory/projector_test.go
+runtime/internal/trace/trace.go
+runtime/internal/trace/turn_test.go
 ```
 
 Loop 行为：
@@ -360,9 +486,12 @@ Loop 行为：
    ToolResult 对模型可见；
    模型可在剩余 step budget 内修正或 settle；
    settle 只有在当前 step 没有 model-visible failure 时才完成 Turn。
+
+7. 任意 accepted GameEvent 对应的 Turn 进入 completed / failed / cancelled：
+   Runtime 发送 TurnCompletion。
 ```
 
-## 4.5 Config Budgets
+## 5.5 Config Budgets
 
 修改范围：
 
@@ -396,7 +525,7 @@ TurnTimeout = 90s
 
 Phase6 的 TurnTimeout 仍是 global hard bound。异步等待不能绕过 TurnTimeout。
 
-## 4.6 Trace
+## 5.6 Trace
 
 修改范围：
 
@@ -413,6 +542,8 @@ runtime/internal/gateway/gateway_integration_test.go
 action_status_update_received
 turn_suspended
 turn_resumed
+turn_completion_sent
+turn_completion_send_failed
 ```
 
 字段：
@@ -424,23 +555,80 @@ action_id
 tool
 action_status
 wait_ms
+turn_completion_status
 reason
 ```
 
 不变量：
 
 ```text
-- turn_suspended / turn_resumed 是非终态事件；
-- turn_completed / turn_failed 仍然唯一且最后；
+- turn_suspended / turn_resumed / turn_completion_sent / turn_completion_send_failed 是非终态事件；
+- turn_completed / turn_failed / turn_cancelled 仍然唯一且最后；
 - ActionStatusUpdate 不改变 Memory；
+- TurnCompletion 不改变 Memory；
 - trace 不成为 action lifecycle source of truth。
 ```
 
 ---
 
-# 5. Adapter 设计
+# 6. Adapter 设计
 
-## 5.1 Stardew move_to Capability
+## 6.1 Interaction Context Guard
+
+修改范围：
+
+```text
+adapters/stardew/src/Dialogue/InteractionContextStore.cs
+adapters/stardew/src/Dialogue/ConversationStateStore.cs
+adapters/stardew/src/Capabilities/PresentDialogueCapability.cs
+adapters/stardew/src/Runtime/RuntimeClient.cs
+adapters/stardew/src/Runtime/ProtocolMapper.Core.cs
+adapters/stardew/tests/ProtocolMapper.Tests/Program.cs
+adapters/stardew/tests/check-context-static.ps1
+```
+
+Adapter 在 `player_interacted_with_npc` 与 `player_said_to_npc` EventAck(ACCEPTED) 后记录 snapshot：
+
+```text
+event_id
+conversation_id
+world_id
+npc entity_id
+player entity_id
+location
+npc tile
+player tile
+max interaction distance
+```
+
+`present_dialogue` 显示前 guard：
+
+```text
+- world_id 不一致 -> REJECTED / interaction_context_changed
+- conversation_id 不匹配 -> REJECTED / interaction_context_changed
+- NPC 或 player 不在原 location -> REJECTED / interaction_context_changed
+- 当前距离超过 max interaction distance -> REJECTED / interaction_context_changed
+- guard 失败时关闭匹配 conversation；
+- guard 成功后按 Phase5.6 语义显示 UI。
+```
+
+TurnCompletion 处理：
+
+```text
+COMPLETED / FAILED / CANCELLED
+  -> release interaction context matched by event_id
+```
+
+等待 LLM 期间：
+
+```text
+- 不冻结玩家；
+- 不冻结 NPC schedule；
+- 不阻塞游戏时间；
+- Adapter 在 effect time 用 guard 决定是否展示 UI 或执行 action。
+```
+
+## 6.2 Stardew move_to Capability
 
 修改范围：
 
@@ -497,7 +685,7 @@ Phase6 vertical slice 约束：
 - 跨 location movement 留到后续阶段。
 ```
 
-## 5.2 Async Adapter Lifecycle
+## 6.3 Async Adapter Lifecycle
 
 Adapter 行为：
 
@@ -529,14 +717,14 @@ Runtime 不读取这些内部字段。
 
 ---
 
-# 6. Milestones And Acceptance
+# 7. Milestones And Acceptance
 
-## M0：Async Action Protocol Strategy ADR
+## M0：Protocol + ADR
 
 目标：
 
 ```text
-冻结 Phase6 协议策略，确认是否需要 proto 变更。
+冻结 Phase6 协议策略，并把 TurnCompletion 作为 Runtime -> Adapter 的正式终态信号。
 ```
 
 修改范围：
@@ -544,6 +732,10 @@ Runtime 不读取这些内部字段。
 ```text
 docs/phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md
 docs/phase6/GameAgent MVP0 Phase6 技术开发与验收方案.md
+protocol/proto/gameagent.proto
+protocol/tests/check-protocol-static.ps1
+protocol/gen/go/...
+adapters/stardew/src/Generated/...
 ```
 
 验收命令：
@@ -551,19 +743,123 @@ docs/phase6/GameAgent MVP0 Phase6 技术开发与验收方案.md
 ```powershell
 powershell -ExecutionPolicy Bypass -File protocol/tests/check-protocol-static.ps1
 powershell -ExecutionPolicy Bypass -File protocol/tests/check-go-generation.ps1
-git diff -- protocol/proto/gameagent.proto
+go test ./protocol/gen/go/...
+dotnet build adapters/stardew/GameAgent.Stardew.csproj
 ```
 
 通过标准：
 
 ```text
-- ADR 明确复用 v1alpha2；
-- proto 无 Phase6 字段变更；
-- 开发方案明确 Runtime / Adapter 改动面；
+- ADR 明确 TurnCompletion 是 terminal Turn signal；
+- protocol/proto/gameagent.proto additive 增加 TurnCompletion；
+- RuntimeMessage.oneof 增加 turn_completion = 17；
+- Go / C# generated code 与 proto 一致；
+- ActionStatusUpdate / ActionResult / CancelActionRequest 字段保持不变；
 - 非目标包含 ActionBatchRequest、persistent continuation、多个并发长 Action、Runtime pathfinding。
 ```
 
-## M1：Runtime Action Lifecycle Plumbing
+## M1：Runtime TurnCompletion Plumbing
+
+目标：
+
+```text
+Runtime 能在 accepted GameEvent 的 AgentTurn 进入终态时，向 Adapter 发送 TurnCompletion。
+```
+
+修改范围：
+
+```text
+runtime/internal/agent/loop.go
+runtime/internal/gateway/gateway.go
+runtime/internal/gateway/stream_environment.go
+runtime/internal/gateway/stream_environment_test.go
+runtime/internal/gateway/gateway_integration_test.go
+runtime/internal/trace/trace.go
+```
+
+验收命令：
+
+```powershell
+go test ./runtime/internal/gateway ./runtime/internal/agent ./runtime/internal/trace
+```
+
+通过标准：
+
+```text
+- completed Turn 发送 TURN_COMPLETION_STATUS_COMPLETED；
+- failed Turn 发送 TURN_COMPLETION_STATUS_FAILED 并携带 error；
+- cancelled Turn 发送 TURN_COMPLETION_STATUS_CANCELLED；
+- settle-only Turn 也发送 TurnCompletion；
+- TurnCompletion 与原 GameEvent event_id 绑定；
+- duplicate / rejected GameEvent 不发送 TurnCompletion；
+- TurnCompletion 发送发生在唯一 terminal trace 之前；
+- TurnCompletion 发送失败会进入非终态 trace，不生成第二个 Turn terminal event；
+- turn_completion_sent 或 turn_completion_send_failed trace 最多出现一次；
+- turn_completed / turn_failed / turn_cancelled 仍是最后一条 Turn trace。
+```
+
+建议测试：
+
+```text
+TestHandleEventSendsTurnCompletionOnSettle
+TestHandleEventSendsTurnCompletionOnFailure
+TestHandleEventDoesNotSendTurnCompletionForRejectedEvent
+TestConnectSendsTurnCompletionBeforeTerminalTrace
+TestTurnCompletionSendFailureDoesNotCreateSecondTerminalTrace
+```
+
+## M2：Adapter Interaction Context Guard
+
+目标：
+
+```text
+Stardew Adapter 能记录交互上下文，并在 TurnCompletion 后释放。
+```
+
+修改范围：
+
+```text
+adapters/stardew/src/Dialogue/InteractionContextStore.cs
+adapters/stardew/src/Dialogue/ConversationStateStore.cs
+adapters/stardew/src/Capabilities/PresentDialogueCapability.cs
+adapters/stardew/src/Runtime/RuntimeClient.cs
+adapters/stardew/src/Runtime/ProtocolMapper.Core.cs
+adapters/stardew/tests/ProtocolMapper.Tests/Program.cs
+adapters/stardew/tests/check-context-static.ps1
+```
+
+验收命令：
+
+```powershell
+dotnet run --project adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj
+powershell -ExecutionPolicy Bypass -File adapters/stardew/tests/check-context-static.ps1
+dotnet build adapters/stardew/GameAgent.Stardew.csproj
+```
+
+通过标准：
+
+```text
+- EventAck(ACCEPTED) 后记录以 event_id 为主键的 interaction context snapshot；
+- TurnCompletion 后按 event_id 释放匹配 snapshot；
+- world / conversation / location / distance 变化会让 present_dialogue 返回 REJECTED / interaction_context_changed；
+- guard 失败时关闭匹配 conversation；
+- guard 成功时沿用 Phase5.6 的 UI 展示语义；
+- 等待 LLM 期间玩家和 NPC 不被 Runtime 冻结；
+- Adapter 不新增 runtime/internal 依赖。
+```
+
+建议测试：
+
+```text
+TestInteractionContextCommittedAfterAcceptedAck
+TestInteractionContextReleasedByTurnCompletion
+TestPresentDialogueRejectsWhenConversationContextChanged
+TestPresentDialogueRejectsWhenNpcMovedAwayBeforeDisplay
+TestPresentDialogueRejectsWhenPlayerMovedAwayBeforeDisplay
+TestPresentDialogueGuardFailureClosesMatchingConversation
+```
+
+## M3：Runtime Action Lifecycle Plumbing
 
 目标：
 
@@ -612,7 +908,7 @@ TestStreamEnvironmentLateAsyncResultAfterTimeoutIsIgnored
 TestConnectRoutesActionStatusUpdateToPendingAction
 ```
 
-## M2：Tool Registry Execution Mode Metadata
+## M4：Tool Registry Execution Mode Metadata
 
 目标：
 
@@ -654,7 +950,7 @@ TestRegistryIncludesAsyncCapabilitiesInPhase6ToolView
 TestRegistryLookupReturnsExecutionModeMetadata
 ```
 
-## M3：Scheduler Async Single Action Path
+## M5：Scheduler Async Single Action Path
 
 目标：
 
@@ -705,7 +1001,7 @@ TestConfigDefaultsPhase6AsyncBudgetsWhenMissingZeroOrNegative
 TestConfigPhase6DefaultTurnTimeoutCoversAsyncBudget
 ```
 
-## M4：AgentLoop Suspend / Resume
+## M6：AgentLoop Suspend / Resume
 
 目标：
 
@@ -741,7 +1037,7 @@ go test ./runtime/internal/agent ./runtime/internal/context ./runtime/internal/m
 - terminal SUCCEEDED 的 async action 在 completed Turn 后写入 Memory；
 - terminal failed / rejected / cancelled / interrupted 进入 transcript，模型可在剩余 step 内修正；
 - settle 仍只能在当前 step 无 model-visible failure 时完成 Turn；
-- turn_completed / turn_failed 仍唯一且最后。
+- TurnCompletion 在 terminal outcome 确定后发送，唯一 Turn terminal trace 仍保持最后。
 ```
 
 建议测试：
@@ -755,7 +1051,7 @@ TestHandleEventRetriesAfterAsyncTerminalFailureWithinStepBudget
 TestAsyncTurnTerminalEventIsUniqueAndLast
 ```
 
-## M5：Stardew Adapter move_to Vertical Slice
+## M7：Stardew Adapter move_to Vertical Slice
 
 目标：
 
@@ -801,7 +1097,7 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 - Adapter 不引入 runtime/internal 依赖。
 ```
 
-## M6：Gateway Integration And Regression
+## M8：Gateway Integration And Regression
 
 目标：
 
@@ -834,9 +1130,11 @@ go test ./runtime/...
 - Runtime trace 记录 turn_suspended / turn_resumed；
 - fake adapter 延迟 terminal ActionResult 后，Runtime 发起下一 step model request；
 - 下一 step 能 settle，Turn completed；
+- Runtime 发送 TurnCompletion；
+- Adapter 收到 TurnCompletion 后释放 interaction context；
 - async timeout 会发送 CancelActionRequest；
 - late ActionResult 不生成第二个 terminal trace；
-- sync speak / emote 多步链路保持通过；
+- sync speak / emote / present_dialogue 多步链路保持通过；
 - non-Stardew trigger fixture 保持通过。
 ```
 
@@ -847,9 +1145,28 @@ TestConnectRunsAsyncActionLifecycleAndResumesTurn
 TestConnectKeepsRecvLoopAvailableWhileAsyncActionIsWaiting
 TestConnectAsyncActionTimeoutSendsCancelAndKeepsSingleTerminalTrace
 TestConnectIgnoresLateAsyncResultAfterTimeout
+TestConnectSendsTurnCompletionForSettleOnlyDialogueTurn
 ```
 
-## M7：Full Acceptance
+## M9：Full Acceptance
+
+目标：
+
+```text
+确认 Phase6 的 Protocol、Runtime、Adapter、Trace、Memory 和 Stardew vertical slice 全部满足阶段验收标准。
+```
+
+修改范围：
+
+```text
+protocol/proto/gameagent.proto
+protocol/gen/go/...
+adapters/stardew/src/Generated/...
+runtime/...
+adapters/stardew/...
+docs/phase6/...
+docs/summary/...
+```
 
 验收命令：
 
@@ -869,29 +1186,33 @@ git diff --check
 
 ```text
 - 全部 PASS；
-- protocol/proto/gameagent.proto 无 Phase6 字段变更；
+- Protocol additive TurnCompletion 已生成到 Go / C#；
 - Runtime 不引用 Stardew / SMAPI / Adapter 项目；
 - Adapter 不依赖 runtime/internal；
 - Tool Registry 能暴露 sync + async capabilities；
 - AgentTurn 能 suspend / resume 并保持唯一终态；
 - async terminal result 后会 re-observe；
 - successful async action 可以进入 Memory；
+- TurnCompletion 能释放 Adapter interaction context；
+- Interaction Context Guard 能拒绝过期 dialogue display；
 - move_to 的寻路与可达性判断完全位于 Stardew Adapter；
-- 真实 Stardew trace 可以看到 move_to 的 status update、suspend、resume 和 completed / failed terminal。
+- 真实 Stardew trace 可以看到 move_to 的 status update、suspend、resume、TurnCompletion 和 completed / failed terminal。
 ```
 
 ---
 
-# 7. 开发顺序
+# 8. 开发顺序
 
 ```text
-1. M0：先接受 ADR，确认不改 proto。
-2. M1：先做 Gateway / Environment Port lifecycle plumbing。
-3. M2：再让 Tool Registry 暴露 async capability。
-4. M3：再接 Scheduler 的单 async ToolCall 路径。
-5. M4：再接 AgentLoop suspend / resume / re-observe。
-6. M5：最后实现 Stardew move_to vertical slice。
-7. M6-M7：做 integration hardening 和全量验收。
+1. M0：先接受 ADR，完成 TurnCompletion proto additive 与生成代码。
+2. M1：接 Runtime TurnCompletion plumbing。
+3. M2：接 Stardew Adapter Interaction Context Guard。
+4. M3：做 Gateway / Environment Port async action lifecycle plumbing。
+5. M4：让 Tool Registry 暴露 async capability。
+6. M5：接 Scheduler 的单 async ToolCall 路径。
+7. M6：接 AgentLoop suspend / resume / re-observe。
+8. M7：实现 Stardew move_to vertical slice。
+9. M8-M9：做 integration hardening 和全量验收。
 ```
 
 不要把 `move_to` Adapter 实现和 Runtime lifecycle plumbing 混在同一个提交里。
@@ -900,6 +1221,8 @@ git diff --check
 
 ```text
 docs: add phase6 async action plan
+feat: add turn completion protocol signal
+feat: release stardew interaction contexts on turn completion
 feat: add runtime async action lifecycle plumbing
 feat: expose async tool execution metadata
 feat: resume agent turns after async actions
@@ -909,25 +1232,27 @@ test: harden phase6 async action integration
 
 ---
 
-# 8. 阶段验收状态
+# 9. 阶段验收状态
 
 Phase6 可以验收为 `Accepted` 的最低条件：
 
 ```text
 1. Async Action Protocol Strategy ADR 被接受。
-2. Runtime 复用 v1alpha2 完成 async lifecycle，不修改 proto。
-3. AgentTurn 可以等待 async action terminal result，并恢复同一 Turn。
-4. resume 后会重新 Observe 当前目标实体。
-5. ToolResult transcript 只使用 terminal ActionResult。
-6. ActionStatusUpdate 进入 trace，不进入 Memory / model transcript。
-7. timeout / cancel / late result 有确定性测试。
-8. Stardew move_to 作为真实长 Action vertical slice 跑通。
-9. Runtime / Adapter 架构边界检查通过。
+2. Protocol additive 增加 TurnCompletion，并完成 Go / C# 生成。
+3. Runtime 对每个 accepted GameEvent Turn 发送唯一 TurnCompletion。
+4. Adapter 能用 TurnCompletion 释放 interaction context。
+5. Interaction Context Guard 能在 effect time 拒绝过期 UI 展示。
+6. AgentTurn 可以等待 async action terminal result，并恢复同一 Turn。
+7. resume 后会重新 Observe 当前目标实体。
+8. ToolResult transcript 只使用 terminal ActionResult。
+9. ActionStatusUpdate 进入 trace，不进入 Memory / model transcript。
+10. timeout / cancel / late result 有确定性测试。
+11. Stardew move_to 作为真实长 Action vertical slice 跑通。
 ```
 
 ---
 
-# 9. 后续进入 Phase7 的边界
+# 10. 后续进入 Phase7 的边界
 
 Phase7 聚焦 Environment Recovery 与持久 Agent State。
 
@@ -948,5 +1273,6 @@ long-term memory persistence
 - reconnect 后 ActionResult 如何关联原 Turn；
 - Action lifecycle 是否需要独立子系统；
 - 当前 single async action per Turn 是否足够进入 Phase7；
+- TurnCompletion 是否足以支撑 Adapter interaction lifecycle；
 - move_to 是否暴露出需要升级 protocol 的真实缺口。
 ```

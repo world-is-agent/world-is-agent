@@ -11,6 +11,11 @@ public static class FacePlayerDirection
 
     public static string Resolve(int npcTileX, int npcTileY, int playerTileX, int playerTileY)
     {
+        return Resolve(npcTileX, npcTileY, playerTileX, playerTileY, Down);
+    }
+
+    public static string Resolve(int npcTileX, int npcTileY, int playerTileX, int playerTileY, int currentDirection)
+    {
         int dx = playerTileX - npcTileX;
         int dy = playerTileY - npcTileY;
 
@@ -20,7 +25,7 @@ public static class FacePlayerDirection
         if (dy != 0)
             return dy > 0 ? "down" : "up";
 
-        return "current";
+        return FromStardewDirection(currentDirection);
     }
 
     public static int ToStardewDirection(string direction, int currentDirection)
@@ -32,6 +37,18 @@ public static class FacePlayerDirection
             "down" => Down,
             "left" => Left,
             _ => currentDirection,
+        };
+    }
+
+    private static string FromStardewDirection(int direction)
+    {
+        return direction switch
+        {
+            Up => "up",
+            Right => "right",
+            Down => "down",
+            Left => "left",
+            _ => "down",
         };
     }
 }

@@ -598,8 +598,15 @@ public sealed class RuntimeClient : IDisposable
     private ActionResult HandleFacePlayerAction(ActionRequest request)
     {
         NPC npc = this.RequireNpc(request.EntityId);
-        string direction = this.facePlayerCapability.FacePlayer(npc, Game1.player);
-        return ProtocolMapper.BuildSucceededActionResult(request, "facing_direction", direction);
+        try
+        {
+            string direction = this.facePlayerCapability.FacePlayer(npc, Game1.player);
+            return ProtocolMapper.BuildFacePlayerSucceededActionResult(request, direction);
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("same location", StringComparison.OrdinalIgnoreCase))
+        {
+            return ProtocolMapper.BuildRejectedActionResult(request, "different_location", ex.Message);
+        }
     }
 
     private void SendActionResult(ActionResult result)

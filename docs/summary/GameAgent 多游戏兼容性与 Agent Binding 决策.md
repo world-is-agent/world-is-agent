@@ -3,7 +3,7 @@
 > **Status:** Accepted Architecture Decision
 > **Date:** 2026-08-22
 > **Applies To:** Phase5 前置架构语义；Phase5 Implementation Baseline 接受最小 additive Protocol 承载
-> **Related:** Runtime Architecture v0.3, Context Architecture v0.2, Roadmap v0.4
+> **Related:** Runtime Architecture v0.4, Context Architecture v0.2, Roadmap v0.6
 
 ---
 

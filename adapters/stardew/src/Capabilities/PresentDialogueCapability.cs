@@ -48,13 +48,23 @@ public sealed class PresentDialogueCapability
                     return null;
                 }
 
-                conversationId = this.conversationStore.AppendNpcLine(worldId, npcEntityId, PlayerEntityId, npc.displayName, input.Text, Game1.timeOfDay);
-                DialogueInteractionMenu menu = new(npcEntityId, conversationId, input, onSubmitted);
-                if (input.ReplyOptions.Count == 0 && !input.AllowFreeText)
-                    this.conversationStore.Close(worldId, npcEntityId, PlayerEntityId);
-                return menu;
+                conversationId = this.conversationStore.EnsureConversationId(worldId, npcEntityId, PlayerEntityId);
+                return new DialogueInteractionMenu(
+                    npcEntityId,
+                    conversationId,
+                    input,
+                    onSubmitted,
+                    onAbandoned: () => this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, conversationId)
+                );
             },
-            onDisplayed: () => onDisplayed(conversationId ?? string.Empty),
+            onDisplayed: () =>
+            {
+                string displayedConversationId = conversationId ?? throw new InvalidOperationException("present_dialogue displayed without a conversation id");
+                this.conversationStore.AppendNpcLineToConversation(worldId, npcEntityId, PlayerEntityId, displayedConversationId, npc.displayName, input.Text, Game1.timeOfDay);
+                if (input.ReplyOptions.Count == 0 && !input.AllowFreeText)
+                    this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, displayedConversationId);
+                onDisplayed(displayedConversationId);
+            },
             onFailed: onFailed
         );
     }

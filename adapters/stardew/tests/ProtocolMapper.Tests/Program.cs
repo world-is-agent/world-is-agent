@@ -78,7 +78,7 @@ Assert(npcName == "Abigail", "parsed npc name should match");
 Assert(!ProtocolMapper.TryParseNpcEntityId("player:local", out _), "non-npc entity id should not parse as npc");
 Assert(!ProtocolMapper.TryParseNpcEntityId("npc:", out _), "empty npc name should not parse");
 
-ConversationStateStore store = new(new FixedConversationIdGenerator("conv_1", "conv_2", "conv_3"));
+ConversationStateStore store = new(new FixedConversationIdGenerator("conv_1", "conv_2", "conv_3", "conv_4"));
 string conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_1");
 Assert(conversationId == "conv_1", "first NPC interaction should reserve deterministic conversation id");
 Assert(store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local") is null, "conversation should not be active before EventAck.ACCEPTED");
@@ -92,17 +92,31 @@ store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", 
 store.CommitPending("event_player_1");
 activeConversation = store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local");
 Assert(activeConversation?.RecentLines.Single().Text == "Let's go fishing.", "accepted player line should enter conversation state");
+string activeDialogueId = store.EnsureConversationId("Farm_123456", "npc:Abigail", "player:local");
+Assert(activeDialogueId == "conv_1", "dialogue display should reuse active conversation id");
+store.CloseIfConversation("Farm_123456", "npc:Abigail", "player:local", "conv_missing");
+Assert(store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local") is not null, "closing a different conversation id should not close active conversation");
+store.CloseIfConversation("Farm_123456", "npc:Abigail", "player:local", "conv_1");
+Assert(store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local") is null, "abandoned dialogue should close matching active conversation");
+string reservedDialogueId = store.EnsureConversationId("Farm_123456", "npc:Leah", "player:local");
+Assert(reservedDialogueId == "conv_2", "new dialogue display should reserve deterministic conversation id");
+Assert(store.GetActiveConversation("Farm_123456", "npc:Leah", "player:local") is null, "reserved dialogue id should not activate before menu display");
+store.AppendNpcLineToConversation("Farm_123456", "npc:Leah", "player:local", reservedDialogueId, "Leah", "Hi there.", 930);
+ConversationSnapshot? displayedConversation = store.GetActiveConversation("Farm_123456", "npc:Leah", "player:local");
+if (displayedConversation is null)
+    throw new InvalidOperationException("displayed dialogue should activate reserved conversation");
+Assert(displayedConversation.ConversationId == "conv_2", "displayed dialogue should activate reserved conversation id");
+Assert(displayedConversation.RecentLines.Single().Text == "Hi there.", "displayed dialogue should append NPC line after display");
 ExpectArgumentException(
     () => store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", "event_player_2", "player:local", "Local Farmer", new string('x', 241), 1820),
     "240"
 );
-store.Close("Farm_123456", "npc:Abigail", "player:local");
 conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_3");
-Assert(conversationId == "conv_2", "closed conversation should not be reused for a new interaction");
+Assert(conversationId == "conv_3", "closed conversation should not be reused for a new interaction");
 store.DiscardPending("event_interact_3");
 store.Clear();
 conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_4");
-Assert(conversationId == "conv_3", "cleared store should start a new conversation id");
+Assert(conversationId == "conv_4", "cleared store should start a new conversation id");
 
 GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(
     npcEntityId: "npc:Abigail",
@@ -407,6 +421,8 @@ ActionResult presentResult = ProtocolMapper.BuildPresentDialogueSucceededActionR
 Assert(presentResult.Status == ActionStatus.Succeeded, "present_dialogue result should succeed after menu display");
 Assert(presentResult.Output.Fields["conversation_id"].StringValue == "conv_1", "present_dialogue result should carry conversation id");
 Assert(presentResult.Output.Fields["reply_options_count"].NumberValue == 2, "present_dialogue result should carry option count");
+Assert(presentResult.Output.Fields["allow_free_text"].BoolValue, "present_dialogue result should carry allow_free_text");
+Assert(!presentResult.Output.Fields.ContainsKey("free_text_enabled"), "present_dialogue result should use allow_free_text as the canonical field");
 ExpectArgumentException(
     () =>
     {
@@ -419,6 +435,10 @@ ExpectArgumentException(
 
 Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 12, playerTileY: 10) == "right", "face_player should prefer horizontal delta when larger");
 Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 10, playerTileY: 12) == "down", "face_player should map positive y to down");
+Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 10, playerTileY: 10, currentDirection: FacePlayerDirection.Left) == "left", "face_player should preserve current facing direction when already on the same tile");
+ActionResult facePlayerResult = ProtocolMapper.BuildFacePlayerSucceededActionResult(presentDialogueRequest, "down");
+Assert(facePlayerResult.Output.Fields["facing"].StringValue == "down", "face_player result should carry facing");
+Assert(!facePlayerResult.Output.Fields.ContainsKey("facing_direction"), "face_player result should not expose facing_direction");
 Assert(PlayerInteractTrigger.FromButton("action") == "action_button", "action button should map to action_button trigger");
 Assert(PlayerInteractTrigger.FromButton("mouse_left") == "mouse_left", "left mouse should map to mouse_left trigger");
 Assert(PlayerInteractTrigger.FromButton("mouse_right") == "mouse_right", "right mouse should map to mouse_right trigger");

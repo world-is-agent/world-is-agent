@@ -428,6 +428,11 @@ public static partial class ProtocolMapper
         };
     }
 
+    public static ActionResult BuildFacePlayerSucceededActionResult(ActionRequest request, string facing)
+    {
+        return BuildSucceededActionResult(request, "facing", facing);
+    }
+
     public static ActionResult BuildFailedActionResult(ActionRequest request, string code, Exception ex)
     {
         return new ActionResult

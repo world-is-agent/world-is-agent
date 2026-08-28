@@ -28,23 +28,29 @@ public sealed class DialogueInteractionMenu : IClickableMenu
 
     private readonly PresentDialogueInput input;
     private readonly Action<PlayerDialogueSubmission> onSubmitted;
+    private readonly Action onAbandoned;
     private readonly List<OptionButton> optionButtons = new();
     private readonly Rectangle textArea;
     private readonly Rectangle closeButton;
     private readonly Rectangle submitButton;
     private readonly DialogueFreeTextInput? textInput;
+    private bool submitted;
+    private bool closedWithoutSubmission;
+    private bool abandonmentNotified;
 
     public DialogueInteractionMenu(
         string npcEntityId,
         string conversationId,
         PresentDialogueInput input,
-        Action<PlayerDialogueSubmission> onSubmitted
+        Action<PlayerDialogueSubmission> onSubmitted,
+        Action onAbandoned
     )
     {
         this.NpcEntityId = npcEntityId;
         this.ConversationId = conversationId;
         this.input = input;
         this.onSubmitted = onSubmitted;
+        this.onAbandoned = onAbandoned;
 
         int width = Math.Min(MenuWidth, Math.Max(720, Game1.uiViewport.Width - 128));
         int textHeight = Math.Max(96, MeasureWrappedHeight(input.Text, Game1.dialogueFont, width - Margin * 2));
@@ -86,6 +92,7 @@ public sealed class DialogueInteractionMenu : IClickableMenu
 
     public void CloseWithoutSubmission()
     {
+        this.closedWithoutSubmission = true;
         this.exitThisMenu();
     }
 
@@ -162,13 +169,26 @@ public sealed class DialogueInteractionMenu : IClickableMenu
         if (Game1.keyboardDispatcher.Subscriber == this.textInput)
             Game1.keyboardDispatcher.Subscriber = null;
 
+        if (!this.submitted && !this.closedWithoutSubmission)
+            this.NotifyAbandoned();
+
         base.cleanupBeforeExit();
     }
 
     private void Submit(string inputKind, string text, int? selectedOptionIndex, string trigger)
     {
+        this.submitted = true;
         this.onSubmitted(new PlayerDialogueSubmission(this.ConversationId, inputKind, text, selectedOptionIndex, trigger));
         this.exitThisMenu();
+    }
+
+    private void NotifyAbandoned()
+    {
+        if (this.abandonmentNotified)
+            return;
+
+        this.abandonmentNotified = true;
+        this.onAbandoned();
     }
 
     private static void DrawButton(SpriteBatch b, Rectangle bounds, string label)

@@ -1,9 +1,9 @@
 # GameAgent Runtime 整体架构设计规范
 
-> **Version:** v0.3
+> **Version:** v0.4
 > **Status:** Architecture Baseline
-> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted
-> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）
+> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 In Review
+> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-28）
 > **Purpose:** 定义 GameAgent 的长期架构边界、核心运行模型、模块职责、依赖方向和演进约束。
 > 本文中的 `MUST / MUST NOT / SHOULD / MAY` 为规范性关键词。
 
@@ -64,7 +64,7 @@ Phase 技术方案原则上 MUST 遵守本文。
 
 # 2. Baseline 来源
 
-Architecture v0.3 不是纯理论设计。
+Architecture v0.4 不是纯理论设计。
 
 它建立在已经完成并验收的四个真实阶段之上。
 
@@ -833,7 +833,51 @@ Action terminal result
 resume AgentTurn
 ```
 
-v0.3 只冻结这一能力要求。
+## 12.1 ActionResult 与 TurnCompletion
+
+`ActionResult` 是 Action 的终态事实：
+
+```text
+action_id
+status
+output
+error
+```
+
+它不表示整个 AgentTurn 已经结束。
+
+需要让 Adapter 感知 Turn 终态时，Runtime MUST 使用独立的 Turn-level signal，例如：
+
+```text
+TurnCompletion
+    turn_id
+    event_id
+    world_id
+    entity_id
+    completion status
+```
+
+TurnCompletion 表示：
+
+```text
+accepted GameEvent 对应的 AgentTurn 已经进入终态。
+```
+
+Adapter 使用 TurnCompletion.event_id 关联并释放已接受 GameEvent 的本地上下文；TurnCompletion.turn_id 只作为 Runtime Turn 的诊断投影。
+
+TurnCompletion MUST NOT 承载：
+
+```text
+AgentStep
+model transcript
+ToolResult transcript
+Memory payload
+具体游戏 UI 规则
+```
+
+Adapter MAY 使用 TurnCompletion 释放本地 interaction context、pending lock 或 UI 等待态。
+
+v0.4 冻结这些能力要求。
 
 不冻结：
 
@@ -2533,6 +2577,18 @@ Dependency impact:
 16. Adapter 可以在游戏主线程真正执行 Runtime 返回的 Action。
 
 17. Adapter 可以在执行前消费 cancel marker，并跳过已经取消的 Action。
+
+18. EntityRef.definition_id 可以作为 Agent Definition 绑定 key。
+
+19. Capability.concurrency_mode 可以表达 sequential / parallel_safe 执行承诺。
+
+20. AgentTurn 可以包含多个有界 AgentStep。
+
+21. ToolResult transcript 可以在同一 Turn 内回灌给模型。
+
+22. Stardew Adapter 可以通过 Observation.state.stardew 提供 namespaced 当前事实。
+
+23. Stardew Adapter 可以通过 conversation_id、present_dialogue、player_said_to_npc 和 face_player 提供正式对话交互面。
 ```
 
 这些构成 v0.3 的实际证据基础。
@@ -2561,6 +2617,12 @@ Runtime 必须允许 Policy 位于 Capability 与 Tool exposure 之间
 Action 模型必须允许长时间异步执行
 
 AgentTurn 必须允许未来 waiting / suspend / resume
+
+ActionResult 不等于 AgentTurn terminal signal
+
+Runtime 必须能通过 TurnCompletion 向 Adapter 投影 accepted GameEvent 的 Turn 终态
+
+TurnCompletion 不暴露 AgentStep、model transcript 或 ToolResult transcript
 
 Memory 必须绑定 AgentSession，而不是 EnvironmentSession
 
@@ -2643,7 +2705,7 @@ Trace backend
 Evaluation framework
 ```
 
-这些内容不得因为 Architecture v0.3 存在就被认为已经设计完成。
+这些内容不得因为 Architecture v0.4 存在就被认为已经设计完成。
 
 ------
 
@@ -2741,4 +2803,4 @@ Adapter owns translation.
 Game owns execution.
 ```
 
-这组边界构成 **GameAgent Runtime Architecture v0.3 Baseline**。
+这组边界构成 **GameAgent Runtime Architecture v0.4 Baseline**。

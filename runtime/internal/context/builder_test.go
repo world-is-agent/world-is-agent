@@ -194,6 +194,19 @@ func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *test
 							map[string]any{"entity_id": "npc:Robin", "name": "Robin"},
 						},
 					},
+					"conversation": map[string]any{
+						"conversation_id": "conv_1",
+						"active":          true,
+						"recent_lines": []any{
+							map[string]any{
+								"role":              "npc",
+								"speaker_entity_id": "npc:Abigail",
+								"speaker_name":      "Abigail",
+								"text":              "Want to explore the mines?",
+								"time_of_day":       1820,
+							},
+						},
+					},
 				},
 			}),
 		},
@@ -216,9 +229,14 @@ func TestRendererIncludesNestedObservationStateWithoutGameSpecificParser(t *test
 		"[Current Observation]",
 		`"state":`,
 		`"stardew":`,
-		`"schema_version": "0.1"`,
+		`"schema_version":`,
+		`"0.1"`,
 		`"nearby_npcs":`,
 		`"npc:Robin"`,
+		`"conversation_id":`,
+		`"conv_1"`,
+		`"recent_lines":`,
+		`"Want to explore the mines?"`,
 	)
 }
 

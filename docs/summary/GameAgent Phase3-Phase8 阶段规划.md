@@ -1,10 +1,10 @@
 # GameAgent Phase3–Phase8 阶段规划
 
-> **Version:** v0.5
+> **Version:** v0.6
 > **Status:** Roadmap Baseline  
-> **Date:** 2026-08-27
-> **Architecture Baseline:** GameAgent Runtime Architecture v0.3
-> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted
+> **Date:** 2026-08-28
+> **Architecture Baseline:** GameAgent Runtime Architecture v0.4
+> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 In Review
 > **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)（2026-08-27）
 
 ---
@@ -21,7 +21,7 @@
 
 每个阶段完成并验收后，必须重新 Review：
 
-- 当前实现事实是否仍符合 Architecture v0.3；
+- 当前实现事实是否仍符合 Architecture v0.4；
 - 下一阶段是否仍是最高优先级；
 - 后续阶段是否需要合并、拆分或调整顺序；
 - 是否需要形成新的 Architecture Decision。
@@ -91,12 +91,13 @@ Accepted 状态的依据不在本文重复展开，以下文档作为当前 Road
 
 ```text
 Phase3：用简单 Action 验证 Adapter 泛化。
-Phase6：用 move_to 验证异步 Action lifecycle。
+Phase5.6：用对话 UI 验证玩家输入到 AgentTurn 的闭环。
+Phase6：用 TurnCompletion、Interaction Guard 和 move_to 验证异步 Action lifecycle 与 Turn resume。
 ```
 
 ## 3.3 每阶段结束后重新规划
 
-Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.3 的核心边界。
+Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.4 的核心边界。
 
 ---
 
@@ -109,7 +110,8 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | Phase5 Entry Gate | Multi-game Compatibility / Agent Binding | Phase5 开工前先冻结 Entity、Agent Definition、Agent Instance 的长期语义 |
 | Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个有界 AgentStep；单 Step 可包含 ordered ToolCall batch |
 | Phase5.5 | Stardew Adapter Context Enrichment | Stardew Adapter 通过 Observation narrow waist 提供成熟的游戏当前事实 |
-| Phase6 | 异步 Action 与 Turn Resume | 长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
+| Phase5.6 | Stardew Dialogue Interaction Surface | 对话会话可以跨 Turn 延续；玩家回复事件和同步 UI 能进入 Runtime 闭环 |
+| Phase6 | TurnCompletion、异步 Action 与 Turn Resume | Adapter 能释放 Turn 等待态；长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
 | Phase8 | Evaluation 与产品化 | 系统可重复评估、定位、交付，并支持新 Adapter 接入 |
 
@@ -328,7 +330,7 @@ Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract tes
 
 ## 完成条件
 
-- Architecture v0.3 已纳入 Agent Binding / Definition / Instance 分离；
+- Architecture v0.4 已纳入 Agent Binding / Definition / Instance 分离；
 - Context Architecture v0.2 已更新 Scope Contract；
 - Phase5 技术方案不再默认 `definition_id == entity_id`；
 - Phase5 技术方案在 AgentContext / AgentDefinition / Context Source 的签名、字段或数据源说明中显式区分 `definition_id` 与 `entity_id`；若 Phase5 仍不实现 AgentDefinition source，也必须写明当前降级策略不依赖 `definition_id == entity_id`；
@@ -455,19 +457,76 @@ move_to / async Action lifecycle
 
 ---
 
-# 10. Phase6：异步 Action Lifecycle 与 AgentTurn Resume
+# 10. Phase5.6：Stardew Dialogue Interaction Surface
 
 ## 阶段目标
 
-证明 GameAgent 可以原生处理长时间运行的游戏动作，而不是把所有 Environment Tool 都当作同步 RPC。
+建立 Stardew Adapter 的正式对话交互面，让玩家输入、NPC UI 回复和 Runtime AgentTurn 形成闭环。
 
 本阶段主要回答：
 
-> **Action 执行期间游戏继续运行，Action 完成后 Runtime 能否恢复原 AgentTurn 并继续推进？**
+> **对话是否可以作为跨 Turn session 存在，并在不把 Stardew UI 逻辑放入 Runtime 的前提下支撑真实玩家回复？**
 
 ## 主要范围
 
-- 开发前完成 Async Action Protocol Strategy ADR，优先评估复用现有 `execution_mode / ActionStatusUpdate / ActionResult / CancelActionRequest`；若现有 proto 存在实际缺口，再明确兼容性和版本策略；
+- Adapter 维护内存态 `conversation_id`，一个 conversation 可以跨多个 AgentTurn；
+- 新增 `player_said_to_npc` 事件，把玩家 option / free text 回复送入 Runtime；
+- `player_interacted_with_npc` 携带 `conversation_id`，同一 active conversation 复用会话 ID；
+- 新增 `present_dialogue` 同步 capability，展示 NPC 台词、回复选项和 free text 入口；
+- 新增 `face_player` 同步 capability，支持 NPC 面向玩家；
+- Dialogue UI 区分玩家提交、玩家放弃和 Adapter 抢占关闭；
+- Runtime 只更新通用 prompt、nested observation 渲染回归和 Recent Memory 可见摘要；
+- 明确 Interaction Context Guard 的边界，作为 Phase6 TurnCompletion 的 Adapter 侧接入点。
+
+## 非目标
+
+```text
+Protocol 字段变更
+Runtime Stardew-specific parser
+同一 Turn 内等待玩家输入
+等待 LLM 期间冻结玩家或 NPC
+Interaction Context Guard 执行态校验
+move_to / async Action lifecycle
+ActionStatusUpdate / Turn resume
+AgentDefinition store
+长期 conversation persistence
+ValleyTalk prompt builder 迁移
+```
+
+## 完成条件
+
+- Adapter 可以发送 `player_interacted_with_npc` 与 `player_said_to_npc`；
+- `Observation.state.stardew.conversation` 可以提供 active conversation 的最近对话行；
+- `present_dialogue` 成功显示 UI 后写入 NPC conversation line；
+- 玩家提交 option / free text 后发送新的 GameEvent，conversation 继续；
+- 玩家 Close / Escape 放弃菜单时关闭匹配的 active conversation；
+- Adapter 抢占关闭旧菜单时不关闭 active conversation；
+- `face_player` 成功输出 `facing`，不同 location 返回 `REJECTED / different_location`；
+- Runtime 不新增 Stardew-specific parser；
+- Phase6 可以在对话事件和同步 UI 基础上接入 TurnCompletion、Interaction Guard 和长 Action。
+
+## 阶段结束 Review
+
+重点确认玩家交互到模型响应之间的世界演化如何收敛，以及 Phase6 是否需要先实现 TurnCompletion 和 Interaction Context Guard，再进入 `move_to` vertical slice。
+
+---
+
+# 11. Phase6：TurnCompletion、异步 Action Lifecycle 与 AgentTurn Resume
+
+## 阶段目标
+
+证明 GameAgent 可以原生处理长时间运行的游戏动作，并能管理交互等待期间的生命周期，而不是把所有 Environment Tool 都当作同步 RPC。
+
+本阶段主要回答：
+
+> **Action 或交互等待期间游戏继续运行时，Runtime 能否明确等待、恢复、释放，并继续推进原 AgentTurn？**
+
+## 主要范围
+
+- 开发前完成 Async Action Protocol Strategy ADR，冻结现有 Action lifecycle 字段与新增 `TurnCompletion` 的职责边界；
+- Protocol additive 增加 Runtime -> Adapter 的 `TurnCompletion` 终态信号，使 Adapter 可以释放 pending interaction context；
+- 接入 Adapter 侧 Interaction Context Guard，防止 LLM 响应前玩家或 NPC 已经离开后仍显示 UI；
+- 等待 LLM 或等待异步 Action 期间游戏世界继续运行，Adapter 在 effect time 校验当前上下文；
 - 支持 Action 非终态状态，例如 accepted / running；
 - AgentTurn 可以进入 waiting / suspended 状态；
 - Action terminal result 到达后可以恢复 Turn；
@@ -485,11 +544,15 @@ Workflow Engine
 Runtime 崩溃后的 continuation 恢复
 路径规划进入 Runtime
 未通过 ADR 证明必要的 Protocol breaking change
+长期 conversation persistence
 ```
 
 ## 完成条件
 
+- Protocol additive `TurnCompletion` 已生成到 Runtime / Adapter 使用面；
 - Adapter 可以返回完整的 Action 非终态与终态生命周期；
+- Adapter 可以基于 `TurnCompletion` 释放等待态 interaction context；
+- `present_dialogue` 可以在执行前拒绝已失效的 interaction context；
 - Runtime 不阻塞 Environment 消息接收循环等待长 Action；
 - AgentTurn 可以等待 Action，并在 terminal result 后恢复；
 - `move_to` 等具体执行仍完全位于 Adapter / Game；
@@ -498,11 +561,11 @@ Runtime 崩溃后的 continuation 恢复
 
 ## 阶段结束 Review
 
-重点确认 continuation 是否需要持久化、Action 是否需要独立子系统，以及系统是否具备进入 reconnect / recovery 的条件。
+重点确认 continuation 是否需要持久化、Action 是否需要独立子系统，`TurnCompletion` 是否足以支撑 Adapter interaction lifecycle，以及系统是否具备进入 reconnect / recovery 的条件。
 
 ---
 
-# 11. Phase7：Environment Recovery 与持久 Agent State
+# 12. Phase7：Environment Recovery 与持久 Agent State
 
 ## 阶段目标
 
@@ -547,7 +610,7 @@ Exactly-once 全链路
 
 ---
 
-# 12. Phase8：Evaluation、Developer Experience 与产品化
+# 13. Phase8：Evaluation、Developer Experience 与产品化
 
 ## 阶段目标
 
@@ -593,7 +656,7 @@ Multi-Agent 社会模拟平台
 
 ---
 
-# 13. 跨阶段不变量
+# 14. 跨阶段不变量
 
 无论处于哪个 Phase，都必须保持：
 
@@ -622,11 +685,11 @@ Available Tools == current AgentTurn capability view
 Trigger admission != hardcoded game-specific event_type
 ```
 
-任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.3，并形成正式 Architecture Decision。
+任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.4，并形成正式 Architecture Decision。
 
 ---
 
-# 14. 每阶段固定交付物
+# 15. 每阶段固定交付物
 
 从 Phase3 开始，每阶段至少应形成：
 
@@ -663,12 +726,14 @@ Needs Follow-up
 
 进入 Phase6 implementation 前
     Phase5.5 必须 Accepted。
+    Phase5.6 必须 Accepted 或 Accepted with Known Limitations。
+    TurnCompletion / Interaction Guard 边界必须明确。
     Async Action Protocol Strategy ADR 必须 Accepted。
 ```
 
 ---
 
-# 15. 暂不绑定固定 Phase 的候选能力
+# 16. 暂不绑定固定 Phase 的候选能力
 
 以下能力保留为未来候选，等核心 Harness 出现真实需求后再进入阶段规划：
 
@@ -691,7 +756,7 @@ Cloud deployment
 
 ---
 
-# 16. 一句话 Roadmap
+# 17. 一句话 Roadmap
 
 ```text
 Phase1
@@ -713,9 +778,12 @@ Phase5
 Phase5.5
 让 Stardew Adapter 提供结构化、成熟、可测试的当前游戏事实
 
+Phase5.6
+让 Stardew Adapter 提供对话 UI、玩家回复事件和跨 Turn conversation
+
 Phase6
 让 Turn 能等待和恢复长时间游戏 Action
-并先确认异步 Action 协议策略
+并补齐 TurnCompletion、Interaction Guard 和异步 Action 协议策略
 
 Phase7
 让 Environment 可以重连、恢复，并持久化必要 Agent State

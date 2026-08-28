@@ -76,6 +76,7 @@ public sealed class ConversationStateStore
         lock (this.gate)
         {
             ConversationState state = this.GetOrCreateState(key);
+            // Dialogue input is modal, so one NPC/player pair has at most one unacked mutation.
             state.Pending = PendingMutation.Interaction(pendingEventId);
             return state.ConversationId;
         }
@@ -103,34 +104,63 @@ public sealed class ConversationStateStore
             if (!this.conversations.TryGetValue(key, out ConversationState? state) || !state.Active || state.ConversationId != normalizedConversationId)
                 throw new ArgumentException("active conversation not found");
 
+            // Dialogue input is modal, so one NPC/player pair has at most one unacked mutation.
             state.Pending = PendingMutation.PlayerLine(pendingEventId, line);
         }
     }
 
-    public string AppendNpcLine(string worldId, string npcEntityId, string playerEntityId, string speakerName, string text, int timeOfDay)
+    public string EnsureConversationId(string worldId, string npcEntityId, string playerEntityId)
     {
         ConversationKey key = BuildKey(worldId, npcEntityId, playerEntityId);
-        ConversationLine line = BuildLine("npc", npcEntityId, speakerName, text, timeOfDay);
 
         lock (this.gate)
         {
             ConversationState state = this.GetOrCreateState(key);
-            state.Active = true;
-            AppendLine(state, line);
             return state.ConversationId;
         }
     }
 
-    public void Close(string worldId, string npcEntityId, string playerEntityId)
+    public void AppendNpcLineToConversation(string worldId, string npcEntityId, string playerEntityId, string conversationId, string speakerName, string text, int timeOfDay)
     {
         ConversationKey key = BuildKey(worldId, npcEntityId, playerEntityId);
+        string normalizedConversationId = RequireNonEmpty(conversationId, nameof(conversationId));
+        ConversationLine line = BuildLine("npc", npcEntityId, speakerName, text, timeOfDay);
+
         lock (this.gate)
         {
-            if (this.conversations.TryGetValue(key, out ConversationState? state))
+            if (this.conversations.TryGetValue(key, out ConversationState? state) && state.ConversationId != normalizedConversationId)
             {
-                state.Active = false;
-                state.Pending = null;
+                if (state.Active || state.Pending is not null)
+                    throw new InvalidOperationException("conversation id is no longer current");
+
+                state = null;
             }
+
+            if (state is null)
+            {
+                state = new ConversationState(normalizedConversationId);
+                this.conversations[key] = state;
+            }
+
+            state.Active = true;
+            AppendLine(state, line);
+        }
+    }
+
+    public void CloseIfConversation(string worldId, string npcEntityId, string playerEntityId, string conversationId)
+    {
+        ConversationKey key = BuildKey(worldId, npcEntityId, playerEntityId);
+        string normalizedConversationId = RequireNonEmpty(conversationId, nameof(conversationId));
+
+        lock (this.gate)
+        {
+            if (!this.conversations.TryGetValue(key, out ConversationState? state) || state.ConversationId != normalizedConversationId)
+                return;
+
+            state.Active = false;
+            state.Pending = null;
+            if (state.RecentLines.Count == 0)
+                this.conversations.Remove(key);
         }
     }
 

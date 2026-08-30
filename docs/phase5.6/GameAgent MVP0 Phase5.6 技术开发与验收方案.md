@@ -2,10 +2,10 @@
 
 > **Status:** Implementation Baseline Draft
 > **Date:** 2026-08-28
-> **Scope:** Stardew Adapter Interaction Surface
+> **Scope:** Stardew Adapter Interaction Surface + ContextFact Memory Projection
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.3
 > **Roadmap Baseline:** GameAgent Phase3-Phase8 阶段规划 v0.5
-> **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5
+> **Protocol Baseline:** gameagent.protocol.v1alpha2 after Phase5 + Phase5.6 ContextFact additive update
 > **Previous Phase:** Phase5.5 Stardew Adapter Context Enrichment Accepted
 > **Next Phase:** Phase6 Async Action Lifecycle and AgentTurn Resume
 > **Reference:** ValleyTalk, Stardojo, SMAPI 4.5.2
@@ -43,20 +43,22 @@ Phase5.6 做这些工作：
 ```text
 1. 定义 Stardew 对话会话为多 Turn session。
 2. 新增玩家对话事件 player_said_to_npc。
-3. 新增 Adapter 内存 conversation state，并把最近对话行注入 Observation.state.stardew.conversation。
-4. 新增 present_dialogue capability，用于通过 Stardew 原生对话节奏展示 NPC 台词、最多 4 个可见玩家回复行和内联自定义输入行。
-5. 新增 face_player capability，用于让 NPC 面向玩家。
-6. 更新 speak / emote / present_dialogue 的工具描述，使模型能稳定选择对话展示或简单动作。
-7. 新增 Stardew 对话 UI，NPC 台词先走原生 dialogue box，玩家推进后再出现底部回复菜单；自由输入作为最后一行直接接收输入。
-8. 更新 Runtime 配置提示词，使模型理解玩家输入事件、回复选项和当前可用能力。
-9. 更新 Runtime memory 可见摘要，使 `present_dialogue` 的 NPC 台词可进入 Recent Memory。
-10. 明确交互发起到 UI 展示之间的上下文校验边界，作为 Phase6 Turn lifecycle 的接入点。
+3. 为 GameEvent 增加通用 ContextFact，承载 Adapter 显式提供的 model-visible event context。
+4. 新增 Adapter 内存 conversation state，并把最近对话行注入 Observation.state.stardew.conversation。
+5. 新增 present_dialogue capability，用于通过 Stardew 原生对话节奏展示 NPC 台词、最多 4 个可见玩家回复行和内联自定义输入行。
+6. 新增 face_player capability，用于让 NPC 面向玩家。
+7. 更新 speak / emote / present_dialogue 的工具描述，使模型能稳定选择对话展示或简单动作。
+8. 新增 Stardew 对话 UI，NPC 台词先走原生 dialogue box，玩家推进后再出现底部回复菜单；自由输入作为最后一行直接接收输入。
+9. 更新 Runtime 配置提示词，使模型理解玩家输入事件、回复选项和当前可用能力。
+10. 更新 Runtime Memory，使玩家输入 ContextFact 与 NPC 可见动作共同进入 Recent Memory。
+11. Context Engine 过滤游戏时间晚于当前时间的 Recent Memory。
+12. 明确交互发起到 UI 展示之间的上下文校验边界，作为 Phase6 Turn lifecycle 的接入点。
 ```
 
 Phase5.6 不做这些工作：
 
 ```text
-Protocol 字段变更
+除 GameEvent.context_facts / ContextFact 外的 Protocol 字段变更
 Runtime async action lifecycle
 同一 Turn 内等待玩家输入
 ask_player / human-in-loop async tool
@@ -65,6 +67,7 @@ ActionStatusUpdate / CancelActionRequest 接线
 AgentDefinition store
 canonical dialogue retrieval
 long-term event memory persistence
+ExperienceLog / EventDefinition registry
 ValleyTalk prompt builder 迁移
 Adapter 内部 LLM 调用
 Harmony patch 改写 Stardew 原生 Dialogue 流程
@@ -159,7 +162,63 @@ Player selects option or enters text
 
 # 4. Adapter Event Contract
 
-## 4.1 player_said_to_npc
+## 4.1 ContextFact
+
+`ContextFact` 是 Adapter 显式提供的 model-visible event context。
+
+它不是完整事件日志，不替代 `GameEvent.payload`，不替代 `Observation`，也不参与 Agent Definition binding。
+
+Protocol shape：
+
+```proto
+message ContextFact {
+  string kind = 1;
+  string actor_entity_id = 2;
+  string target_entity_id = 3;
+  string scope_id = 4;
+  string text = 5;
+  string label = 6;
+  google.protobuf.Struct attributes = 7;
+}
+
+message GameEvent {
+  ...
+  repeated ContextFact context_facts = 9;
+}
+```
+
+字段语义：
+
+- `kind` 表示事实类型，Runtime 只解释通用词表；
+- `actor_entity_id` 表示事实发起者，例如 `player:local`；
+- `target_entity_id` 表示事实指向的 Agent entity；
+- `scope_id` 表示该事实所属交互作用域，本阶段使用 `conversation_id`；
+- `text` 表示模型可见自然语言内容；
+- `label` 表示短标签或选择标题，本阶段可为空；
+- `attributes` 只放通用事实的附加属性，不放完整游戏状态。
+
+通用 `kind` 词表：
+
+```text
+utterance
+choice
+command
+interaction
+```
+
+Phase5.6 只实现 `utterance`。后续新增 kind 必须仍然保持多游戏通用语义，不得使用 `player_said_to_npc` 这类 game-specific event type 作为 Runtime 分支条件。
+
+规则：
+
+- `ContextFact` 引用 `entity_id`，不承载 `definition_id`；
+- Runtime Memory 可以投影 `ContextFact`，但不得解析 game-specific `Observation.state` 来倒推事实；
+- Adapter 只把确实应进入模型上下文的事件语义写入 `context_facts`；
+- 没有 model-visible event context 的事件可以不填 `context_facts`。
+- `GameEvent.payload` 保留 Adapter / event-specific 字段；`ContextFact` 是 Runtime memory projection 的通用事实入口。
+- 当前 Turn 的 `[Current Event]` 可以同时包含 payload text 和 context_facts text；MVP0 接受这点冗余，不做 renderer 去重。
+- 跨 Turn 的 Recent Memory 只消费 `context_facts`，不从 payload text 生成记忆。
+
+## 4.2 player_said_to_npc
 
 `player_said_to_npc` 是 Environment -> Agent 事件。
 
@@ -177,6 +236,25 @@ Payload：
 }
 ```
 
+ContextFact：
+
+```json
+[
+  {
+    "kind": "utterance",
+    "actor_entity_id": "player:local",
+    "target_entity_id": "npc:Abigail",
+    "scope_id": "conv_12",
+    "text": "I can help you get there.",
+    "attributes": {
+      "input_kind": "option",
+      "selected_option_index": 1,
+      "trigger": "dialogue_option"
+    }
+  }
+]
+```
+
 字段规则：
 
 - `conversation_id` 必须非空；
@@ -187,8 +265,11 @@ Payload：
 - `target_entity_id` 是被对话 NPC 的 `entity_id`；
 - `entities` 必须包含目标 NPC 和 `player:local`；
 - `EntityRef.definition_id` 继续沿用 `entity_id` alias。
+- `context_facts` 必须包含一条 `kind=utterance` 的玩家输入事实；
+- `context_facts[0].text` 与 payload `text` 一致；
+- `context_facts[0].scope_id` 与 payload `conversation_id` 一致。
 
-## 4.2 player_interacted_with_npc
+## 4.3 player_interacted_with_npc
 
 现有 `player_interacted_with_npc` 保留，payload 增加 `conversation_id`。
 
@@ -208,8 +289,9 @@ Payload：
 - 如果目标 NPC 有 active conversation，Adapter 复用当前 `conversation_id`；
 - `source` 固定表示事件来源系统，本阶段使用 `stardew-smapi`；
 - `trigger` 表示 Adapter 捕获的交互类型，可用值为 `action_button / mouse_left / mouse_right / console_probe`。
+- 本阶段 `player_interacted_with_npc` 可以不填 `context_facts`；当前点击事实仍通过 `Current Event` payload 进入本 Turn context。
 
-## 4.3 EventAck 与 conversation mutation
+## 4.4 EventAck 与 conversation mutation
 
 Adapter 对 conversation state 的写入必须与 Runtime `EventAck` 对齐。
 
@@ -225,7 +307,7 @@ Adapter 对 conversation state 的写入必须与 Runtime `EventAck` 对齐。
 - gRPC server-to-adapter 消息顺序要求 Adapter 在处理同一 stream 后续 `ObservationRequest` 前先处理已收到的 `EventAck`；
 - pending mutation 不写入 `Observation.state.stardew.conversation`。
 
-## 4.4 Interaction Context Guard 边界
+## 4.5 Interaction Context Guard 边界
 
 `Interaction Context Guard` 是 Phase6 前需要接入的 Adapter 执行前校验边界。
 
@@ -530,31 +612,112 @@ Runtime 本阶段只做通用接线。
 
 ```text
 runtime/config/agent.json
+runtime/internal/agent/loop.go
+runtime/internal/agent/loop_test.go
 runtime/internal/context/renderer.go
 runtime/internal/context/builder_test.go
+runtime/internal/memory/record.go
+runtime/internal/memory/projector.go
+runtime/internal/memory/projector_test.go
 ```
 
 允许改动：
 
+- 为 `GameEvent` 增加 `context_facts`，为 Protocol 增加 `ContextFact`；
+- 更新 Protocol static check 和 Go / C# 生成代码；
+- `player_said_to_npc` mapper 填充 `ContextFact(kind=utterance)`；
 - 更新 `tool_instruction`，说明玩家文本通过 `player_said_to_npc` 事件到达；
 - 更新 `tool_instruction`，说明 `present_dialogue` 可展示回复选项，玩家回复会在后续事件中到达；
 - 更新 `tool_instruction`，说明有回复选项或允许玩家输入时使用 `present_dialogue`，普通单句使用 `speak`；
+- `MemoryRecord` 保存 `SourceContextFacts` 和 `Outcomes`；
+- `MemoryProjector` 从 `GameEvent.context_facts` 投影玩家输入等事件事实；
+- 成功完成的 AgentTurn 在存在 model-visible `ContextFact` 或 successful visible outcome 时写入 Recent Memory；
 - 为 `visibleActionSummary` 增加 `present_dialogue` 与 `face_player` 摘要；
-- 增加一个通用 context renderer 测试，验证 `GameEvent.payload.text` 和 nested `Observation.state.stardew.conversation.recent_lines` 可以进入模型上下文；
+- Recent Memory 渲染同时展示 SourceContextFacts 和 action outcomes；
+- Context Engine 在渲染 Recent Memory 前过滤游戏时间晚于当前 GameTime 的记录；
+- 增加一个通用 context renderer 测试，验证 `GameEvent.context_facts` 和 nested `Observation.state.stardew.conversation.recent_lines` 可以进入模型上下文；
 - 增加 Recent Memory 回归测试，验证 `present_dialogue` 的 `text` 可以进入可见摘要。
 
 禁止改动：
 
 - 不新增 Stardew-specific Runtime parser；
-- 不改 `agent.Loop`；
+- 不改变 `agent.Loop` 的 multi-step / scheduler / settle 执行语义；
 - 不改 `gateway`；
 - 不改 `model.Provider`；
-- 不改 protocol；
+- 不新增 `ContextFact` 之外的 Protocol 字段；
 - 不实现 async resume。
+
+Memory 投影规则：
+
+- `SourceContextFacts` 使用当前 `GameEvent.context_facts`，表示本 Turn 的输入语义；
+- `MemoryRecord.SourceEventSequence` 取 `GameEvent.sequence`，用于相等 `GameTime` 下的稳定排序；
+- `Outcomes` 使用本 Turn 中 Runtime 已确认 `SUCCEEDED` 的可见 Environment outcomes；
+- 成功完成的 Turn 才能把 `SourceContextFacts` 写入 Memory；
+- `player_said_to_npc` + settle-only 的成功 Turn 可以只凭 `SourceContextFacts` 写入 Memory；
+- 失败、超时、`max_steps_exceeded` 或 invalid model response 的 Turn 不得只凭 `SourceContextFacts` 写入 Memory；
+- Phase5 已确认的 technical terminal failure 例外保持不变：错误发生前已确认 `SUCCEEDED` 的 action outcome 可以写入 Memory；
+- technical terminal failure 写入的 prior successful outcome record 不附带 `SourceContextFacts`；
+- 纯 `SourceContextFacts` record 允许 `Outcomes` 为空；
+- `MemoryProjector` 不得为了兼容旧单 action 路径而合成空 ToolCall / ActionResult；
+- rejected / failed / invalid / skipped / cancelled / interrupted outcomes 不进入 Memory；
+- 既没有 `SourceContextFacts`，也没有 successful visible outcomes 的 Turn 不写 Memory；
+- 同一 MemoryRecord 渲染时必须先输出 `SourceContextFacts`，再输出 `Outcomes`，保持“玩家输入 -> NPC 行为”的因果顺序。
+
+Memory 时间线选择规则：
+
+- 未来时间过滤只处理 `MemoryRecord.GameTime > CurrentGameTime` 的记录；
+- 相等时间不被过滤；
+- `GameTime` 比较顺序为 `year, season, day, hour, minute, tick`；
+- 相等 `GameTime` 的多条 Memory 按 `SourceEventSequence` 升序稳定排序；
+- 缺少可比较 `SourceEventSequence` 时，保持 MemoryStore 返回顺序；
+- 未来时间过滤必须发生在 memory context byte budget trim 之前；
+- 该规则用于处理读取更早存档、回档或世界时间回退后的上下文一致性；
+- 同一天且未处于未来时间的 Recent Memory 仍按现有 prompt 语义作为 nearby conversation context。
+
+实现命名约束：
+
+- `updateMemoryForSuccessfulActions` 需要改名并调整签名，表达它负责 Turn 级 `SourceContextFacts + successful outcomes` 投影；
+- 新名称应描述最终职责，例如 `updateMemoryForCompletedTurn` 或 `updateMemoryForTurnMemory`；
+- 调用点必须显式传入本 Turn 的 completion 语义，避免失败 Turn 因携带 `ContextFact` 而写入 Memory。
 
 ---
 
 # 9. 开发里程碑
+
+## M0 Protocol ContextFact
+
+目标：
+
+```text
+为 GameEvent 增加通用 model-visible event context 窄腰。
+```
+
+修改范围：
+
+```text
+protocol/proto/gameagent.proto
+protocol/gen/go/gameagent/protocol/v1alpha2
+protocol/gen/csharp/GameAgent.Protocol/V1Alpha2
+protocol/tests/check-protocol-static.ps1
+```
+
+验收命令：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-protocol-static.ps1
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-go-generation.ps1
+go test ./protocol/gen/go/...
+dotnet build adapters/stardew/GameAgent.Stardew.csproj
+```
+
+通过标准：
+
+- `ContextFact` message 存在；
+- `GameEvent.context_facts = 9` 存在；
+- `ContextFact` 不包含 `definition_id`；
+- 文档内固定通用 kind 词表为 `utterance / choice / command / interaction`；
+- `Observation` 不新增 context fact 字段；
+- `ContextFact` 只作为 model-visible event context，不替代 payload、Observation、Memory 或 Experience。
 
 ## M1 Conversation State Model
 
@@ -628,6 +791,11 @@ dotnet run --project adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.
 
 - `BuildPlayerSaidToNpcEvent(...)` 输出 `event_type=player_said_to_npc`；
 - payload 包含 `conversation_id`、`input_kind`、`text` 和 `trigger`；
+- `context_facts` 包含一条 `kind=utterance` 的玩家输入事实；
+- `context_facts[0].actor_entity_id` 指向 `player:local`；
+- `context_facts[0].target_entity_id` 指向目标 NPC；
+- `context_facts[0].scope_id` 等于 `conversation_id`；
+- `context_facts[0].text` 等于 payload `text`；
 - option 输入包含 `selected_option_index`；
 - free text 输入不包含 `selected_option_index`；
 - 事件 `entities` 包含目标 NPC 和 `player:local`；
@@ -764,36 +932,59 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 - tile delta 到 facing direction 的纯函数有测试覆盖；
 - 成功 output 包含 `facing`。
 
-## M6 Runtime Prompt And Context Regression
+## M6 Runtime ContextFact Memory Projection
 
 目标：
 
 ```text
-Runtime 通用 context renderer 可以承载玩家对话事件与 conversation nested state。
+Runtime 可以把通用 ContextFact 和可见 Action outcome 投影成同一条 Turn 级 Recent Memory。
 ```
 
 修改范围：
 
 ```text
 runtime/config/agent.json
+runtime/internal/agent/loop.go
+runtime/internal/agent/loop_test.go
 runtime/internal/context/renderer.go
 runtime/internal/context/builder_test.go
+runtime/internal/memory/record.go
+runtime/internal/memory/projector.go
+runtime/internal/memory/projector_test.go
 ```
 
 验收命令：
 
 ```powershell
+go test ./runtime/internal/memory
 go test ./runtime/internal/context
+go test ./runtime/internal/agent
 go test ./runtime/...
 ```
 
 通过标准：
 
+- `MemoryRecord` 保存 `SourceContextFacts` 和 `Outcomes`；
+- `MemoryRecord.SourceEventSequence` 来自 `GameEvent.sequence`；
+- `MemoryProjector` 复制 `GameEvent.context_facts`，不解析 `Observation.state.stardew`；
+- `MemoryProjector` 支持 `SourceContextFacts` 非空且 `Outcomes` 为空的 record；
+- `MemoryProjector` 不为 settle-only Turn 合成空 ToolCall / ActionResult；
+- `agent.Loop` 的 memory 更新函数改名后能表达 Turn 级 memory projection 职责；
+- 成功完成且 settle-only 的 `player_said_to_npc` Turn 在存在 `ContextFact` 时写入 Recent Memory；
+- failed / timeout / max_steps_exceeded Turn 不得只凭 `ContextFact` 写入 Recent Memory；
+- technical terminal failure 写入 prior successful outcome 时不附带 `SourceContextFacts`；
+- 既无 `SourceContextFacts` 又无 successful visible outcomes 的 Turn 不写 Memory；
+- Runtime 对 `ContextFact.kind` 只识别通用词表，不识别 game-specific `event_type`；
+- Recent Memory 渲染顺序为 SourceContextFacts 在前，NPC visible action outcome 在后；
+- `GameTime` 严格晚于当前 `GameTime` 的 MemoryRecord 不进入 Recent Memory context；
+- 相等 `GameTime` 的多条 Memory 按 `SourceEventSequence` 升序稳定渲染；
+- 未来时间过滤发生在 memory context byte budget trim 之前；
+- 当前 Turn 的 `[Current Event]` 允许 payload text 与 context_facts text 同时出现，Recent Memory 只消费 context_facts；
 - prompt 说明玩家回复通过后续 `player_said_to_npc` 事件到达；
 - prompt 说明 `present_dialogue` 可生成最多 4 个玩家回复选项；
 - prompt 说明有回复选项或允许玩家输入时使用 `present_dialogue`，普通单句使用 `speak`；
 - prompt 说明省略回复选项且不允许自由输入表示当前对话结束；
-- context renderer 测试覆盖 `GameEvent.payload.text`；
+- context renderer 测试覆盖 `GameEvent.context_facts`；
 - context renderer 测试覆盖 nested `Observation.state.stardew.conversation.recent_lines`；
 - Recent Memory 摘要显示 `present_dialogue.text`；
 - Recent Memory 摘要包含 `face_player` 行为；
@@ -810,6 +1001,8 @@ go test ./runtime/...
 验收命令：
 
 ```powershell
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-protocol-static.ps1
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-go-generation.ps1
 dotnet run --project adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj
 dotnet run --project adapters/stardew/tests/ActionCancellationRegistry.Tests/ActionCancellationRegistry.Tests.csproj
 dotnet run --project adapters/stardew/tests/PlayerInteractProbe.Tests/PlayerInteractProbe.Tests.csproj
@@ -825,15 +1018,15 @@ git diff --check
 
 - 全部命令通过；
 - Stardew 手工 smoke 通过：点 NPC、确认原生 NPC 对话先出现、推进后选择 option、通过最后一个可见输入行输入 free text、关闭菜单；
-- Phase5.6 commit 只包含 Stardew interaction surface 和通用 Runtime prompt/context regression；
+- Phase5.6 commit 只包含 Stardew interaction surface、ContextFact protocol additive update 和通用 Runtime context/memory regression；
 - 不包含 Phase6 async lifecycle；
 - 不包含 movement capability；
-- 不包含 protocol codegen。
+- 不包含 `ContextFact` 之外的 protocol 字段。
 
 提交信息：
 
 ```text
-feat: add stardew dialogue interaction surface
+feat: add stardew dialogue context facts
 ```
 
 ---
@@ -841,21 +1034,24 @@ feat: add stardew dialogue interaction surface
 # 10. 实现顺序
 
 ```text
+M0 Protocol ContextFact
 M1 Conversation State Model
 M2 Player Dialogue Event
 M3 present_dialogue Capability
 M4 Dialogue UI
 M5 face_player Capability
-M6 Runtime Prompt And Context Regression
+M6 Runtime ContextFact Memory Projection
 M7 Full Regression And Commit
 ```
 
 约束：
 
+- M0 完成前不让 Adapter 事件填充 `context_facts`；
 - M1 完成前不开发 UI；
 - M2 完成前不让 UI 发送 Runtime event；
 - M3 完成前不把 `present_dialogue` 暴露给模型；
 - M4 完成前不修改 Phase6 async 文档；
+- M6 完成前不验收 Phase5.6；
 - Phase5.6 完成前不进入 Phase6 movement / async runtime 开发。
 
 ---
@@ -877,7 +1073,7 @@ player_said_to_npc: "Can you come here?"
 
 具体 movement capability 名称与输入 schema 由 Phase6 文档定义。
 
-Phase5.6 不新增 movement capability，也不修改 Phase6 async lifecycle。
+Phase5.6 不新增 movement capability，也不修改 Phase6 async lifecycle。Phase6 默认可依赖 `ContextFact` 读取玩家 utterance 记忆，不重新设计玩家输入 Memory。
 
 ---
 
@@ -896,8 +1092,14 @@ Adapter:
   - face_player works as sync action
 
 Runtime:
-  - generic renderer carries event payload and nested conversation state
+  - generic renderer carries ContextFact and nested conversation state
+  - MemoryRecord carries SourceContextFacts and visible action outcomes
+  - player utterance ContextFact can enter Recent Memory even on settle-only turns
+  - SourceContextFacts render before visible action outcomes inside one MemoryRecord
+  - failed turns do not write SourceContextFacts into Memory
+  - empty turns without SourceContextFacts or successful visible outcomes do not write Memory
   - Recent Memory summary carries present_dialogue text
+  - future game-time Memory is filtered with strict GameTime > CurrentGameTime before entering Model Context
   - no Stardew-specific parser
   - no async lifecycle changes
 

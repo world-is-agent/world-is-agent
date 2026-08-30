@@ -91,7 +91,7 @@ Accepted 状态的依据不在本文重复展开，以下文档作为当前 Road
 
 ```text
 Phase3：用简单 Action 验证 Adapter 泛化。
-Phase5.6：用对话 UI 验证玩家输入到 AgentTurn 的闭环。
+Phase5.6：用对话 UI 与 ContextFact 验证玩家输入到 AgentTurn / Recent Memory 的闭环。
 Phase6：用 TurnCompletion、Interaction Guard 和 move_to 验证异步 Action lifecycle 与 Turn resume。
 ```
 
@@ -110,7 +110,7 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | Phase5 Entry Gate | Multi-game Compatibility / Agent Binding | Phase5 开工前先冻结 Entity、Agent Definition、Agent Instance 的长期语义 |
 | Phase5 | 有界 Multi-step AgentTurn | 一个 Turn 可以包含多个有界 AgentStep；单 Step 可包含 ordered ToolCall batch |
 | Phase5.5 | Stardew Adapter Context Enrichment | Stardew Adapter 通过 Observation narrow waist 提供成熟的游戏当前事实 |
-| Phase5.6 | Stardew Dialogue Interaction Surface | 对话会话可以跨 Turn 延续；玩家回复事件和同步 UI 能进入 Runtime 闭环 |
+| Phase5.6 | Stardew Dialogue Interaction Surface | 对话会话可以跨 Turn 延续；玩家回复事件、ContextFact、同步 UI 和 Recent Memory 能进入 Runtime 闭环 |
 | Phase6 | TurnCompletion、异步 Action 与 Turn Resume | Adapter 能释放 Turn 等待态；长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
 | Phase8 | Evaluation 与产品化 | 系统可重复评估、定位、交付，并支持新 Adapter 接入 |
@@ -471,17 +471,19 @@ move_to / async Action lifecycle
 
 - Adapter 维护内存态 `conversation_id`，一个 conversation 可以跨多个 AgentTurn；
 - 新增 `player_said_to_npc` 事件，把玩家 option / free text 回复送入 Runtime；
+- Protocol additive 增加 `ContextFact` 与 `GameEvent.context_facts`，把玩家输入等 model-visible event context 作为通用事实交给 Runtime；
 - `player_interacted_with_npc` 携带 `conversation_id`，同一 active conversation 复用会话 ID；
 - 新增 `present_dialogue` 同步 capability，展示 NPC 台词、回复选项和 free text 入口；
 - 新增 `face_player` 同步 capability，支持 NPC 面向玩家；
 - Dialogue UI 区分玩家提交、玩家放弃和 Adapter 抢占关闭；
-- Runtime 只更新通用 prompt、nested observation 渲染回归和 Recent Memory 可见摘要；
+- Runtime 更新通用 prompt、nested observation 渲染回归、ContextFact memory projection 和 Recent Memory 可见摘要；
+- Context Engine 过滤 `GameTime > CurrentGameTime` 的 Memory，不把未来时间记忆注入当前 Model Context；
 - 明确 Interaction Context Guard 的边界，作为 Phase6 TurnCompletion 的 Adapter 侧接入点。
 
 ## 非目标
 
 ```text
-Protocol 字段变更
+除 ContextFact / GameEvent.context_facts 之外的 Protocol 字段变更
 Runtime Stardew-specific parser
 同一 Turn 内等待玩家输入
 等待 LLM 期间冻结玩家或 NPC
@@ -496,12 +498,15 @@ ValleyTalk prompt builder 迁移
 ## 完成条件
 
 - Adapter 可以发送 `player_interacted_with_npc` 与 `player_said_to_npc`；
+- `player_said_to_npc` 携带 `ContextFact(kind=utterance)`；
 - `Observation.state.stardew.conversation` 可以提供 active conversation 的最近对话行；
 - `present_dialogue` 成功显示 UI 后写入 NPC conversation line；
 - 玩家提交 option / free text 后发送新的 GameEvent，conversation 继续；
 - 玩家 Close / Escape 放弃菜单时关闭匹配的 active conversation；
 - Adapter 抢占关闭旧菜单时不关闭 active conversation；
 - `face_player` 成功输出 `facing`，不同 location 返回 `REJECTED / different_location`；
+- 成功完成的对话 Turn 可以在 Recent Memory 中同时包含玩家输入 ContextFact 和 NPC 可见动作 outcome；
+- `GameTime > CurrentGameTime` 的 Memory 不进入 Model Context；
 - Runtime 不新增 Stardew-specific parser；
 - Phase6 可以在对话事件和同步 UI 基础上接入 TurnCompletion、Interaction Guard 和长 Action。
 
@@ -727,6 +732,7 @@ Needs Follow-up
 进入 Phase6 implementation 前
     Phase5.5 必须 Accepted。
     Phase5.6 必须 Accepted 或 Accepted with Known Limitations。
+    ContextFact memory projection 必须 Accepted。
     TurnCompletion / Interaction Guard 边界必须明确。
     Async Action Protocol Strategy ADR 必须 Accepted。
 ```
@@ -779,7 +785,7 @@ Phase5.5
 让 Stardew Adapter 提供结构化、成熟、可测试的当前游戏事实
 
 Phase5.6
-让 Stardew Adapter 提供对话 UI、玩家回复事件和跨 Turn conversation
+让 Stardew Adapter 提供对话 UI、玩家回复事件、ContextFact 和跨 Turn conversation
 
 Phase6
 让 Turn 能等待和恢复长时间游戏 Action

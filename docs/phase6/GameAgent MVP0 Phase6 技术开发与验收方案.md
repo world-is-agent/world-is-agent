@@ -17,7 +17,7 @@ Phase5 已经证明一个 AgentTurn 可以包含多个有界 AgentStep，同一 
 
 Phase5.5 已经证明 Stardew Adapter 可以通过 `Observation.state.stardew` 提供成熟的当前事实，Runtime 不需要理解 Stardew 字段。
 
-Phase5.6 已经证明 Stardew Adapter 可以维护跨 Turn conversation，并通过 `present_dialogue` / `player_said_to_npc` 打通 NPC 台词、玩家回复和 Runtime AgentTurn。
+Phase5.6 已经证明 Stardew Adapter 可以维护跨 Turn conversation，并通过 `present_dialogue` / `player_said_to_npc` / `ContextFact` 打通 NPC 台词、玩家回复、Runtime AgentTurn 和 Recent Memory。
 
 Phase6 要证明：
 
@@ -67,7 +67,7 @@ Phase6 做这些工作：
 9. Tool Scheduler 支持单 async ToolCall 的 start -> wait -> terminal result。
 10. AgentLoop 支持 waiting / suspended / resumed trace，并在 async terminal result 后 re-observe。
 11. Context transcript 继续只接收 terminal ToolResult，不把 ActionStatusUpdate 当作 ToolResult。
-12. Memory 只记录 terminal SUCCEEDED 的 async action outcome。
+12. Memory 沿用 Phase5.6 的 SourceContextFacts + visible outcome 投影；本阶段只新增 terminal SUCCEEDED async action outcome。
 13. Stardew Adapter 增加一个真实异步 Environment Tool：move_to。
 14. 确定性测试夹具覆盖 TurnCompletion、status update、延迟 terminal result、timeout cancel、late result、resume。
 ```
@@ -89,6 +89,7 @@ Workflow Engine
 AgentDefinition store
 canonical dialogue retrieval
 long-term event memory persistence
+玩家输入 ContextFact / Recent Memory projection 重新设计
 ```
 
 等待 LLM 或等待异步 Action 期间，游戏世界继续运行。Phase6 不把“冻结玩家或 NPC”作为 Runtime 能力；Stardew Adapter 通过 interaction context snapshot 和执行前 guard 保证 UI 与 Action 不落到过期上下文。
@@ -1034,7 +1035,7 @@ go test ./runtime/internal/agent ./runtime/internal/context ./runtime/internal/m
 - terminal ActionResult 后 emit turn_resumed；
 - resume 后重新 Observe target entity；
 - 下一次 model request 包含 terminal ToolResult transcript；
-- terminal SUCCEEDED 的 async action 在 completed Turn 后写入 Memory；
+- terminal SUCCEEDED 的 async action 在 completed Turn 后作为 visible outcome 写入 Memory；
 - terminal failed / rejected / cancelled / interrupted 进入 transcript，模型可在剩余 step 内修正；
 - settle 仍只能在当前 step 无 model-visible failure 时完成 Turn；
 - TurnCompletion 在 terminal outcome 确定后发送，唯一 Turn terminal trace 仍保持最后。
@@ -1192,7 +1193,7 @@ git diff --check
 - Tool Registry 能暴露 sync + async capabilities；
 - AgentTurn 能 suspend / resume 并保持唯一终态；
 - async terminal result 后会 re-observe；
-- successful async action 可以进入 Memory；
+- successful async action 可以作为 visible outcome 进入 Memory；
 - TurnCompletion 能释放 Adapter interaction context；
 - Interaction Context Guard 能拒绝过期 dialogue display；
 - move_to 的寻路与可达性判断完全位于 Stardew Adapter；

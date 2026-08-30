@@ -187,6 +187,7 @@ entity_type
 traits / attributes / metadata
 current state facts
 available capabilities
+model-visible event context facts
 ```
 
 Adapter 不应该成为 Agent framework，也不应该直接决定完整 system prompt。
@@ -322,7 +323,48 @@ mana
 
 这些应由 Adapter 放入 game-specific state / extensions，并由 Context projection 按需使用。
 
-## 5.4 Dynamic Capability View
+## 5.4 ContextFact Narrow Waist
+
+`ContextFact` 是 `GameEvent` 上的 model-visible event context。
+
+它用于让 Adapter 显式声明哪些事件语义可以被 Runtime 通用投影进 Model Context / Memory，例如玩家输入、玩家选择、队伍指令或交互命令。
+
+Runtime 可以解释 `ContextFact.kind`，但词表必须保持跨游戏通用：
+
+```text
+utterance
+choice
+command
+interaction
+```
+
+`ContextFact` 不等于：
+
+```text
+Agent Binding
+Agent Definition
+Agent Instance Descriptor
+Observation
+完整 EventHistory / ExperienceLog
+```
+
+身份规则：
+
+```text
+ContextFact.actor_entity_id -> world-scoped entity_id
+ContextFact.target_entity_id -> world-scoped entity_id
+ContextFact.scope_id -> conversation / channel / quest / interaction scope
+```
+
+`ContextFact` 不承载 `definition_id`，也不参与判断某个 entity 是否 eligible 成为 Agent。Runtime 可以把 `ContextFact` 投影到当前 target Agent 的 Memory，但 Memory scope 仍然是：
+
+```text
+game_id + world_id + entity_id
+```
+
+因此 Stardew 的玩家对话事件和其他游戏的玩家指令可以共享同一个 Runtime memory projection，而不要求 Runtime core 理解具体 `event_type` 或 game-specific Observation 字段。
+
+## 5.5 Dynamic Capability View
 
 Available Tools 表示当前 AgentTurn 的 capability view。
 
@@ -338,7 +380,7 @@ turn policy
 
 不应理解为某个 entity type 的永久固定工具列表。
 
-## 5.5 Trigger Admission
+## 5.6 Trigger Admission
 
 Trigger admission MUST NOT hardcode game-specific `event_type` in AgentLoop / Gateway core.
 
@@ -433,6 +475,46 @@ runtime/internal/session
 
 ---
 
+## 6.1 Phase5.6 ContextFact 同步裁决
+
+Phase5.6 接受以下 additive Protocol 更新：
+
+```text
+ContextFact
+GameEvent.context_facts
+```
+
+接受理由：
+
+```text
+Current Event 是 Context Source。
+GameEvent.payload 是 Adapter / game-specific 数据。
+ContextFact 是 Adapter 显式提供的 model-visible event context。
+Runtime 可以通用投影 ContextFact 到 Recent Memory。
+```
+
+该字段满足多游戏通用性：
+
+```text
+Stardew player_said_to_npc -> utterance
+Squad command              -> utterance / command
+Trading choice             -> choice
+Quest response             -> interaction
+```
+
+该字段不改变 Agent Binding：
+
+```text
+ContextFact references entity_id.
+ContextFact does not carry definition_id.
+ContextFact does not decide Agent eligibility.
+Agent Memory scope remains game_id + world_id + entity_id.
+```
+
+Runtime 不得为了消费 `ContextFact` 新增 game-specific `event_type` 分支，也不得解析 game-specific Observation state 来生成 ContextFact。
+
+---
+
 # 7. Phase5 同步裁决
 
 Phase5 技术方案对本 ADR 做最小落地：
@@ -478,6 +560,8 @@ Trigger admission is not hardcoded to one game-specific event_type.
 Available Tools = current AgentTurn dynamic capability view.
 
 definition_id protocol source = EntityRef.definition_id.
+
+ContextFact = model-visible event context by entity_id, not Agent Binding.
 
 Adapter provides facts.
 

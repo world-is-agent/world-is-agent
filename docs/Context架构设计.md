@@ -302,6 +302,7 @@ Context Scope Contract 是 Context Architecture 的核心 Contract。
 | Agent Experience | `game_id + world_id + entity_id` |
 | Agent Memory | `game_id + world_id + entity_id` |
 | Current Event | 当前 AgentTurn |
+| Current Event Context Facts | 当前 AgentTurn |
 | Current Observation | 当前 AgentTurn |
 | Current Turn Transcript | 当前 AgentTurn |
 | Available Tools | 当前 AgentTurn |
@@ -779,6 +780,7 @@ Recent Memory 不应等同于“最近几次 speak 文本”。
 它应从成功 AgentTurn 中形成，记录对后续行为有语义影响的可见结果：
 
 ```text
+utterance: 玩家刚才说过什么
 speak: NPC 刚才说过什么
 emote: NPC 刚才表达了什么情绪
 move: NPC 刚才移动到哪里
@@ -788,16 +790,60 @@ item / quest action: NPC 刚才给予、接受或触发了什么
 内部可以保留较完整的结构化事实；
 进入 Model Context 时必须经过 projection / compaction。
 
-例如完整记录中可以包含 `GameTime`、`event sequence`、`ToolCall` 和 `ActionResult`，
+例如完整记录中可以包含 `GameTime`、`SourceEventSequence`、`SourceContextFacts`、`ToolCall` 和 `ActionResult`，
 但 prompt 中只需要类似：
 
 ```text
-- today 06:20: said "..."
+- today 06:20: player said "..."; said "..."
 - previous day Y1 S1 D2 18:20: moved to the river
 ```
 
+同一条 MemoryRecord 的模型可见摘要必须先渲染 `SourceContextFacts`，再渲染 visible action outcomes。
+
+这表示：
+
+```text
+触发本 Turn 的玩家输入 / 指令
+    ->
+本 Turn 内 Agent 已确认发生的可见动作结果
+```
+
+成功完成的 AgentTurn 可以把 `SourceContextFacts` 与 successful visible outcomes 写入同一条 Recent Memory。失败、超时或预算耗尽的 Turn 不得只凭 `SourceContextFacts` 写入 Memory；已确认成功的 Environment outcome 仍按对应阶段的 action outcome 规则处理。若 technical terminal failure 按阶段规则记录 prior successful outcome，该 MemoryRecord 不携带本 Turn 的 `SourceContextFacts`。
+
+既没有 `SourceContextFacts`，也没有 successful visible outcomes 的 Turn 不写 Recent Memory。
+
 Recent Memory 的时间语境应使用游戏内时间，而不是 Runtime wall-clock。
 Runtime wall-clock 更适合 debug、TTL 和存储维护。
+
+## 9.1.1 Memory Timeline Consistency
+
+Recent Memory 进入 Model Context 前必须经过当前游戏时间线选择。该规则处理玩家读取更早存档、回档或世界时间回退后的上下文一致性，避免 Agent 在当前时间线中看到未来发生过的记忆。
+
+当 Current Event 或 Current Observation 能提供当前 `GameTime` 时：
+
+```text
+MemoryRecord.GameTime > CurrentGameTime
+    不进入本次 Model Context
+
+MemoryRecord.GameTime <= CurrentGameTime
+    可以按 Relevance / Budget 继续参与选择
+```
+
+过滤条件是严格 `>`，不是 `>=`。与当前 `GameTime` 相等的 MemoryRecord 继续参与选择。
+
+比较顺序使用游戏时间字段：
+
+```text
+year, season, day, hour, minute, tick
+```
+
+如果 MemoryRecord 或当前上下文缺少可比较的 `GameTime`，Context Engine 不做未来时间过滤，只应用普通 Recent / Relevance / Budget 规则。
+
+当多条 MemoryRecord 的 `GameTime` 相等时，Context Engine 应按 `SourceEventSequence` 升序稳定排序。`SourceEventSequence` 来源于 `GameEvent.sequence`。缺少可比较 sequence 时，保持 MemoryStore 返回顺序。
+
+未来时间过滤必须发生在 memory context byte budget trim 之前，避免未来时间记录占用预算并挤掉当前时间线中的有效记忆。
+
+MVP0 首先在 Context selection 阶段过滤未来时间 Memory，不要求从 MemoryStore 中删除记录。持久化 Memory 的 prune / invalidation 属于 Environment Recovery 与长期状态阶段。
 
 ---
 
@@ -932,7 +978,75 @@ Agent Memory
 
 ---
 
-## 10.2 Current Turn Transcript
+## 10.2 Current Event Context Facts
+
+Current Event 可以携带 `ContextFact`。
+
+`ContextFact` 是 Adapter 显式提供的 model-visible event context，用于把玩家输入、选择、指令或其他对后续行为有语义影响的事件事实交给 Runtime。
+
+它解决的问题是：
+
+```text
+GameEvent.payload
+    Adapter / game-specific event data
+
+ContextFact
+    Runtime 可以通用投影进 Model Context / Memory 的事件事实
+```
+
+推荐最小结构：
+
+```text
+kind
+actor_entity_id
+target_entity_id
+scope_id
+text
+label
+attributes
+```
+
+Runtime 可以解释的 `kind` 必须来自通用词表。
+
+MVP0 通用词表：
+
+```text
+utterance
+choice
+command
+interaction
+```
+
+`event_type` 是 Adapter / game-specific 触发名，不应成为 Runtime memory projection 的业务分支条件。
+
+规则：
+
+- `ContextFact` 属于当前 AgentTurn；
+- `ContextFact` 引用 `entity_id`，不承载 `definition_id`；
+- `ContextFact` 不参与 Agent Binding，不替代 Agent Definition；
+- `ContextFact` 不替代 Observation；当前世界事实仍由 Current Observation 表达；
+- `ContextFact` 不替代 ExperienceLog；它只是本次事件中可进入上下文投影的事实；
+- Runtime 可以把 `ContextFact` 投影为 Recent Memory，但不得解析 game-specific `Observation.state` 来倒推事件事实。
+- `GameEvent.payload` 可以保留同一事实的 Adapter / event-specific 表达；当前 Turn 的 Event JSON 可以包含这点冗余。
+- 跨 Turn Recent Memory 只消费 `ContextFact`，不从 payload 字段推导 Memory。
+
+例如 Stardew 中：
+
+```text
+GameEvent(player_said_to_npc)
+ContextFact(kind=utterance, actor_entity_id=player:local, target_entity_id=npc:Abigail, scope_id=conv_12, text="Can you come here?")
+```
+
+第二个游戏可以用同一结构表达：
+
+```text
+GameEvent(squad_command)
+ContextFact(kind=utterance, actor_entity_id=player:commander, target_entity_id=unit:medic-2, scope_id=radio:alpha, text="Hold position.")
+```
+
+---
+
+## 10.3 Current Turn Transcript
 
 Current Turn Transcript 表示当前 AgentTurn 内已经发生的 step-local execution facts。
 
@@ -989,6 +1103,7 @@ Authority 回答：
 | World Environment State | Game-derived |
 | Agent Environment State | Game-derived |
 | Current Observation | Game / Adapter |
+| Current Event Context Facts | Adapter-declared |
 | Current Turn Transcript | Runtime Execution + Environment ToolResult |
 | Cognitive State | Runtime Agent |
 | Experience | Recorded Event / Turn |
@@ -1368,6 +1483,7 @@ Model Context
 │
 ├── Current Run
 │   ├── Current Event
+│   ├── Current Event Context Facts
 │   └── Current Turn Transcript
 │
 └── Tools
@@ -1392,6 +1508,7 @@ Relevant Retrieved Memory
 Recent Experience
 +
 Current Event
++ Current Event ContextFacts
 +
 Current Turn Transcript
 +
@@ -1702,6 +1819,19 @@ Recent Memory
     在 Turn 完成后形成，一条 Turn 级记录可以包含多个 successful tool outcome。
 ```
 
+Phase5.6 实现说明：
+
+```text
+Current Event ContextFacts
+    保存 Adapter 显式声明的 model-visible event facts，例如玩家 utterance。
+
+Recent Memory
+    在 Turn 完成后形成，一条 Turn 级记录可以同时包含 SourceContextFacts 和 successful visible tool outcomes。
+
+Context Engine
+    渲染 Recent Memory 前过滤 GameTime > CurrentGameTime 的记录。
+```
+
 这只是 Experience 体系的最小 vertical slice；
 不代表长期架构中 Memory 必须绕过 Experience。
 
@@ -1879,21 +2009,26 @@ Context Engine
 6. Current Turn Transcript 记录当前 Turn 内早先 step 的执行事实，
    不等于 Experience 或 Memory。
 
-7. Experience 记录真实发生历史，Memory 是对历史的选择或解释。
+7. Current Event ContextFacts 是 Adapter 显式声明的模型可见事件事实，
+   Runtime 不从 game-specific Observation state 倒推事件事实。
 
-8. Trace 不是 Memory，关闭 Trace 不改变 Agent 行为。
+8. Experience 记录真实发生历史，Memory 是对历史的选择或解释。
 
-9. Static Definition 与 World-scoped Dynamic Instance 分离。
+9. Trace 不是 Memory，关闭 Trace 不改变 Agent 行为。
 
-10. Model Context 是 Context Sources 的有限 projection，
+10. Static Definition 与 World-scoped Dynamic Instance 分离。
+
+11. Model Context 是 Context Sources 的有限 projection，
    不是所有数据的完整副本。
 
-11. Context Engine 必须同时考虑：
+12. Context Engine 必须同时考虑：
     Scope / Authority / Freshness / Relevance / Budget。
 
-12. Storage Backend 不得反向定义 Context Domain Model。
+13. GameTime > CurrentGameTime 的 Memory 不进入本次 Model Context。
 
-13. Vector Index 只能是可重建的 retrieval index，不能成为 Memory 唯一真源。
+14. Storage Backend 不得反向定义 Context Domain Model。
+
+15. Vector Index 只能是可重建的 retrieval index，不能成为 Memory 唯一真源。
 ```
 
 ---

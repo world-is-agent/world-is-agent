@@ -527,6 +527,98 @@ func (x *GameTime) GetTick() int64 {
 	return 0
 }
 
+type ContextFact struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Kind           string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	ActorEntityId  string                 `protobuf:"bytes,2,opt,name=actor_entity_id,json=actorEntityId,proto3" json:"actor_entity_id,omitempty"`
+	TargetEntityId string                 `protobuf:"bytes,3,opt,name=target_entity_id,json=targetEntityId,proto3" json:"target_entity_id,omitempty"`
+	ScopeId        string                 `protobuf:"bytes,4,opt,name=scope_id,json=scopeId,proto3" json:"scope_id,omitempty"`
+	Text           string                 `protobuf:"bytes,5,opt,name=text,proto3" json:"text,omitempty"`
+	Label          string                 `protobuf:"bytes,6,opt,name=label,proto3" json:"label,omitempty"`
+	Attributes     *structpb.Struct       `protobuf:"bytes,7,opt,name=attributes,proto3" json:"attributes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ContextFact) Reset() {
+	*x = ContextFact{}
+	mi := &file_gameagent_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContextFact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContextFact) ProtoMessage() {}
+
+func (x *ContextFact) ProtoReflect() protoreflect.Message {
+	mi := &file_gameagent_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContextFact.ProtoReflect.Descriptor instead.
+func (*ContextFact) Descriptor() ([]byte, []int) {
+	return file_gameagent_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ContextFact) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ContextFact) GetActorEntityId() string {
+	if x != nil {
+		return x.ActorEntityId
+	}
+	return ""
+}
+
+func (x *ContextFact) GetTargetEntityId() string {
+	if x != nil {
+		return x.TargetEntityId
+	}
+	return ""
+}
+
+func (x *ContextFact) GetScopeId() string {
+	if x != nil {
+		return x.ScopeId
+	}
+	return ""
+}
+
+func (x *ContextFact) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ContextFact) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *ContextFact) GetAttributes() *structpb.Struct {
+	if x != nil {
+		return x.Attributes
+	}
+	return nil
+}
+
 type GameEvent struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	EventId        string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -537,13 +629,14 @@ type GameEvent struct {
 	Sequence       uint64                 `protobuf:"varint,6,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	WorldId        string                 `protobuf:"bytes,7,opt,name=world_id,json=worldId,proto3" json:"world_id,omitempty"`
 	TargetEntityId string                 `protobuf:"bytes,8,opt,name=target_entity_id,json=targetEntityId,proto3" json:"target_entity_id,omitempty"`
+	ContextFacts   []*ContextFact         `protobuf:"bytes,9,rep,name=context_facts,json=contextFacts,proto3" json:"context_facts,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GameEvent) Reset() {
 	*x = GameEvent{}
-	mi := &file_gameagent_proto_msgTypes[4]
+	mi := &file_gameagent_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +648,7 @@ func (x *GameEvent) String() string {
 func (*GameEvent) ProtoMessage() {}
 
 func (x *GameEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[4]
+	mi := &file_gameagent_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +661,7 @@ func (x *GameEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GameEvent.ProtoReflect.Descriptor instead.
 func (*GameEvent) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{4}
+	return file_gameagent_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GameEvent) GetEventId() string {
@@ -627,6 +720,13 @@ func (x *GameEvent) GetTargetEntityId() string {
 	return ""
 }
 
+func (x *GameEvent) GetContextFacts() []*ContextFact {
+	if x != nil {
+		return x.ContextFacts
+	}
+	return nil
+}
+
 type EventAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EventId       string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -638,7 +738,7 @@ type EventAck struct {
 
 func (x *EventAck) Reset() {
 	*x = EventAck{}
-	mi := &file_gameagent_proto_msgTypes[5]
+	mi := &file_gameagent_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -650,7 +750,7 @@ func (x *EventAck) String() string {
 func (*EventAck) ProtoMessage() {}
 
 func (x *EventAck) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[5]
+	mi := &file_gameagent_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -663,7 +763,7 @@ func (x *EventAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventAck.ProtoReflect.Descriptor instead.
 func (*EventAck) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{5}
+	return file_gameagent_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EventAck) GetEventId() string {
@@ -697,7 +797,7 @@ type ObserveRequest struct {
 
 func (x *ObserveRequest) Reset() {
 	*x = ObserveRequest{}
-	mi := &file_gameagent_proto_msgTypes[6]
+	mi := &file_gameagent_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -709,7 +809,7 @@ func (x *ObserveRequest) String() string {
 func (*ObserveRequest) ProtoMessage() {}
 
 func (x *ObserveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[6]
+	mi := &file_gameagent_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -722,7 +822,7 @@ func (x *ObserveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserveRequest.ProtoReflect.Descriptor instead.
 func (*ObserveRequest) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{6}
+	return file_gameagent_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ObserveRequest) GetEntityId() string {
@@ -754,7 +854,7 @@ type Observation struct {
 
 func (x *Observation) Reset() {
 	*x = Observation{}
-	mi := &file_gameagent_proto_msgTypes[7]
+	mi := &file_gameagent_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -766,7 +866,7 @@ func (x *Observation) String() string {
 func (*Observation) ProtoMessage() {}
 
 func (x *Observation) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[7]
+	mi := &file_gameagent_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -779,7 +879,7 @@ func (x *Observation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Observation.ProtoReflect.Descriptor instead.
 func (*Observation) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{7}
+	return file_gameagent_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Observation) GetEntityId() string {
@@ -846,7 +946,7 @@ type Capability struct {
 
 func (x *Capability) Reset() {
 	*x = Capability{}
-	mi := &file_gameagent_proto_msgTypes[8]
+	mi := &file_gameagent_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -858,7 +958,7 @@ func (x *Capability) String() string {
 func (*Capability) ProtoMessage() {}
 
 func (x *Capability) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[8]
+	mi := &file_gameagent_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -871,7 +971,7 @@ func (x *Capability) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Capability.ProtoReflect.Descriptor instead.
 func (*Capability) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{8}
+	return file_gameagent_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Capability) GetName() string {
@@ -932,7 +1032,7 @@ type CapabilityRequest struct {
 
 func (x *CapabilityRequest) Reset() {
 	*x = CapabilityRequest{}
-	mi := &file_gameagent_proto_msgTypes[9]
+	mi := &file_gameagent_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -944,7 +1044,7 @@ func (x *CapabilityRequest) String() string {
 func (*CapabilityRequest) ProtoMessage() {}
 
 func (x *CapabilityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[9]
+	mi := &file_gameagent_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -957,7 +1057,7 @@ func (x *CapabilityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityRequest.ProtoReflect.Descriptor instead.
 func (*CapabilityRequest) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{9}
+	return file_gameagent_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CapabilityRequest) GetEntityId() string {
@@ -978,7 +1078,7 @@ type CapabilityList struct {
 
 func (x *CapabilityList) Reset() {
 	*x = CapabilityList{}
-	mi := &file_gameagent_proto_msgTypes[10]
+	mi := &file_gameagent_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1090,7 @@ func (x *CapabilityList) String() string {
 func (*CapabilityList) ProtoMessage() {}
 
 func (x *CapabilityList) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[10]
+	mi := &file_gameagent_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1103,7 @@ func (x *CapabilityList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityList.ProtoReflect.Descriptor instead.
 func (*CapabilityList) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{10}
+	return file_gameagent_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *CapabilityList) GetEntityId() string {
@@ -1041,7 +1141,7 @@ type ActionRequest struct {
 
 func (x *ActionRequest) Reset() {
 	*x = ActionRequest{}
-	mi := &file_gameagent_proto_msgTypes[11]
+	mi := &file_gameagent_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1053,7 +1153,7 @@ func (x *ActionRequest) String() string {
 func (*ActionRequest) ProtoMessage() {}
 
 func (x *ActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[11]
+	mi := &file_gameagent_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1066,7 +1166,7 @@ func (x *ActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActionRequest.ProtoReflect.Descriptor instead.
 func (*ActionRequest) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{11}
+	return file_gameagent_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ActionRequest) GetActionId() string {
@@ -1122,7 +1222,7 @@ type ActionStatusUpdate struct {
 
 func (x *ActionStatusUpdate) Reset() {
 	*x = ActionStatusUpdate{}
-	mi := &file_gameagent_proto_msgTypes[12]
+	mi := &file_gameagent_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1134,7 +1234,7 @@ func (x *ActionStatusUpdate) String() string {
 func (*ActionStatusUpdate) ProtoMessage() {}
 
 func (x *ActionStatusUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[12]
+	mi := &file_gameagent_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1147,7 +1247,7 @@ func (x *ActionStatusUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActionStatusUpdate.ProtoReflect.Descriptor instead.
 func (*ActionStatusUpdate) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{12}
+	return file_gameagent_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ActionStatusUpdate) GetActionId() string {
@@ -1183,7 +1283,7 @@ type ActionResult struct {
 
 func (x *ActionResult) Reset() {
 	*x = ActionResult{}
-	mi := &file_gameagent_proto_msgTypes[13]
+	mi := &file_gameagent_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1195,7 +1295,7 @@ func (x *ActionResult) String() string {
 func (*ActionResult) ProtoMessage() {}
 
 func (x *ActionResult) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[13]
+	mi := &file_gameagent_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1208,7 +1308,7 @@ func (x *ActionResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ActionResult.ProtoReflect.Descriptor instead.
 func (*ActionResult) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{13}
+	return file_gameagent_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ActionResult) GetActionId() string {
@@ -1249,7 +1349,7 @@ type CancelActionRequest struct {
 
 func (x *CancelActionRequest) Reset() {
 	*x = CancelActionRequest{}
-	mi := &file_gameagent_proto_msgTypes[14]
+	mi := &file_gameagent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1261,7 +1361,7 @@ func (x *CancelActionRequest) String() string {
 func (*CancelActionRequest) ProtoMessage() {}
 
 func (x *CancelActionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[14]
+	mi := &file_gameagent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1274,7 +1374,7 @@ func (x *CancelActionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelActionRequest.ProtoReflect.Descriptor instead.
 func (*CancelActionRequest) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{14}
+	return file_gameagent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CancelActionRequest) GetActionId() string {
@@ -1302,7 +1402,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_gameagent_proto_msgTypes[15]
+	mi := &file_gameagent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1314,7 +1414,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[15]
+	mi := &file_gameagent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1327,7 +1427,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{15}
+	return file_gameagent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Error) GetCode() string {
@@ -1361,7 +1461,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_gameagent_proto_msgTypes[16]
+	mi := &file_gameagent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1373,7 +1473,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[16]
+	mi := &file_gameagent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1386,7 +1486,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{16}
+	return file_gameagent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Heartbeat) GetTimestampUnixMs() int64 {
@@ -1424,7 +1524,7 @@ type AdapterMessage struct {
 
 func (x *AdapterMessage) Reset() {
 	*x = AdapterMessage{}
-	mi := &file_gameagent_proto_msgTypes[17]
+	mi := &file_gameagent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1436,7 +1536,7 @@ func (x *AdapterMessage) String() string {
 func (*AdapterMessage) ProtoMessage() {}
 
 func (x *AdapterMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[17]
+	mi := &file_gameagent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1449,7 +1549,7 @@ func (x *AdapterMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdapterMessage.ProtoReflect.Descriptor instead.
 func (*AdapterMessage) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{17}
+	return file_gameagent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AdapterMessage) GetMessageId() string {
@@ -1617,7 +1717,7 @@ type RuntimeMessage struct {
 
 func (x *RuntimeMessage) Reset() {
 	*x = RuntimeMessage{}
-	mi := &file_gameagent_proto_msgTypes[18]
+	mi := &file_gameagent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1629,7 +1729,7 @@ func (x *RuntimeMessage) String() string {
 func (*RuntimeMessage) ProtoMessage() {}
 
 func (x *RuntimeMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[18]
+	mi := &file_gameagent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1642,7 +1742,7 @@ func (x *RuntimeMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeMessage.ProtoReflect.Descriptor instead.
 func (*RuntimeMessage) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{18}
+	return file_gameagent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *RuntimeMessage) GetMessageId() string {
@@ -1811,7 +1911,17 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x04_dayB\a\n" +
 	"\x05_hourB\t\n" +
 	"\a_minuteB\a\n" +
-	"\x05_tick\"\xe1\x02\n" +
+	"\x05_tick\"\xf1\x01\n" +
+	"\vContextFact\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12&\n" +
+	"\x0factor_entity_id\x18\x02 \x01(\tR\ractorEntityId\x12(\n" +
+	"\x10target_entity_id\x18\x03 \x01(\tR\x0etargetEntityId\x12\x19\n" +
+	"\bscope_id\x18\x04 \x01(\tR\ascopeId\x12\x12\n" +
+	"\x04text\x18\x05 \x01(\tR\x04text\x12\x14\n" +
+	"\x05label\x18\x06 \x01(\tR\x05label\x127\n" +
+	"\n" +
+	"attributes\x18\a \x01(\v2\x17.google.protobuf.StructR\n" +
+	"attributes\"\xb0\x03\n" +
 	"\tGameEvent\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1d\n" +
 	"\n" +
@@ -1821,7 +1931,8 @@ const file_gameagent_proto_rawDesc = "" +
 	"\apayload\x18\x05 \x01(\v2\x17.google.protobuf.StructR\apayload\x12\x1a\n" +
 	"\bsequence\x18\x06 \x01(\x04R\bsequence\x12\x19\n" +
 	"\bworld_id\x18\a \x01(\tR\aworldId\x12(\n" +
-	"\x10target_entity_id\x18\b \x01(\tR\x0etargetEntityId\"\xa4\x01\n" +
+	"\x10target_entity_id\x18\b \x01(\tR\x0etargetEntityId\x12M\n" +
+	"\rcontext_facts\x18\t \x03(\v2(.gameagent.protocol.v1alpha2.ContextFactR\fcontextFacts\"\xa4\x01\n" +
 	"\bEventAck\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12C\n" +
 	"\x06status\x18\x02 \x01(\x0e2+.gameagent.protocol.v1alpha2.EventAckStatusR\x06status\x128\n" +
@@ -1956,7 +2067,7 @@ func file_gameagent_proto_rawDescGZIP() []byte {
 }
 
 var file_gameagent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_gameagent_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_gameagent_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_gameagent_proto_goTypes = []any{
 	(EventAckStatus)(0),            // 0: gameagent.protocol.v1alpha2.EventAckStatus
 	(ExecutionMode)(0),             // 1: gameagent.protocol.v1alpha2.ExecutionMode
@@ -1966,67 +2077,70 @@ var file_gameagent_proto_goTypes = []any{
 	(*EnvironmentReady)(nil),       // 5: gameagent.protocol.v1alpha2.EnvironmentReady
 	(*EntityRef)(nil),              // 6: gameagent.protocol.v1alpha2.EntityRef
 	(*GameTime)(nil),               // 7: gameagent.protocol.v1alpha2.GameTime
-	(*GameEvent)(nil),              // 8: gameagent.protocol.v1alpha2.GameEvent
-	(*EventAck)(nil),               // 9: gameagent.protocol.v1alpha2.EventAck
-	(*ObserveRequest)(nil),         // 10: gameagent.protocol.v1alpha2.ObserveRequest
-	(*Observation)(nil),            // 11: gameagent.protocol.v1alpha2.Observation
-	(*Capability)(nil),             // 12: gameagent.protocol.v1alpha2.Capability
-	(*CapabilityRequest)(nil),      // 13: gameagent.protocol.v1alpha2.CapabilityRequest
-	(*CapabilityList)(nil),         // 14: gameagent.protocol.v1alpha2.CapabilityList
-	(*ActionRequest)(nil),          // 15: gameagent.protocol.v1alpha2.ActionRequest
-	(*ActionStatusUpdate)(nil),     // 16: gameagent.protocol.v1alpha2.ActionStatusUpdate
-	(*ActionResult)(nil),           // 17: gameagent.protocol.v1alpha2.ActionResult
-	(*CancelActionRequest)(nil),    // 18: gameagent.protocol.v1alpha2.CancelActionRequest
-	(*Error)(nil),                  // 19: gameagent.protocol.v1alpha2.Error
-	(*Heartbeat)(nil),              // 20: gameagent.protocol.v1alpha2.Heartbeat
-	(*AdapterMessage)(nil),         // 21: gameagent.protocol.v1alpha2.AdapterMessage
-	(*RuntimeMessage)(nil),         // 22: gameagent.protocol.v1alpha2.RuntimeMessage
-	(*structpb.Struct)(nil),        // 23: google.protobuf.Struct
+	(*ContextFact)(nil),            // 8: gameagent.protocol.v1alpha2.ContextFact
+	(*GameEvent)(nil),              // 9: gameagent.protocol.v1alpha2.GameEvent
+	(*EventAck)(nil),               // 10: gameagent.protocol.v1alpha2.EventAck
+	(*ObserveRequest)(nil),         // 11: gameagent.protocol.v1alpha2.ObserveRequest
+	(*Observation)(nil),            // 12: gameagent.protocol.v1alpha2.Observation
+	(*Capability)(nil),             // 13: gameagent.protocol.v1alpha2.Capability
+	(*CapabilityRequest)(nil),      // 14: gameagent.protocol.v1alpha2.CapabilityRequest
+	(*CapabilityList)(nil),         // 15: gameagent.protocol.v1alpha2.CapabilityList
+	(*ActionRequest)(nil),          // 16: gameagent.protocol.v1alpha2.ActionRequest
+	(*ActionStatusUpdate)(nil),     // 17: gameagent.protocol.v1alpha2.ActionStatusUpdate
+	(*ActionResult)(nil),           // 18: gameagent.protocol.v1alpha2.ActionResult
+	(*CancelActionRequest)(nil),    // 19: gameagent.protocol.v1alpha2.CancelActionRequest
+	(*Error)(nil),                  // 20: gameagent.protocol.v1alpha2.Error
+	(*Heartbeat)(nil),              // 21: gameagent.protocol.v1alpha2.Heartbeat
+	(*AdapterMessage)(nil),         // 22: gameagent.protocol.v1alpha2.AdapterMessage
+	(*RuntimeMessage)(nil),         // 23: gameagent.protocol.v1alpha2.RuntimeMessage
+	(*structpb.Struct)(nil),        // 24: google.protobuf.Struct
 }
 var file_gameagent_proto_depIdxs = []int32{
-	6,  // 0: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	7,  // 1: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	23, // 2: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
-	0,  // 3: gameagent.protocol.v1alpha2.EventAck.status:type_name -> gameagent.protocol.v1alpha2.EventAckStatus
-	19, // 4: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
-	7,  // 5: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	23, // 6: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
-	6,  // 7: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	23, // 8: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
-	1,  // 9: gameagent.protocol.v1alpha2.Capability.execution_mode:type_name -> gameagent.protocol.v1alpha2.ExecutionMode
-	23, // 10: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
-	2,  // 11: gameagent.protocol.v1alpha2.Capability.concurrency_mode:type_name -> gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
-	12, // 12: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
-	23, // 13: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
-	23, // 14: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
-	3,  // 15: gameagent.protocol.v1alpha2.ActionStatusUpdate.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	23, // 16: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
-	3,  // 17: gameagent.protocol.v1alpha2.ActionResult.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	23, // 18: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
-	19, // 19: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
-	23, // 20: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
-	4,  // 21: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
-	8,  // 22: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
-	11, // 23: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
-	14, // 24: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
-	16, // 25: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
-	17, // 26: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
-	20, // 27: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
-	19, // 28: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	5,  // 29: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
-	10, // 30: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
-	13, // 31: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
-	15, // 32: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
-	18, // 33: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
-	9,  // 34: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
-	19, // 35: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	21, // 36: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
-	22, // 37: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
-	37, // [37:38] is the sub-list for method output_type
-	36, // [36:37] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	24, // 0: gameagent.protocol.v1alpha2.ContextFact.attributes:type_name -> google.protobuf.Struct
+	6,  // 1: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	7,  // 2: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	24, // 3: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
+	8,  // 4: gameagent.protocol.v1alpha2.GameEvent.context_facts:type_name -> gameagent.protocol.v1alpha2.ContextFact
+	0,  // 5: gameagent.protocol.v1alpha2.EventAck.status:type_name -> gameagent.protocol.v1alpha2.EventAckStatus
+	20, // 6: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
+	7,  // 7: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	24, // 8: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
+	6,  // 9: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	24, // 10: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
+	1,  // 11: gameagent.protocol.v1alpha2.Capability.execution_mode:type_name -> gameagent.protocol.v1alpha2.ExecutionMode
+	24, // 12: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
+	2,  // 13: gameagent.protocol.v1alpha2.Capability.concurrency_mode:type_name -> gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
+	13, // 14: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
+	24, // 15: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
+	24, // 16: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
+	3,  // 17: gameagent.protocol.v1alpha2.ActionStatusUpdate.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
+	24, // 18: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
+	3,  // 19: gameagent.protocol.v1alpha2.ActionResult.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
+	24, // 20: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
+	20, // 21: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
+	24, // 22: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
+	4,  // 23: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
+	9,  // 24: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
+	12, // 25: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
+	15, // 26: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
+	17, // 27: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
+	18, // 28: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
+	21, // 29: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
+	20, // 30: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	5,  // 31: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
+	11, // 32: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
+	14, // 33: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
+	16, // 34: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
+	19, // 35: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
+	10, // 36: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
+	20, // 37: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	22, // 38: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
+	23, // 39: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
+	39, // [39:40] is the sub-list for method output_type
+	38, // [38:39] is the sub-list for method input_type
+	38, // [38:38] is the sub-list for extension type_name
+	38, // [38:38] is the sub-list for extension extendee
+	0,  // [0:38] is the sub-list for field type_name
 }
 
 func init() { file_gameagent_proto_init() }
@@ -2035,9 +2149,9 @@ func file_gameagent_proto_init() {
 		return
 	}
 	file_gameagent_proto_msgTypes[3].OneofWrappers = []any{}
-	file_gameagent_proto_msgTypes[9].OneofWrappers = []any{}
 	file_gameagent_proto_msgTypes[10].OneofWrappers = []any{}
-	file_gameagent_proto_msgTypes[17].OneofWrappers = []any{
+	file_gameagent_proto_msgTypes[11].OneofWrappers = []any{}
+	file_gameagent_proto_msgTypes[18].OneofWrappers = []any{
 		(*AdapterMessage_Hello)(nil),
 		(*AdapterMessage_Event)(nil),
 		(*AdapterMessage_Observation)(nil),
@@ -2047,7 +2161,7 @@ func file_gameagent_proto_init() {
 		(*AdapterMessage_Heartbeat)(nil),
 		(*AdapterMessage_Error)(nil),
 	}
-	file_gameagent_proto_msgTypes[18].OneofWrappers = []any{
+	file_gameagent_proto_msgTypes[19].OneofWrappers = []any{
 		(*RuntimeMessage_EnvironmentReady)(nil),
 		(*RuntimeMessage_Observe)(nil),
 		(*RuntimeMessage_CapabilityRequest)(nil),
@@ -2062,7 +2176,7 @@ func file_gameagent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gameagent_proto_rawDesc), len(file_gameagent_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   19,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

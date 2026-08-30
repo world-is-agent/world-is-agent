@@ -41,6 +41,16 @@ message GameTime {
   optional int64 tick = 6;
 }
 
+message ContextFact {
+  string kind = 1;
+  string actor_entity_id = 2;
+  string target_entity_id = 3;
+  string scope_id = 4;
+  string text = 5;
+  string label = 6;
+  google.protobuf.Struct attributes = 7;
+}
+
 message GameEvent {
   string event_id = 1;
   string event_type = 2;
@@ -50,6 +60,7 @@ message GameEvent {
   uint64 sequence = 6;
   string world_id = 7;
   string target_entity_id = 8;
+  repeated ContextFact context_facts = 9;
 }
 
 enum EventAckStatus {

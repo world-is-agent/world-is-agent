@@ -30,7 +30,16 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         'message\s+EntityRef\s*\{',
         'message\s+EntityRef\s*\{[^}]*string\s+definition_id\s*=\s*4;',
         'message\s+GameTime\s*\{',
+        'message\s+ContextFact\s*\{',
+        'message\s+ContextFact\s*\{[^}]*string\s+kind\s*=\s*1;',
+        'message\s+ContextFact\s*\{[^}]*string\s+actor_entity_id\s*=\s*2;',
+        'message\s+ContextFact\s*\{[^}]*string\s+target_entity_id\s*=\s*3;',
+        'message\s+ContextFact\s*\{[^}]*string\s+scope_id\s*=\s*4;',
+        'message\s+ContextFact\s*\{[^}]*string\s+text\s*=\s*5;',
+        'message\s+ContextFact\s*\{[^}]*string\s+label\s*=\s*6;',
+        'message\s+ContextFact\s*\{[^}]*google\.protobuf\.Struct\s+attributes\s*=\s*7;',
         'message\s+GameEvent\s*\{',
+        'message\s+GameEvent\s*\{[^}]*repeated\s+ContextFact\s+context_facts\s*=\s*9;',
         'enum\s+EventAckStatus\s*\{',
         'EVENT_ACK_STATUS_ACCEPTED\s*=\s*1;',
         'message\s+EventAck\s*\{',
@@ -94,6 +103,10 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
 
     if ($proto -notmatch 'message\s+GameEvent\s*\{[^}]*string\s+target_entity_id\s*=\s*8;') {
         Add-Violation 'GameEvent.target_entity_id must use field 8'
+    }
+
+    if ($proto -match 'message\s+ContextFact\s*\{[^}]*definition_id') {
+        Add-Violation 'ContextFact must not include definition_id'
     }
 
     if ($proto -notmatch 'message\s+ObserveRequest\s*\{[^}]*string\s+world_id\s*=\s*2;') {

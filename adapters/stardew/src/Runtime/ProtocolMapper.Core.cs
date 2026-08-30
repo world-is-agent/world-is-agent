@@ -97,12 +97,13 @@ public static partial class ProtocolMapper
         if (normalizedInputKind == "free_text" && selectedOptionIndex.HasValue)
             throw new ArgumentException("selected_option_index must be omitted for free_text input");
 
+        string normalizedConversationId = RequireNonEmpty(conversationId, "conversation_id");
         string normalizedText = RequireBoundedText(text, "text", MaxDialogueTextChars);
         Struct payload = new()
         {
             Fields =
             {
-                ["conversation_id"] = Value.ForString(RequireNonEmpty(conversationId, "conversation_id")),
+                ["conversation_id"] = Value.ForString(normalizedConversationId),
                 ["input_kind"] = Value.ForString(normalizedInputKind),
                 ["text"] = Value.ForString(normalizedText),
                 ["trigger"] = Value.ForString(trigger),
@@ -112,6 +113,17 @@ public static partial class ProtocolMapper
 
         if (selectedOptionIndex.HasValue)
             payload.Fields["selected_option_index"] = Value.ForNumber(selectedOptionIndex.Value);
+
+        Struct attributes = new()
+        {
+            Fields =
+            {
+                ["input_kind"] = Value.ForString(normalizedInputKind),
+                ["trigger"] = Value.ForString(trigger),
+            },
+        };
+        if (selectedOptionIndex.HasValue)
+            attributes.Fields["selected_option_index"] = Value.ForNumber(selectedOptionIndex.Value);
 
         return new GameEvent
         {
@@ -126,6 +138,18 @@ public static partial class ProtocolMapper
             {
                 BuildEntity(playerEntityId, "player", playerDisplayName),
                 BuildEntity(npcEntityId, "npc", npcDisplayName),
+            },
+            ContextFacts =
+            {
+                new ContextFact
+                {
+                    Kind = "utterance",
+                    ActorEntityId = playerEntityId,
+                    TargetEntityId = npcEntityId,
+                    ScopeId = normalizedConversationId,
+                    Text = normalizedText,
+                    Attributes = attributes,
+                },
             },
         };
     }

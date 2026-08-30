@@ -81,6 +81,8 @@ Require-Content 'src/Runtime/ProtocolMapper.Core.cs' '"stardew"' 'ProtocolMapper
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'NearbyEntities' 'ProtocolMapper must publish nearby entity refs.'
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'player_said_to_npc' 'ProtocolMapper must build player_said_to_npc events.'
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'conversation_id' 'ProtocolMapper must carry conversation_id in dialogue events and observation.'
+Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ContextFacts' 'ProtocolMapper must attach model-visible context facts to player dialogue events.'
+Require-Content 'src/Runtime/ProtocolMapper.Core.cs' '"utterance"' 'ProtocolMapper must mark player dialogue context facts as utterance.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'present_dialogue' 'CapabilityCatalog must register present_dialogue.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'face_player' 'CapabilityCatalog must register face_player.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'EventAckStatus\.Accepted' 'RuntimeClient must commit conversation state after accepted EventAck.'
@@ -96,6 +98,7 @@ Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'nearby_npcs_omitted_cou
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'friendship_points' 'ProtocolMapper tests must cover relationship visibility.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'present_dialogue' 'ProtocolMapper tests must cover present_dialogue.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'ConversationStateStore' 'ProtocolMapper tests must cover conversation state.'
+Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'ContextFacts' 'ProtocolMapper tests must cover player dialogue context facts.'
 
 Reject-Content 'src/State/StardewObservationFactory.cs' 'using StardewValley|StardewValley\.|Game1\.|\bNPC\b|\bFarmer\b' 'StardewObservationFactory must not reference Stardew live objects.'
 Reject-Content 'src/Capabilities/PresentDialogueCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper' 'PresentDialogueCapability must not depend on Runtime mapper.'

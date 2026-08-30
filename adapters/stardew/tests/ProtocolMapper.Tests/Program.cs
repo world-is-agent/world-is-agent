@@ -159,6 +159,7 @@ Assert(gameEvent.Payload.Fields["conversation_id"].StringValue == "conv_1", "pay
 Assert(gameEvent.Payload.Fields["source"].StringValue == "stardew-smapi", "payload should identify adapter source");
 Assert(gameEvent.Payload.Fields["trigger"].StringValue == "action_button", "payload should keep trigger");
 Assert(!gameEvent.Payload.Fields.ContainsKey("target_entity_id"), "payload must not duplicate target_entity_id");
+Assert(gameEvent.ContextFacts.Count == 0, "player_interacted_with_npc should not carry context facts");
 
 GameEvent playerSaid = ProtocolMapper.BuildPlayerSaidToNpcEvent(
     npcEntityId: "npc:Abigail",
@@ -180,6 +181,17 @@ Assert(playerSaid.Payload.Fields["conversation_id"].StringValue == "conv_1", "pl
 Assert(playerSaid.Payload.Fields["input_kind"].StringValue == "option", "player input should carry input kind");
 Assert(playerSaid.Payload.Fields["selected_option_index"].NumberValue == 1, "option input should carry selected option index");
 Assert(playerSaid.Payload.Fields["trigger"].StringValue == "dialogue_option", "player input should carry trigger");
+Assert(playerSaid.ContextFacts.Count == 1, "player_said_to_npc should carry one context fact");
+ContextFact playerSaidFact = playerSaid.ContextFacts[0];
+Assert(playerSaidFact.Kind == "utterance", "player_said_to_npc context fact should be an utterance");
+Assert(playerSaidFact.ActorEntityId == "player:local", "context fact actor should be the player");
+Assert(playerSaidFact.TargetEntityId == "npc:Abigail", "context fact target should be the npc");
+Assert(playerSaidFact.ScopeId == "conv_1", "context fact scope should be the conversation id");
+Assert(playerSaidFact.Text == "Let's go fishing.", "context fact text should match payload text");
+Assert(playerSaidFact.Label == "", "utterance context fact should not require a label");
+Assert(playerSaidFact.Attributes.Fields["input_kind"].StringValue == "option", "context fact attributes should carry input kind");
+Assert(playerSaidFact.Attributes.Fields["trigger"].StringValue == "dialogue_option", "context fact attributes should carry trigger");
+Assert(playerSaidFact.Attributes.Fields["selected_option_index"].NumberValue == 1, "context fact attributes should carry selected option index");
 GameEvent freeTextSaid = ProtocolMapper.BuildPlayerSaidToNpcEvent(
     "npc:Abigail",
     "Abigail",
@@ -195,6 +207,8 @@ GameEvent freeTextSaid = ProtocolMapper.BuildPlayerSaidToNpcEvent(
     gameTime
 );
 Assert(!freeTextSaid.Payload.Fields.ContainsKey("selected_option_index"), "free_text input should not carry selected option index");
+Assert(freeTextSaid.ContextFacts.Count == 1, "free_text input should carry one context fact");
+Assert(!freeTextSaid.ContextFacts[0].Attributes.Fields.ContainsKey("selected_option_index"), "free_text context fact should not carry selected option index");
 ExpectArgumentException(
     () => ProtocolMapper.BuildPlayerSaidToNpcEvent("npc:Abigail", "Abigail", "player:local", "Local Farmer", "conv_1", "option", "Let's go", null, "dialogue_option", 45, "Farm_123456", gameTime),
     "selected_option_index"

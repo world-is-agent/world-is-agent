@@ -839,7 +839,9 @@ year, season, day, hour, minute, tick
 
 如果 MemoryRecord 或当前上下文缺少可比较的 `GameTime`，Context Engine 不做未来时间过滤，只应用普通 Recent / Relevance / Budget 规则。
 
-当多条 MemoryRecord 的 `GameTime` 相等时，Context Engine 应按 `SourceEventSequence` 升序稳定排序。`SourceEventSequence` 来源于 `GameEvent.sequence`。缺少可比较 sequence 时，保持 MemoryStore 返回顺序。
+未来时间过滤后，Context Engine 默认保持 MemoryStore 返回顺序。
+
+连续、同一非空 `GameTime` 且 `SourceEventSequence` 非 0 的 MemoryRecord 片段应按 `SourceEventSequence` 升序稳定排序。`SourceEventSequence` 来源于 `GameEvent.sequence`。缺少可比较 `GameTime` 或 `SourceEventSequence` 时，该 MemoryRecord 保持 MemoryStore 返回顺序。
 
 未来时间过滤必须发生在 memory context byte budget trim 之前，避免未来时间记录占用预算并挤掉当前时间线中的有效记忆。
 

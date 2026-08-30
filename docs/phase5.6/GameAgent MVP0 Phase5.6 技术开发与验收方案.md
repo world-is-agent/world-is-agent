@@ -668,8 +668,9 @@ Memory 时间线选择规则：
 - 未来时间过滤只处理 `MemoryRecord.GameTime > CurrentGameTime` 的记录；
 - 相等时间不被过滤；
 - `GameTime` 比较顺序为 `year, season, day, hour, minute, tick`；
-- 相等 `GameTime` 的多条 Memory 按 `SourceEventSequence` 升序稳定排序；
-- 缺少可比较 `SourceEventSequence` 时，保持 MemoryStore 返回顺序；
+- 未来时间过滤后默认保持 MemoryStore 返回顺序；
+- 连续、同一非空 `GameTime` 且 `SourceEventSequence` 非 0 的 Memory 片段按 `SourceEventSequence` 升序稳定排序；
+- 缺少可比较 `GameTime` 或 `SourceEventSequence` 时，该 MemoryRecord 保持 MemoryStore 返回顺序；
 - 未来时间过滤必须发生在 memory context byte budget trim 之前；
 - 该规则用于处理读取更早存档、回档或世界时间回退后的上下文一致性；
 - 同一天且未处于未来时间的 Recent Memory 仍按现有 prompt 语义作为 nearby conversation context。

@@ -506,7 +506,7 @@ ValleyTalk prompt builder 迁移
 - Adapter 抢占关闭旧菜单时不关闭 active conversation；
 - `face_player` 成功输出 `facing`，不同 location 返回 `REJECTED / different_location`；
 - 成功完成的对话 Turn 可以在 Recent Memory 中同时包含玩家输入 ContextFact 和 NPC 可见动作 outcome；
-- `GameTime > CurrentGameTime` 的 Memory 不进入 Model Context；
+- `GameTime > CurrentGameTime` 的 Memory 不进入 Model Context，同一可比时间片内按 `GameEvent.sequence` 稳定化；
 - Runtime 不新增 Stardew-specific parser；
 - Phase6 可以在对话事件和同步 UI 基础上接入 TurnCompletion、Interaction Guard 和长 Action。
 

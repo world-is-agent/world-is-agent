@@ -47,6 +47,13 @@ var (
 
 const terminalDialogueToolName = "present_dialogue"
 
+type memoryProjectionMode int
+
+const (
+	memoryProjectionSettledTurn memoryProjectionMode = iota
+	memoryProjectionPriorSuccessfulActions
+)
+
 type LoopOption func(*Loop)
 
 // WithMemoryStore 覆盖 Loop 默认使用的 MemoryStore。
@@ -253,7 +260,7 @@ func (l *Loop) runBoundedSteps(
 				turnTracer.Emit(trace.EventAgentStepCompleted, trace.EventData{
 					Fields: trace.Fields{"step_index": stepIndex},
 				})
-				l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
+				l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionSettledTurn)
 				turnTracer.Complete(lastCompletedActionEventData(successfulActions))
 				return nil
 			}
@@ -360,7 +367,7 @@ func (l *Loop) runBoundedSteps(
 		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
 		if err != nil {
 			successfulActions = append(successfulActions, outcome.SuccessfulActions...)
-			l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
+			l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionPriorSuccessfulActions)
 			reason := actionFailureReason(err)
 			turnTracer.Emit(trace.EventToolBatchFailed, trace.EventData{
 				Fields: trace.Fields{
@@ -411,7 +418,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventTurnSettled, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
-			l.updateMemoryForSuccessfulActions(ctx, turnTracer, key, turnID, event, successfulActions)
+			l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionSettledTurn)
 			turnTracer.Complete(lastCompletedActionEventData(successfulActions))
 			return nil
 		}
@@ -671,17 +678,15 @@ func (l *Loop) loadRecentMemories(
 	return records
 }
 
-func (l *Loop) updateMemoryForSuccessfulActions(
+func (l *Loop) updateMemoryForCompletedTurn(
 	ctx context.Context,
 	turnTracer trace.TurnTracer,
 	key session.AgentSessionKey,
 	turnID string,
 	event *protocolv1alpha2.GameEvent,
 	successfulActions []completedToolAction,
+	mode memoryProjectionMode,
 ) {
-	if len(successfulActions) == 0 {
-		return
-	}
 	if !l.config.MemoryEnabledValue() || l.memoryStore == nil || l.memoryProjector == nil {
 		return
 	}
@@ -697,13 +702,20 @@ func (l *Loop) updateMemoryForSuccessfulActions(
 		})
 	}
 	if len(outcomes) == 0 {
-		return
+		if mode != memoryProjectionSettledTurn || !hasContextFacts(event) {
+			return
+		}
+	}
+
+	projectEvent := event
+	if mode == memoryProjectionPriorSuccessfulActions {
+		projectEvent = eventWithoutContextFacts(event)
 	}
 
 	record, err := l.memoryProjector.Project(memory.ProjectInput{
 		SessionKey: key,
 		TurnID:     turnID,
-		Event:      event,
+		Event:      projectEvent,
 		Outcomes:   outcomes,
 	})
 	if err != nil {
@@ -744,6 +756,19 @@ func lastCompletedActionEventData(successfulActions []completedToolAction) trace
 		ActionID: last.ActionResult.GetActionId(),
 		Tool:     last.ToolCall.Name,
 	}
+}
+
+func eventWithoutContextFacts(event *protocolv1alpha2.GameEvent) *protocolv1alpha2.GameEvent {
+	if event == nil || len(event.GetContextFacts()) == 0 {
+		return event
+	}
+	copyEvent := *event
+	copyEvent.ContextFacts = nil
+	return &copyEvent
+}
+
+func hasContextFacts(event *protocolv1alpha2.GameEvent) bool {
+	return event != nil && len(event.GetContextFacts()) > 0
 }
 
 // memoryIDs 提取 MemoryRecord ID，用于 trace 中记录本轮加载了哪些 Memory。

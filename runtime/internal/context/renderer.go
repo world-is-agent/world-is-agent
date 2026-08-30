@@ -327,6 +327,7 @@ func renderAgentDescriptor(descriptor AgentDescriptor) string {
 // renderMemories 渲染 Recent Memory section。
 // 没有可用 Memory 时显式输出 (none)，让模型知道不是遗漏上下文。
 func (r Renderer) renderMemories(records []memory.Record, currentTime *memory.GameTimeSnapshot) string {
+	records = selectTimelineMemories(records, currentTime)
 	records = trimMemories(records, r.config.MemoryContextSizeLimit, currentTime)
 	if len(records) == 0 {
 		return "(none)"
@@ -339,8 +340,35 @@ func (r Renderer) renderMemories(records []memory.Record, currentTime *memory.Ga
 	return strings.Join(lines, "\n")
 }
 
+func selectTimelineMemories(records []memory.Record, currentTime *memory.GameTimeSnapshot) []memory.Record {
+	if len(records) == 0 {
+		return records
+	}
+
+	selected := make([]memory.Record, 0, len(records))
+	for _, record := range records {
+		if isFutureMemory(record.GameTime, currentTime) {
+			continue
+		}
+		selected = append(selected, record)
+	}
+
+	sort.SliceStable(selected, func(i, j int) bool {
+		left := selected[i]
+		right := selected[j]
+		if cmp := compareOptionalGameTime(left.GameTime, right.GameTime); cmp != 0 {
+			return cmp < 0
+		}
+		if left.SourceEventSequence == right.SourceEventSequence {
+			return false
+		}
+		return left.SourceEventSequence < right.SourceEventSequence
+	})
+	return selected
+}
+
 // trimMemories 按 soft budget 裁剪 Recent Memory。
-// Phase4 优先保留最新 Memory；如果最新一条本身超限，仍保留它。
+// 优先保留最新 Memory；如果最新一条本身超限，仍保留它。
 func trimMemories(records []memory.Record, limit int, currentTime *memory.GameTimeSnapshot) []memory.Record {
 	if len(records) == 0 || limit <= 0 {
 		return records
@@ -363,15 +391,55 @@ func trimMemories(records []memory.Record, limit int, currentTime *memory.GameTi
 }
 
 // renderMemory 将单条 MemoryRecord 投影为模型可读的短摘要。
-// 存储字段用于 Runtime 追踪；模型只需要“何时 + 可见动作”的连续性信号。
+// 存储字段用于 Runtime 追踪；模型只需要“何时 + 输入事实 + 可见动作”的连续性信号。
 func renderMemory(record memory.Record, currentTime *memory.GameTimeSnapshot) string {
 	outcomes := record.Outcomes
 
-	summaries := make([]string, 0, len(outcomes))
+	summaries := make([]string, 0, len(record.SourceContextFacts)+len(outcomes))
+	for _, fact := range record.SourceContextFacts {
+		if summary := visibleContextFactSummary(fact); summary != "" {
+			summaries = append(summaries, summary)
+		}
+	}
 	for _, outcome := range outcomes {
 		summaries = append(summaries, visibleActionSummary(outcome))
 	}
+	if len(summaries) == 0 {
+		summaries = append(summaries, "completed turn")
+	}
 	return fmt.Sprintf("- %s: %s", gameTimeRelation(record.GameTime, currentTime), strings.Join(summaries, "; "))
+}
+
+func visibleContextFactSummary(fact memory.SourceContextFact) string {
+	kind := strings.ToLower(strings.TrimSpace(fact.Kind))
+	text := strings.TrimSpace(fact.Text)
+	label := strings.TrimSpace(fact.Label)
+	actor := strings.TrimSpace(fact.ActorEntityID)
+	if actor == "" {
+		actor = "actor"
+	}
+
+	switch kind {
+	case "utterance":
+		if text != "" {
+			return fmt.Sprintf("%s said %q", actor, text)
+		}
+		return ""
+	default:
+		if text != "" {
+			if kind == "" {
+				return fmt.Sprintf("%s context %q", actor, text)
+			}
+			return fmt.Sprintf("%s %s %q", actor, kind, text)
+		}
+		if label != "" {
+			if kind == "" {
+				return fmt.Sprintf("%s context %q", actor, label)
+			}
+			return fmt.Sprintf("%s %s %q", actor, kind, label)
+		}
+		return ""
+	}
 }
 
 func visibleActionSummary(outcome memory.TurnOutcome) string {
@@ -449,6 +517,79 @@ func sameGameDay(left, right *memory.GameTimeSnapshot) bool {
 	return left.Year == right.Year &&
 		left.Season == right.Season &&
 		left.Day == right.Day
+}
+
+func sameGameInstant(left, right *memory.GameTimeSnapshot) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	return left.Year == right.Year &&
+		left.Season == right.Season &&
+		left.Day == right.Day &&
+		left.Hour == right.Hour &&
+		left.Minute == right.Minute &&
+		left.Tick == right.Tick
+}
+
+func isFutureMemory(memoryTime, currentTime *memory.GameTimeSnapshot) bool {
+	if memoryTime == nil || currentTime == nil {
+		return false
+	}
+	return compareGameTime(memoryTime, currentTime) > 0
+}
+
+func compareGameTime(left, right *memory.GameTimeSnapshot) int {
+	if left.Year != right.Year {
+		return compareInt32(left.Year, right.Year)
+	}
+	if left.Season != right.Season {
+		return compareInt32(left.Season, right.Season)
+	}
+	if left.Day != right.Day {
+		return compareInt32(left.Day, right.Day)
+	}
+	if left.Hour != right.Hour {
+		return compareInt32(left.Hour, right.Hour)
+	}
+	if left.Minute != right.Minute {
+		return compareInt32(left.Minute, right.Minute)
+	}
+	return compareInt64(left.Tick, right.Tick)
+}
+
+func compareOptionalGameTime(left, right *memory.GameTimeSnapshot) int {
+	if left == nil && right == nil {
+		return 0
+	}
+	if left == nil {
+		return -1
+	}
+	if right == nil {
+		return 1
+	}
+	return compareGameTime(left, right)
+}
+
+func compareInt32(left, right int32) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func compareInt64(left, right int64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func formatGameTime(gameTime *memory.GameTimeSnapshot) string {

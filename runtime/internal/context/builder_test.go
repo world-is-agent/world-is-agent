@@ -706,6 +706,189 @@ func TestRendererSummarizesDialogueToolMemory(t *testing.T) {
 	assertContainsAll(t, content, `presented dialogue "Want to explore the mines?"`, "faced player")
 }
 
+func TestRendererSummarizesContextFactsBeforeOutcomes(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 1024,
+	})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-2",
+			EventType: "player_said_to_npc",
+			GameTime: &protocolv1alpha2.GameTime{
+				Year:   ptrInt32(1),
+				Season: ptrInt32(1),
+				Day:    ptrInt32(2),
+				Hour:   ptrInt32(6),
+				Minute: ptrInt32(30),
+			},
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{{
+			SourceContextFacts: []memory.SourceContextFact{{
+				Kind:          "utterance",
+				ActorEntityID: "player:local",
+				Text:          "Let's go fishing.",
+			}},
+			Outcomes: []memory.TurnOutcome{{
+				ToolName:      "present_dialogue",
+				ToolArguments: map[string]any{"text": "Sure."},
+			}},
+			GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	wantFact := `player:local said "Let's go fishing."`
+	wantOutcome := `presented dialogue "Sure."`
+	assertContainsAll(t, content, wantFact, wantOutcome)
+	if strings.Index(content, wantFact) > strings.Index(content, wantOutcome) {
+		t.Fatalf("context fact should render before action outcome:\n%s", content)
+	}
+}
+
+func TestRendererFiltersFutureGameTimeBeforeMemoryBudget(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 72,
+	})
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-2",
+			EventType: "player_said_to_npc",
+			GameTime: &protocolv1alpha2.GameTime{
+				Year:   ptrInt32(1),
+				Season: ptrInt32(1),
+				Day:    ptrInt32(2),
+				Hour:   ptrInt32(6),
+				Minute: ptrInt32(30),
+			},
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{
+			{
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "current request"},
+				}},
+				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20},
+			},
+			{
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "future request"},
+				}},
+				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 7, Minute: 10},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	assertContainsAll(t, content, `said "current request"`)
+	if strings.Contains(content, "future request") {
+		t.Fatalf("future memory should be filtered before budget trim:\n%s", content)
+	}
+}
+
+func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 1024,
+	})
+	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-3",
+			EventType: "player_said_to_npc",
+			GameTime: &protocolv1alpha2.GameTime{
+				Year:   ptrInt32(1),
+				Season: ptrInt32(1),
+				Day:    ptrInt32(2),
+				Hour:   ptrInt32(6),
+				Minute: ptrInt32(30),
+			},
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{
+			{
+				SourceEventSequence: 2,
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "second"},
+				}},
+				GameTime: gameTime,
+			},
+			{
+				SourceEventSequence: 99,
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "unknown time"},
+				}},
+			},
+			{
+				SourceEventSequence: 3,
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "later"},
+				}},
+				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 25},
+			},
+			{
+				SourceEventSequence: 1,
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "first"},
+				}},
+				GameTime: gameTime,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	unknown := strings.Index(content, `said "unknown time"`)
+	first := strings.Index(content, `said "first"`)
+	second := strings.Index(content, `said "second"`)
+	if first == -1 || second == -1 || first > second {
+		t.Fatalf("equal game time memories should render by source event sequence:\n%s", content)
+	}
+	if unknown == -1 || unknown > first {
+		t.Fatalf("unknown game time memory should render before timestamped memories:\n%s", content)
+	}
+}
+
 func TestRendererSummarizesMultiOutcomeMemory(t *testing.T) {
 	builder := agentcontext.NewBuilder()
 	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{

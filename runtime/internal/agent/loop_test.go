@@ -443,6 +443,20 @@ func newSpeakRegistry() *tool.Registry {
 	return registry
 }
 
+func newParallelSpeakRegistry() *tool.Registry {
+	registry := tool.NewRegistry()
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+		{
+			Name:            "speak",
+			Description:     "Make the NPC speak.",
+			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_PARALLEL_SAFE,
+		},
+	})
+	return registry
+}
+
 func newSpeakEmoteRegistry() *tool.Registry {
 	registry := tool.NewRegistry()
 	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
@@ -515,6 +529,20 @@ func gameEvent(eventID string, key session.AgentSessionKey) *protocolv1alpha2.Ga
 	}
 }
 
+func playerUtteranceEvent(eventID string, key session.AgentSessionKey, sequence uint64, text string) *protocolv1alpha2.GameEvent {
+	event := gameEvent(eventID, key)
+	event.EventType = "player_said_to_npc"
+	event.Sequence = sequence
+	event.ContextFacts = []*protocolv1alpha2.ContextFact{{
+		Kind:           "utterance",
+		ActorEntityId:  "player:local",
+		TargetEntityId: key.EntityID,
+		ScopeId:        "conv_1",
+		Text:           text,
+	}}
+	return event
+}
+
 func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
 	f.submittedAction = req
 	f.submittedActions = append(f.submittedActions, req)
@@ -565,6 +593,9 @@ func actionRequestLabel(req *protocolv1alpha2.ActionRequest) string {
 		return req.GetCapability()
 	}
 	value := req.GetArguments().GetFields()["label"]
+	if value == nil {
+		value = req.GetArguments().GetFields()["text"]
+	}
 	if value == nil {
 		return req.GetCapability()
 	}
@@ -756,6 +787,46 @@ func TestHandleEventCompletesOnSettleOnlyDecision(t *testing.T) {
 	}
 	assertTraceContains(t, recorder.events, trace.EventModelResponseReceived)
 	assertTraceNotContains(t, recorder.events, trace.EventActionSubmitStarted)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventWritesContextFactMemoryOnSettleOnlyDecision(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	store := &failRecentStore{}
+	provider := &recordingProvider{
+		response: model.Response{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle, Reason: "heard player"},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Let's go fishing."))
+	if err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	if env.submittedAction != nil {
+		t.Fatalf("settle-only decision submitted action: %+v", env.submittedAction)
+	}
+	if got := len(store.appended); got != 1 {
+		t.Fatalf("appended memory count = %d, want 1", got)
+	}
+	record := store.appended[0]
+	if got := len(record.SourceContextFacts); got != 1 {
+		t.Fatalf("context fact count = %d, want 1", got)
+	}
+	if got := record.SourceContextFacts[0].Text; got != "Let's go fishing." {
+		t.Fatalf("context fact text = %q, want player utterance", got)
+	}
+	if got := len(record.Outcomes); got != 0 {
+		t.Fatalf("outcome count = %d, want 0", got)
+	}
+	assertTraceContains(t, recorder.events, trace.EventContextUpdated)
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }
 
@@ -1112,8 +1183,33 @@ func TestFailedMultiStepTurnDoesNotAppendMemory(t *testing.T) {
 	}
 }
 
+func TestFailedTurnWithContextFactDoesNotAppendMemory(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	store := &failRecentStore{}
+	provider := &scriptedProvider{
+		responses: []model.Response{{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		}},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Will this be remembered?"))
+	if err == nil || !strings.Contains(err.Error(), "continue control requires tool calls") {
+		t.Fatalf("HandleEvent error = %v, want invalid continue without tool calls", err)
+	}
+	if got := len(store.appended); got != 0 {
+		t.Fatalf("appended memory count = %d, want 0 for failed turn with context fact", got)
+	}
+}
+
 func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.T) {
-	registry := newParallelSenseRegistry()
+	registry := newParallelSpeakRegistry()
 	env := &technicalActionEnvironment{
 		delays: map[string]time.Duration{
 			"fatal": 10 * time.Millisecond,
@@ -1128,8 +1224,8 @@ func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.
 		responses: []model.Response{{
 			Decision: model.ModelDecision{
 				ToolCalls: []model.ToolCall{
-					{ID: "call_success", Name: "sense", Arguments: map[string]any{"label": "success"}},
-					{ID: "call_fatal", Name: "sense", Arguments: map[string]any{"label": "fatal"}},
+					{ID: "call_success", Name: "speak", Arguments: map[string]any{"text": "success"}},
+					{ID: "call_fatal", Name: "speak", Arguments: map[string]any{"text": "fatal"}},
 				},
 				Control: model.ControlDirective{Kind: model.ControlContinue},
 			},
@@ -1141,7 +1237,7 @@ func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.
 	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
 	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
 
-	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	err := loop.HandleEvent(context.Background(), env, conn, key, playerUtteranceEvent("event_1", key, 43, "Remember my request."))
 	if err == nil || !strings.Contains(err.Error(), "adapter transport closed") {
 		t.Fatalf("HandleEvent error = %v, want adapter transport closed", err)
 	}
@@ -1152,17 +1248,20 @@ func TestActionTechnicalFailureRecordsCompletedParallelSiblingMemory(t *testing.
 	if got := len(record.Outcomes); got != 1 {
 		t.Fatalf("memory outcome count = %d, want 1", got)
 	}
-	if record.Outcomes[0].ToolName != "sense" {
-		t.Fatalf("memory outcome tool = %q, want sense", record.Outcomes[0].ToolName)
+	if record.Outcomes[0].ToolName != "speak" {
+		t.Fatalf("memory outcome tool = %q, want speak", record.Outcomes[0].ToolName)
 	}
-	if got := record.Outcomes[0].ToolArguments["label"]; got != "success" {
-		t.Fatalf("memory outcome label = %v, want success", got)
+	if got := record.Outcomes[0].ToolArguments["text"]; got != "success" {
+		t.Fatalf("memory outcome text = %v, want success", got)
+	}
+	if got := len(record.SourceContextFacts); got != 0 {
+		t.Fatalf("context fact count = %d, want 0 for technical failure prior outcome record", got)
 	}
 	assertTraceContains(t, recorder.events, trace.EventTurnFailed)
 }
 
 func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
-	registry := newSequentialSenseRegistry()
+	registry := newSpeakRegistry()
 	env := &technicalActionEnvironment{
 		submitErrors: map[string]error{
 			"fatal": errors.New("adapter transport closed"),
@@ -1174,8 +1273,8 @@ func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
 		responses: []model.Response{{
 			Decision: model.ModelDecision{
 				ToolCalls: []model.ToolCall{
-					{ID: "call_success", Name: "sense", Arguments: map[string]any{"label": "success"}},
-					{ID: "call_fatal", Name: "sense", Arguments: map[string]any{"label": "fatal"}},
+					{ID: "call_success", Name: "speak", Arguments: map[string]any{"text": "success"}},
+					{ID: "call_fatal", Name: "speak", Arguments: map[string]any{"text": "fatal"}},
 				},
 				Control: model.ControlDirective{Kind: model.ControlContinue},
 			},
@@ -1196,11 +1295,11 @@ func TestActionTechnicalFailureRecordsCompletedSequentialMemory(t *testing.T) {
 	if got := len(record.Outcomes); got != 1 {
 		t.Fatalf("memory outcome count = %d, want 1", got)
 	}
-	if record.Outcomes[0].ToolName != "sense" {
-		t.Fatalf("memory outcome tool = %q, want sense", record.Outcomes[0].ToolName)
+	if record.Outcomes[0].ToolName != "speak" {
+		t.Fatalf("memory outcome tool = %q, want speak", record.Outcomes[0].ToolName)
 	}
-	if got := record.Outcomes[0].ToolArguments["label"]; got != "success" {
-		t.Fatalf("memory outcome label = %v, want success", got)
+	if got := record.Outcomes[0].ToolArguments["text"]; got != "success" {
+		t.Fatalf("memory outcome text = %v, want success", got)
 	}
 	assertTraceContains(t, recorder.events, trace.EventTurnFailed)
 }

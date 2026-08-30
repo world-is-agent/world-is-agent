@@ -19,7 +19,8 @@ type Record struct {
 
 	GameTime *GameTimeSnapshot
 
-	Outcomes []TurnOutcome
+	SourceContextFacts []SourceContextFact
+	Outcomes           []TurnOutcome
 
 	CreatedAt time.Time
 }
@@ -31,6 +32,16 @@ type GameTimeSnapshot struct {
 	Hour   int32
 	Minute int32
 	Tick   int64
+}
+
+type SourceContextFact struct {
+	Kind           string
+	ActorEntityID  string
+	TargetEntityID string
+	ScopeID        string
+	Text           string
+	Label          string
+	Attributes     map[string]any
 }
 
 type TurnOutcome struct {

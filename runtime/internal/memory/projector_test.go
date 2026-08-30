@@ -9,6 +9,8 @@ import (
 	"gameagent/runtime/internal/memory"
 	"gameagent/runtime/internal/model"
 	"gameagent/runtime/internal/session"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestProjectorBuildsRecordFromSuccessfulTurn(t *testing.T) {
@@ -153,6 +155,94 @@ func TestProjectorBuildsRecordWithMultipleOutcomes(t *testing.T) {
 	}
 	if record.Outcomes[0].ToolName != "speak" || record.Outcomes[1].ToolName != "emote" {
 		t.Fatalf("outcome order = %+v, want speak then emote", record.Outcomes)
+	}
+}
+
+func TestProjectorCopiesEventContextFacts(t *testing.T) {
+	projector := memory.NewProjector(func() time.Time { return time.Unix(400, 0) })
+	attributes, err := structpb.NewStruct(map[string]any{
+		"input_kind":            "option",
+		"trigger":               "dialogue_option",
+		"selected_option_index": float64(1),
+	})
+	if err != nil {
+		t.Fatalf("NewStruct returned error: %v", err)
+	}
+
+	event := &protocolv1alpha2.GameEvent{
+		EventId:   "event-1",
+		EventType: "player_said_to_npc",
+		Sequence:  43,
+		ContextFacts: []*protocolv1alpha2.ContextFact{{
+			Kind:           "utterance",
+			ActorEntityId:  "player:local",
+			TargetEntityId: "npc:Abigail",
+			ScopeId:        "conv_1",
+			Text:           "Let's go fishing.",
+			Attributes:     attributes,
+		}},
+	}
+
+	record, err := projector.Project(memory.ProjectInput{
+		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		TurnID:     "turn-1",
+		Event:      event,
+		Outcomes: []memory.ProjectOutcome{{
+			ToolCall: model.ToolCall{Name: "present_dialogue", Arguments: map[string]any{"text": "Sure."}},
+			ActionResult: &protocolv1alpha2.ActionResult{
+				Status: protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Project returned error: %v", err)
+	}
+
+	event.ContextFacts[0].Text = "changed"
+	attributes.Fields["input_kind"] = structpb.NewStringValue("changed")
+
+	if got := len(record.SourceContextFacts); got != 1 {
+		t.Fatalf("context fact count = %d, want 1", got)
+	}
+	fact := record.SourceContextFacts[0]
+	if fact.Kind != "utterance" || fact.ActorEntityID != "player:local" || fact.TargetEntityID != "npc:Abigail" || fact.ScopeID != "conv_1" || fact.Text != "Let's go fishing." {
+		t.Fatalf("context fact = %+v", fact)
+	}
+	if got := fact.Attributes["input_kind"]; got != "option" {
+		t.Fatalf("context fact input_kind = %v, want option", got)
+	}
+	if got := fact.Attributes["selected_option_index"]; got != float64(1) {
+		t.Fatalf("context fact selected_option_index = %v, want 1", got)
+	}
+}
+
+func TestProjectorBuildsRecordFromContextFactsWithoutOutcomes(t *testing.T) {
+	projector := memory.NewProjector(func() time.Time { return time.Unix(500, 0) })
+
+	record, err := projector.Project(memory.ProjectInput{
+		SessionKey: session.AgentSessionKey{GameID: "stardew-valley", WorldID: "world-a", EntityID: "npc:Abigail"},
+		TurnID:     "turn-1",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-1",
+			EventType: "player_said_to_npc",
+			ContextFacts: []*protocolv1alpha2.ContextFact{{
+				Kind:           "utterance",
+				ActorEntityId:  "player:local",
+				TargetEntityId: "npc:Abigail",
+				ScopeId:        "conv_1",
+				Text:           "I need a moment.",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Project returned error: %v", err)
+	}
+
+	if got := len(record.SourceContextFacts); got != 1 {
+		t.Fatalf("context fact count = %d, want 1", got)
+	}
+	if got := len(record.Outcomes); got != 0 {
+		t.Fatalf("outcome count = %d, want 0", got)
 	}
 }
 

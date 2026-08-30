@@ -68,6 +68,7 @@ func (p Projector) Project(input ProjectInput) (Record, error) {
 		SourceEventSequence: input.Event.GetSequence(),
 		EventType:           input.Event.GetEventType(),
 		GameTime:            gameTimeSnapshot(input.Event.GetGameTime()),
+		SourceContextFacts:  sourceContextFacts(input.Event.GetContextFacts()),
 		Outcomes:            outcomes,
 		CreatedAt:           p.now(),
 	}, nil
@@ -75,11 +76,15 @@ func (p Projector) Project(input ProjectInput) (Record, error) {
 
 func projectOutcomes(input ProjectInput) ([]TurnOutcome, error) {
 	items := input.Outcomes
-	if len(items) == 0 {
+	if len(items) == 0 && hasSingleOutcomeInput(input) {
 		items = []ProjectOutcome{{
 			ToolCall:     input.ToolCall,
 			ActionResult: input.ActionResult,
 		}}
+	}
+
+	if len(items) == 0 {
+		return nil, nil
 	}
 
 	outcomes := make([]TurnOutcome, 0, len(items))
@@ -97,6 +102,33 @@ func projectOutcomes(input ProjectInput) ([]TurnOutcome, error) {
 		})
 	}
 	return outcomes, nil
+}
+
+func hasSingleOutcomeInput(input ProjectInput) bool {
+	return input.ActionResult != nil || strings.TrimSpace(input.ToolCall.Name) != "" || input.ToolCall.Arguments != nil
+}
+
+func sourceContextFacts(facts []*protocolv1alpha2.ContextFact) []SourceContextFact {
+	if len(facts) == 0 {
+		return nil
+	}
+
+	out := make([]SourceContextFact, 0, len(facts))
+	for _, fact := range facts {
+		if fact == nil {
+			continue
+		}
+		out = append(out, SourceContextFact{
+			Kind:           fact.GetKind(),
+			ActorEntityID:  fact.GetActorEntityId(),
+			TargetEntityID: fact.GetTargetEntityId(),
+			ScopeID:        fact.GetScopeId(),
+			Text:           fact.GetText(),
+			Label:          fact.GetLabel(),
+			Attributes:     copyMap(fact.GetAttributes().AsMap()),
+		})
+	}
+	return out
 }
 
 func gameTimeSnapshot(gameTime *protocolv1alpha2.GameTime) *GameTimeSnapshot {
@@ -119,9 +151,31 @@ func toolArguments(call model.ToolCall) map[string]any {
 	if call.Arguments == nil {
 		return nil
 	}
-	out := make(map[string]any, len(call.Arguments))
-	for key, value := range call.Arguments {
-		out[key] = value
+	return copyMap(call.Arguments)
+}
+
+func copyMap(input map[string]any) map[string]any {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = copyAny(value)
 	}
 	return out
+}
+
+func copyAny(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return copyMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = copyAny(item)
+		}
+		return out
+	default:
+		return value
+	}
 }

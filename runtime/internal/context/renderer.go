@@ -353,18 +353,33 @@ func selectTimelineMemories(records []memory.Record, currentTime *memory.GameTim
 		selected = append(selected, record)
 	}
 
-	sort.SliceStable(selected, func(i, j int) bool {
-		left := selected[i]
-		right := selected[j]
-		if cmp := compareOptionalGameTime(left.GameTime, right.GameTime); cmp != 0 {
-			return cmp < 0
-		}
-		if left.SourceEventSequence == right.SourceEventSequence {
-			return false
-		}
-		return left.SourceEventSequence < right.SourceEventSequence
-	})
+	stabilizeEqualGameTimeSequences(selected)
 	return selected
+}
+
+func stabilizeEqualGameTimeSequences(records []memory.Record) {
+	for start := 0; start < len(records); {
+		if !hasComparableGameTimeSequence(records[start]) {
+			start++
+			continue
+		}
+
+		end := start + 1
+		for end < len(records) && sameGameInstant(records[start].GameTime, records[end].GameTime) && records[end].SourceEventSequence != 0 {
+			end++
+		}
+
+		if end-start > 1 {
+			sort.SliceStable(records[start:end], func(i, j int) bool {
+				return records[start+i].SourceEventSequence < records[start+j].SourceEventSequence
+			})
+		}
+		start = end
+	}
+}
+
+func hasComparableGameTimeSequence(record memory.Record) bool {
+	return record.GameTime != nil && record.SourceEventSequence != 0
 }
 
 // trimMemories 按 soft budget 裁剪 Recent Memory。
@@ -555,19 +570,6 @@ func compareGameTime(left, right *memory.GameTimeSnapshot) int {
 		return compareInt32(left.Minute, right.Minute)
 	}
 	return compareInt64(left.Tick, right.Tick)
-}
-
-func compareOptionalGameTime(left, right *memory.GameTimeSnapshot) int {
-	if left == nil && right == nil {
-		return 0
-	}
-	if left == nil {
-		return -1
-	}
-	if right == nil {
-		return 1
-	}
-	return compareGameTime(left, right)
 }
 
 func compareInt32(left, right int32) int {

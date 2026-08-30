@@ -844,6 +844,14 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 				GameTime: gameTime,
 			},
 			{
+				SourceEventSequence: 1,
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "first"},
+				}},
+				GameTime: gameTime,
+			},
+			{
 				SourceEventSequence: 99,
 				Outcomes: []memory.TurnOutcome{{
 					ToolName:      "speak",
@@ -858,11 +866,65 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 				}},
 				GameTime: &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 25},
 			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+
+	req, err := renderer.Render(agentCtx)
+	if err != nil {
+		t.Fatalf("Render returned error: %v", err)
+	}
+
+	content := req.Messages[0].Content
+	first := strings.Index(content, `said "first"`)
+	second := strings.Index(content, `said "second"`)
+	unknown := strings.Index(content, `said "unknown time"`)
+	later := strings.Index(content, `said "later"`)
+	if first == -1 || second == -1 || first > second {
+		t.Fatalf("equal game time memories should render by source event sequence:\n%s", content)
+	}
+	if second == -1 || unknown == -1 || later == -1 || second > unknown || unknown > later {
+		t.Fatalf("different or unknown game time memories should keep MemoryStore order:\n%s", content)
+	}
+}
+
+func TestRendererPreservesMemoryStoreOrderWhenSequenceIsMissing(t *testing.T) {
+	builder := agentcontext.NewBuilder()
+	renderer := agentcontext.NewRenderer(agentcontext.RendererConfig{
+		MemoryContextSizeLimit: 1024,
+	})
+	gameTime := &memory.GameTimeSnapshot{Year: 1, Season: 1, Day: 2, Hour: 6, Minute: 20}
+
+	agentCtx, err := builder.Build(agentcontext.BuildInput{
+		SessionKey:    session.AgentSessionKey{GameID: "fake-game", WorldID: "world-a", EntityID: "npc:Abigail"},
+		RuntimePolicy: "policy",
+		Event: &protocolv1alpha2.GameEvent{
+			EventId:   "event-3",
+			EventType: "player_said_to_npc",
+			GameTime: &protocolv1alpha2.GameTime{
+				Year:   ptrInt32(1),
+				Season: ptrInt32(1),
+				Day:    ptrInt32(2),
+				Hour:   ptrInt32(6),
+				Minute: ptrInt32(30),
+			},
+		},
+		Observation: &protocolv1alpha2.Observation{WorldId: "world-a", EntityId: "npc:Abigail"},
+		RecentMemories: []memory.Record{
 			{
-				SourceEventSequence: 1,
+				SourceEventSequence: 2,
 				Outcomes: []memory.TurnOutcome{{
 					ToolName:      "speak",
-					ToolArguments: map[string]any{"text": "first"},
+					ToolArguments: map[string]any{"text": "with sequence"},
+				}},
+				GameTime: gameTime,
+			},
+			{
+				Outcomes: []memory.TurnOutcome{{
+					ToolName:      "speak",
+					ToolArguments: map[string]any{"text": "missing sequence"},
 				}},
 				GameTime: gameTime,
 			},
@@ -878,14 +940,10 @@ func TestRendererSortsEqualGameTimeMemoriesBySourceEventSequence(t *testing.T) {
 	}
 
 	content := req.Messages[0].Content
-	unknown := strings.Index(content, `said "unknown time"`)
-	first := strings.Index(content, `said "first"`)
-	second := strings.Index(content, `said "second"`)
-	if first == -1 || second == -1 || first > second {
-		t.Fatalf("equal game time memories should render by source event sequence:\n%s", content)
-	}
-	if unknown == -1 || unknown > first {
-		t.Fatalf("unknown game time memory should render before timestamped memories:\n%s", content)
+	withSequence := strings.Index(content, `said "with sequence"`)
+	missingSequence := strings.Index(content, `said "missing sequence"`)
+	if withSequence == -1 || missingSequence == -1 || withSequence > missingSequence {
+		t.Fatalf("records with missing source event sequence should keep MemoryStore order:\n%s", content)
 	}
 }
 

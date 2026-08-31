@@ -13,30 +13,40 @@ import (
 //
 // 这里不直接访问 gRPC stream，也不接触具体游戏 API；它只维护
 // Runtime 内部 tool 语义到 protocol action 语义的转换边界。
-func BuildActionRequest(worldID string, entityID string, call model.ToolCall) (*protocolv1alpha2.ActionRequest, error) {
-	if worldID == "" {
+type ActionRequestInput struct {
+	WorldID       string
+	EntityID      string
+	SourceEventID string
+	SourceTurnID  string
+	ToolCall      model.ToolCall
+}
+
+func BuildActionRequest(input ActionRequestInput) (*protocolv1alpha2.ActionRequest, error) {
+	if input.WorldID == "" {
 		return nil, fmt.Errorf("world is empty")
 	}
 
-	if entityID == "" {
+	if input.EntityID == "" {
 		return nil, fmt.Errorf("entity is empty")
 	}
 
-	if call.Arguments == nil {
+	if input.ToolCall.Arguments == nil {
 		return nil, fmt.Errorf("tool arguments are missing")
 	}
 
-	arguments, err := structpb.NewStruct(call.Arguments)
+	arguments, err := structpb.NewStruct(input.ToolCall.Arguments)
 	if err != nil {
 		return nil, fmt.Errorf("convert tool arguments: %w", err)
 	}
 
 	return &protocolv1alpha2.ActionRequest{
-		ActionId:   newActionID(),
-		EntityId:   entityID,
-		Capability: call.Name,
-		Arguments:  arguments,
-		WorldId:    worldID,
+		ActionId:      newActionID(),
+		EntityId:      input.EntityID,
+		Capability:    input.ToolCall.Name,
+		Arguments:     arguments,
+		WorldId:       input.WorldID,
+		SourceEventId: input.SourceEventID,
+		SourceTurnId:  input.SourceTurnID,
 	}, nil
 }
 

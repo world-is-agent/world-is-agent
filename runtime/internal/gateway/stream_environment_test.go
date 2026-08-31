@@ -211,6 +211,31 @@ func TestAdapterErrorExposesFailureReason(t *testing.T) {
 	}
 }
 
+func TestStreamEnvironmentSendTurnCompletion(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
+	env := newStreamEnvironment(stream)
+
+	err := env.SendTurnCompletion(context.Background(), &protocolv1alpha2.TurnCompletion{
+		TurnId:   "turn_1",
+		EventId:  "event_1",
+		WorldId:  "world:test",
+		EntityId: "npc:Linus",
+		Status:   protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED,
+	})
+	if err != nil {
+		t.Fatalf("SendTurnCompletion returned error: %v", err)
+	}
+
+	msg := stream.recvSent(t)
+	completion := msg.GetTurnCompletion()
+	if completion == nil {
+		t.Fatalf("expected TurnCompletion, got %T", msg.Payload)
+	}
+	if completion.TurnId != "turn_1" || completion.EventId != "event_1" {
+		t.Fatalf("completion = %+v, want turn_1/event_1", completion)
+	}
+}
+
 func TestStreamEnvironmentRejectsObservationScopeMismatch(t *testing.T) {
 	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
 	env := newStreamEnvironment(stream)

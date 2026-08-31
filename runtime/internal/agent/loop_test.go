@@ -38,12 +38,15 @@ type fakeEnvironment struct {
 	observedEntityID string
 	submittedAction  *protocolv1alpha2.ActionRequest
 	submittedActions []*protocolv1alpha2.ActionRequest
+	turnCompletions  []*protocolv1alpha2.TurnCompletion
+	completeErr      error
 	statusByTool     map[string]protocolv1alpha2.ActionStatus
 }
 
 type technicalActionEnvironment struct {
 	mu               sync.Mutex
 	submittedActions []*protocolv1alpha2.ActionRequest
+	turnCompletions  []*protocolv1alpha2.TurnCompletion
 	submitErrors     map[string]error
 	delays           map[string]time.Duration
 }
@@ -402,6 +405,36 @@ func traceEventsByName(events []trace.Event, name trace.EventName) []trace.Event
 	return out
 }
 
+func requireSingleTurnCompletion(t *testing.T, completions []*protocolv1alpha2.TurnCompletion) *protocolv1alpha2.TurnCompletion {
+	t.Helper()
+
+	if len(completions) != 1 {
+		t.Fatalf("turn completion count = %d, want 1", len(completions))
+	}
+	completion := completions[0]
+	if completion == nil {
+		t.Fatal("turn completion is nil")
+	}
+	if completion.TurnId == "" {
+		t.Fatal("turn completion turn_id is empty")
+	}
+	return completion
+}
+
+func assertTurnCompletionScope(t *testing.T, completion *protocolv1alpha2.TurnCompletion, eventID string, key session.AgentSessionKey) {
+	t.Helper()
+
+	if completion.EventId != eventID {
+		t.Fatalf("completion event_id = %q, want %q", completion.EventId, eventID)
+	}
+	if completion.WorldId != key.WorldID {
+		t.Fatalf("completion world_id = %q, want %q", completion.WorldId, key.WorldID)
+	}
+	if completion.EntityId != key.EntityID {
+		t.Fatalf("completion entity_id = %q, want %q", completion.EntityId, key.EntityID)
+	}
+}
+
 func traceEventCount(events []trace.Event, name trace.EventName) int {
 	count := 0
 	for _, event := range events {
@@ -578,6 +611,11 @@ func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha
 	}, nil
 }
 
+func (f *fakeEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
+	f.turnCompletions = append(f.turnCompletions, completion)
+	return f.completeErr
+}
+
 func (e *technicalActionEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
 	return &protocolv1alpha2.Observation{WorldId: worldID, EntityId: entityID}, nil
 }
@@ -602,6 +640,14 @@ func (e *technicalActionEnvironment) SubmitAction(ctx context.Context, req *prot
 		ActionId: req.GetActionId(),
 		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
 	}, nil
+}
+
+func (e *technicalActionEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.turnCompletions = append(e.turnCompletions, completion)
+	return nil
 }
 
 func actionRequestLabel(req *protocolv1alpha2.ActionRequest) string {
@@ -804,6 +850,124 @@ func TestHandleEventCompletesOnSettleOnlyDecision(t *testing.T) {
 	assertTraceContains(t, recorder.events, trace.EventModelResponseReceived)
 	assertTraceNotContains(t, recorder.events, trace.EventActionSubmitStarted)
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventSendsTurnCompletionOnSettle(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
+	}}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED {
+		t.Fatalf("completion status = %s, want completed", completion.Status)
+	}
+	assertTurnCompletionScope(t, completion, "event_1", key)
+	if completion.Error != nil {
+		t.Fatalf("completion error = %+v, want nil", completion.Error)
+	}
+	assertTraceContainsInOrder(t, recorder.events, []trace.EventName{
+		trace.EventTurnCompletionSent,
+		trace.EventTurnCompleted,
+	})
+}
+
+func TestHandleEventSendsTurnCompletionOnFailure(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlContinue}}},
+	}}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	if err == nil {
+		t.Fatal("HandleEvent returned nil error, want invalid model response")
+	}
+
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED {
+		t.Fatalf("completion status = %s, want failed", completion.Status)
+	}
+	assertTurnCompletionScope(t, completion, "event_1", key)
+	if completion.Error == nil || completion.Error.Code != "invalid_model_response" {
+		t.Fatalf("completion error = %+v, want invalid_model_response", completion.Error)
+	}
+	assertTraceContainsInOrder(t, recorder.events, []trace.EventName{
+		trace.EventTurnCompletionSent,
+		trace.EventTurnFailed,
+	})
+}
+
+func TestTurnCompletionSendFailureDoesNotChangeCompletedTurnStatus(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{completeErr: errors.New("stream closed")}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{responses: []model.Response{
+		{Decision: model.ModelDecision{Control: model.ControlDirective{Kind: model.ControlSettle}}},
+	}}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED {
+		t.Fatalf("completion status = %s, want completed", completion.Status)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnCompletionSendFailed)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+	assertTraceNotContains(t, recorder.events, trace.EventTurnFailed)
+}
+
+func TestHandleEventActionRequestCarriesSourceCorrelation(t *testing.T) {
+	registry := newSpeakRegistry()
+	env := &fakeEnvironment{}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{responses: []model.Response{
+		{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{ID: "call_1", Name: "speak", Arguments: map[string]any{"text": "hello"}}},
+				Control:   model.ControlDirective{Kind: model.ControlSettle},
+			},
+		},
+	}}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if env.submittedAction == nil {
+		t.Fatal("expected submitted action")
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if env.submittedAction.SourceEventId != "event_1" {
+		t.Fatalf("SourceEventId = %q, want event_1", env.submittedAction.SourceEventId)
+	}
+	if env.submittedAction.SourceTurnId == "" {
+		t.Fatal("SourceTurnId is empty")
+	}
+	if env.submittedAction.SourceTurnId != completion.TurnId {
+		t.Fatalf("SourceTurnId = %q, want completion turn_id %q", env.submittedAction.SourceTurnId, completion.TurnId)
+	}
 }
 
 func TestHandleEventWritesContextFactMemoryOnSettleOnlyDecision(t *testing.T) {

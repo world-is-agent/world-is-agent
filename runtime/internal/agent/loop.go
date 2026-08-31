@@ -22,6 +22,7 @@ import (
 type Environment interface {
 	Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error)
 	SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error)
+	SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error
 }
 
 // Loop 执行 Runtime MVP0 的 one-turn AgentRun。
@@ -168,7 +169,7 @@ func (l *Loop) HandleEvent(
 		} else if reasoner, ok := err.(interface{ FailureReason() string }); ok {
 			reason = reasoner.FailureReason()
 		}
-		turnTracer.Fail("observation", reason, err, trace.EventData{})
+		l.failTurn(ctx, env, turnTracer, key, event, turnID, "observation", reason, err, trace.EventData{})
 		return err
 	}
 	turnTracer.Emit(trace.EventObservationReceived, trace.EventData{})
@@ -202,7 +203,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": contextFailureReason(err)},
 			})
-			turnTracer.Fail("context", contextFailureReason(err), err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "context", contextFailureReason(err), err, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			return err
@@ -228,7 +229,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": reason},
 			})
-			turnTracer.Fail("model", reason, err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "model", reason, err, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			return err
@@ -243,7 +244,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": "invalid_model_response"},
 			})
-			turnTracer.Fail("model", "invalid_model_response", err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "model", "invalid_model_response", err, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			return err
@@ -259,14 +260,14 @@ func (l *Loop) runBoundedSteps(
 					Fields: trace.Fields{"step_index": stepIndex},
 				})
 				l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionSettledTurn)
-				turnTracer.Complete(lastCompletedActionEventData(successfulActions))
+				l.completeTurn(ctx, env, turnTracer, key, event, turnID, lastCompletedActionEventData(successfulActions))
 				return nil
 			}
 			err := fmt.Errorf("%w: continue control requires tool calls", errInvalidModelDecision)
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": "invalid_model_response"},
 			})
-			turnTracer.Fail("model", "invalid_model_response", err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "model", "invalid_model_response", err, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			return err
@@ -277,7 +278,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": "max_tool_calls_per_step_exceeded"},
 			})
-			turnTracer.Fail("model", "max_tool_calls_per_step_exceeded", err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "model", "max_tool_calls_per_step_exceeded", err, trace.EventData{
 				Fields: trace.Fields{
 					"step_index":      stepIndex,
 					"tool_call_count": len(calls),
@@ -290,7 +291,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": "max_tool_calls_per_turn_exceeded"},
 			})
-			turnTracer.Fail("step", "max_tool_calls_per_turn_exceeded", err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "step", "max_tool_calls_per_turn_exceeded", err, trace.EventData{
 				Fields: trace.Fields{
 					"step_index":       stepIndex,
 					"tool_call_count":  len(calls),
@@ -342,7 +343,7 @@ func (l *Loop) runBoundedSteps(
 			})
 			continue
 		}
-		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex)
+		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex, event, turnID)
 		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
 		if err != nil {
 			successfulActions = append(successfulActions, outcome.SuccessfulActions...)
@@ -358,7 +359,7 @@ func (l *Loop) runBoundedSteps(
 			turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex, "reason": reason},
 			})
-			turnTracer.Fail("action", reason, err, trace.EventData{
+			l.failTurn(ctx, env, turnTracer, key, event, turnID, "action", reason, err, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			return err
@@ -398,7 +399,7 @@ func (l *Loop) runBoundedSteps(
 				Fields: trace.Fields{"step_index": stepIndex},
 			})
 			l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionSettledTurn)
-			turnTracer.Complete(lastCompletedActionEventData(successfulActions))
+			l.completeTurn(ctx, env, turnTracer, key, event, turnID, lastCompletedActionEventData(successfulActions))
 			return nil
 		}
 	}
@@ -407,13 +408,89 @@ func (l *Loop) runBoundedSteps(
 	turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
 		Fields: trace.Fields{"reason": "max_steps_exceeded"},
 	})
-	turnTracer.Fail("step", "max_steps_exceeded", err, trace.EventData{
+	l.failTurn(ctx, env, turnTracer, key, event, turnID, "step", "max_steps_exceeded", err, trace.EventData{
 		Fields: trace.Fields{
 			"max_steps":        l.config.MaxSteps,
 			"total_tool_calls": totalToolCalls,
 		},
 	})
 	return err
+}
+
+func (l *Loop) completeTurn(
+	ctx context.Context,
+	env Environment,
+	turnTracer trace.TurnTracer,
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
+	turnID string,
+	data trace.EventData,
+) {
+	l.sendTurnCompletion(ctx, env, turnTracer, key, event, turnID, protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED, nil)
+	turnTracer.Complete(data)
+}
+
+func (l *Loop) failTurn(
+	ctx context.Context,
+	env Environment,
+	turnTracer trace.TurnTracer,
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
+	turnID string,
+	stage string,
+	reason string,
+	err error,
+	data trace.EventData,
+) {
+	l.sendTurnCompletion(ctx, env, turnTracer, key, event, turnID, protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED, turnCompletionError(reason, err))
+	turnTracer.Fail(stage, reason, err, data)
+}
+
+func (l *Loop) sendTurnCompletion(
+	ctx context.Context,
+	env Environment,
+	turnTracer trace.TurnTracer,
+	key session.AgentSessionKey,
+	event *protocolv1alpha2.GameEvent,
+	turnID string,
+	status protocolv1alpha2.TurnCompletionStatus,
+	errDetail *protocolv1alpha2.Error,
+) {
+	completion := &protocolv1alpha2.TurnCompletion{
+		TurnId:   turnID,
+		EventId:  event.GetEventId(),
+		WorldId:  key.WorldID,
+		EntityId: key.EntityID,
+		Status:   status,
+		Error:    errDetail,
+	}
+
+	sendCtx := context.WithoutCancel(ctx)
+	if err := env.SendTurnCompletion(sendCtx, completion); err != nil {
+		turnTracer.Emit(trace.EventTurnCompletionSendFailed, trace.EventData{
+			Fields: trace.Fields{
+				"turn_completion_status": status.String(),
+			},
+		})
+		return
+	}
+
+	turnTracer.Emit(trace.EventTurnCompletionSent, trace.EventData{
+		Fields: trace.Fields{
+			"turn_completion_status": status.String(),
+		},
+	})
+}
+
+func turnCompletionError(reason string, err error) *protocolv1alpha2.Error {
+	message := reason
+	if err != nil {
+		message = err.Error()
+	}
+	return &protocolv1alpha2.Error{
+		Code:    reason,
+		Message: message,
+	}
 }
 
 func (l *Loop) buildModelRequest(
@@ -443,11 +520,13 @@ func (l *Loop) buildModelRequest(
 	return req, nil
 }
 
-func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int) toolBatchScheduler {
+func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int, event *protocolv1alpha2.GameEvent, turnID string) toolBatchScheduler {
 	return toolBatchScheduler{
 		registry:             l.tools,
 		maxParallelToolCalls: l.config.MaxParallelToolCalls,
 		actionTimeout:        l.config.ActionTimeout,
+		sourceEventID:        event.GetEventId(),
+		sourceTurnID:         turnID,
 		onActionSubmit: func(item plannedToolCall) {
 			turnTracer.Emit(trace.EventActionSubmitStarted, trace.EventData{
 				ActionID: item.request.GetActionId(),

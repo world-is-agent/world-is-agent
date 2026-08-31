@@ -38,6 +38,8 @@ type toolBatchScheduler struct {
 	registry             *tool.Registry
 	maxParallelToolCalls int
 	actionTimeout        time.Duration
+	sourceEventID        string
+	sourceTurnID         string
 	onActionSubmit       func(plannedToolCall)
 	onActionResult       func(plannedToolCall, *protocolv1alpha2.ActionResult)
 }
@@ -186,7 +188,13 @@ func (s toolBatchScheduler) preflight(
 			continue
 		}
 
-		actionRequest, err := tool.BuildActionRequest(worldID, entityID, call)
+		actionRequest, err := tool.BuildActionRequest(tool.ActionRequestInput{
+			WorldID:       worldID,
+			EntityID:      entityID,
+			SourceEventID: s.sourceEventID,
+			SourceTurnID:  s.sourceTurnID,
+			ToolCall:      call,
+		})
 		if err != nil {
 			results[i] = invalidToolResult(call, toolResultCodeActionRequestInvalid, err.Error())
 			invalid[i] = true

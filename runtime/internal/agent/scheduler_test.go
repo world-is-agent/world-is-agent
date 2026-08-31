@@ -62,6 +62,10 @@ func (e *schedulerTestEnvironment) SubmitAction(ctx context.Context, req *protoc
 	}, nil
 }
 
+func (e *schedulerTestEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
+	return nil
+}
+
 func (e *schedulerTestEnvironment) recordStart(label string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

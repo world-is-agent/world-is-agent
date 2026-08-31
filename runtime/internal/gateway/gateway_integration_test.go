@@ -248,6 +248,12 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	if action.ActionId == "" {
 		t.Fatal("expected action id to be set")
 	}
+	if action.SourceEventId != "event_1" {
+		t.Fatalf("action source_event_id = %q, want event_1", action.SourceEventId)
+	}
+	if action.SourceTurnId == "" {
+		t.Fatal("action source_turn_id is empty")
+	}
 	text := action.Arguments.GetFields()["text"].GetStringValue()
 	if text == "" {
 		t.Fatal("expected speak action text to be set")
@@ -256,6 +262,10 @@ func TestConnectRunsOneTurnWithFakeAdapter(t *testing.T) {
 	timeline(t, "adapter -> ActionResult(SUCCEEDED)")
 	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
 		t.Fatalf("send action result: %v", err)
+	}
+	completion := recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	if completion.TurnId != action.SourceTurnId {
+		t.Fatalf("completion turn_id = %q, want action source_turn_id %q", completion.TurnId, action.SourceTurnId)
 	}
 	timeline(t, "adapter -> CloseSend")
 	if err := stream.CloseSend(); err != nil {
@@ -384,10 +394,20 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	if action.ActionId == "" {
 		t.Fatal("expected action id to be set")
 	}
+	if action.SourceEventId != "event_1" {
+		t.Fatalf("action source_event_id = %q, want event_1", action.SourceEventId)
+	}
+	if action.SourceTurnId == "" {
+		t.Fatal("action source_turn_id is empty")
+	}
 
 	timeline(t, "adapter -> ActionResult(SUCCEEDED)")
 	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
 		t.Fatalf("send action result: %v", err)
+	}
+	completion := recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	if completion.TurnId != action.SourceTurnId {
+		t.Fatalf("completion turn_id = %q, want action source_turn_id %q", completion.TurnId, action.SourceTurnId)
 	}
 	timeline(t, "adapter -> CloseSend")
 	if err := stream.CloseSend(); err != nil {
@@ -453,6 +473,7 @@ func TestConnectRunsSingleStepBatchWithTwoActionsAndSettle(t *testing.T) {
 	if err := stream.Send(actionResultMessage(second.ActionId)); err != nil {
 		t.Fatalf("send second action result: %v", err)
 	}
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 
 	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
 	if got := len(provider.Requests()); got != 1 {
@@ -515,6 +536,7 @@ func TestConnectRunsParallelSafeBatchAndOrdersTranscriptByToolCallOrder(t *testi
 	}
 
 	waitForGatewayProviderRequestCount(t, provider, 2)
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 	requests := provider.Requests()
 	resultTranscript := requests[1].Messages[2].Content
 	if strings.Index(resultTranscript, "call_a") > strings.Index(resultTranscript, "call_b") {
@@ -570,6 +592,7 @@ func TestConnectRunsMultiStepForNonStardewTriggerWithDefinitionID(t *testing.T) 
 	}
 
 	waitForGatewayProviderRequestCount(t, provider, 2)
+	recvTurnCompletion(t, stream, "event_1", "creature:alpha", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 	secondPrompt := provider.Requests()[1].Messages[0].Content
 	if !strings.Contains(secondPrompt, "definition_id: creature/generic") {
 		t.Fatalf("prompt missing target definition_id:\n%s", secondPrompt)
@@ -626,6 +649,7 @@ func TestConnectRetriesAfterRejectedActionResult(t *testing.T) {
 	}
 
 	waitForGatewayProviderRequestCount(t, provider, 2)
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
 	if err := stream.CloseSend(); err != nil {
 		t.Fatalf("close send: %v", err)
@@ -676,6 +700,7 @@ func TestConnectMaxStepsExceededProducesSingleTerminalTrace(t *testing.T) {
 		t.Fatalf("send action result: %v", err)
 	}
 
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED)
 	waitForTraceEventCount(t, recorder, trace.EventTurnFailed, 1)
 	events := recorder.Events()
 	terminalCount := 0
@@ -1032,6 +1057,7 @@ func TestConnectSerializesEventsForSameNPC(t *testing.T) {
 	if err := stream.Send(actionResultMessage(firstAction.ActionId)); err != nil {
 		t.Fatalf("send first action result: %v", err)
 	}
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 
 	secondObserve := recvRuntimeMessageWithin(t, stream, 300*time.Millisecond).GetObserve()
 	if secondObserve == nil || secondObserve.EntityId != "npc:Linus" {
@@ -1127,6 +1153,7 @@ func TestConnectQueuedSameNPCEventReadsPreviousTurnMemory(t *testing.T) {
 	if err := stream.Send(actionResultMessage(firstAction.ActionId)); err != nil {
 		t.Fatalf("send first action result: %v", err)
 	}
+	recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
 
 	secondObserveMessage := recvRuntimeMessage(t, stream)
 	if secondObserve := secondObserveMessage.GetObserve(); secondObserve == nil || secondObserve.EntityId != "npc:Linus" {
@@ -1760,6 +1787,42 @@ func runSuccessfulNPCInteraction(
 	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
 		t.Fatalf("send %s action result: %v", entityID, err)
 	}
+	completion := recvTurnCompletion(t, stream, "event_"+strconv.Itoa(index), entityID, protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	if action.SourceEventId != completion.EventId {
+		t.Fatalf("action source_event_id = %q, want completion event_id %q", action.SourceEventId, completion.EventId)
+	}
+	if action.SourceTurnId != completion.TurnId {
+		t.Fatalf("action source_turn_id = %q, want completion turn_id %q", action.SourceTurnId, completion.TurnId)
+	}
+}
+
+func recvTurnCompletion(
+	t *testing.T,
+	stream protocolv1alpha2.GameAgentGateway_ConnectClient,
+	eventID string,
+	entityID string,
+	status protocolv1alpha2.TurnCompletionStatus,
+) *protocolv1alpha2.TurnCompletion {
+	t.Helper()
+
+	msg := recvRuntimeMessage(t, stream)
+	completion := msg.GetTurnCompletion()
+	if completion == nil {
+		t.Fatalf("expected TurnCompletion, got %+v", msg.Payload)
+	}
+	if completion.EventId != eventID {
+		t.Fatalf("turn completion event_id = %q, want %q", completion.EventId, eventID)
+	}
+	if completion.EntityId != entityID {
+		t.Fatalf("turn completion entity_id = %q, want %q", completion.EntityId, entityID)
+	}
+	if completion.Status != status {
+		t.Fatalf("turn completion status = %s, want %s", completion.Status, status)
+	}
+	if completion.TurnId == "" {
+		t.Fatal("turn completion turn_id is empty")
+	}
+	return completion
 }
 
 func adapterHelloMessage() *protocolv1alpha2.AdapterMessage {

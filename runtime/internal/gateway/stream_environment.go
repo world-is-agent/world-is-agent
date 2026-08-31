@@ -185,6 +185,23 @@ func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alp
 	}
 }
 
+func (e *streamEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
+	if completion == nil {
+		return fmt.Errorf("turn completion is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	msg := &protocolv1alpha2.RuntimeMessage{
+		MessageId: newMessageID("turn_completion"),
+		Payload: &protocolv1alpha2.RuntimeMessage_TurnCompletion{
+			TurnCompletion: completion,
+		},
+	}
+	return e.send(msg)
+}
+
 func (e *streamEnvironment) sendCancelActionBestEffort(actionID string, reason string) {
 	msg := &protocolv1alpha2.RuntimeMessage{
 		MessageId: newMessageID("cancel_action"),

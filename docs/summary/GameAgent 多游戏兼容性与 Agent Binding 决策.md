@@ -3,7 +3,7 @@
 > **Status:** Accepted Architecture Decision
 > **Date:** 2026-08-22
 > **Applies To:** Phase5 前置架构语义；Phase5 Implementation Baseline 接受最小 additive Protocol 承载
-> **Related:** Runtime Architecture v0.4, Context Architecture v0.2, Roadmap v0.6
+> **Related:** Runtime Architecture v0.6, Context Architecture v0.2, Roadmap v0.8
 
 ---
 
@@ -379,6 +379,8 @@ turn policy
 ```
 
 不应理解为某个 entity type 的永久固定工具列表。
+
+Runtime 执行策略不得从 game-specific capability name 推断。Adapter 可以通过 `Capability.description` 给模型说明工具用途，通过 `Capability.extensions.gameagent.tool_policy` 给 Runtime 声明通用执行策略，例如 `exclusive_per_step`、`settle_after_success`。
 
 ## 5.6 Trigger Admission
 

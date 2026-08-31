@@ -1,9 +1,9 @@
 # GameAgent Runtime 整体架构设计规范
 
-> **Version:** v0.4
+> **Version:** v0.6
 > **Status:** Architecture Baseline
-> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 In Review
-> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-28）
+> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted
+> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）
 > **Purpose:** 定义 GameAgent 的长期架构边界、核心运行模型、模块职责、依赖方向和演进约束。
 > 本文中的 `MUST / MUST NOT / SHOULD / MAY` 为规范性关键词。
 
@@ -64,9 +64,9 @@ Phase 技术方案原则上 MUST 遵守本文。
 
 # 2. Baseline 来源
 
-Architecture v0.4 不是纯理论设计。
+Architecture v0.6 不是纯理论设计。
 
-它建立在已经完成并验收的四个真实阶段之上。
+它建立在已经完成并验收的多个真实阶段之上。
 
 ## Phase1 已验证
 
@@ -833,7 +833,28 @@ Action terminal result
 resume AgentTurn
 ```
 
-## 12.1 ActionResult 与 TurnCompletion
+## 12.1 ActionRequest Source、ActionResult 与 TurnCompletion
+
+`ActionRequest` 是 Runtime 请求 Adapter 执行 Action 的协议消息。
+
+当 Action 来源于 accepted GameEvent 对应的 AgentTurn 时，Runtime MUST 写入：
+
+```text
+source_event_id
+source_turn_id
+```
+
+`source_event_id` 来自原 GameEvent.event_id，是 Adapter 查找 interaction context snapshot 的协议主键。`source_turn_id` 来自 Runtime turn_id，只作为诊断与 trace 对齐字段。
+
+Adapter MAY 使用 `ActionRequest.source_event_id` 在 effect time 校验玩家、NPC、world、location、conversation 或距离是否仍符合该 Action 的原始交互上下文。
+
+模型 MUST NOT 生成或修改：
+
+```text
+source_event_id
+source_turn_id
+conversation_id
+```
 
 `ActionResult` 是 Action 的终态事实：
 
@@ -877,7 +898,7 @@ Memory payload
 
 Adapter MAY 使用 TurnCompletion 释放本地 interaction context、pending lock 或 UI 等待态。
 
-v0.4 冻结这些能力要求。
+v0.6 冻结这些能力要求。
 
 不冻结：
 
@@ -1306,6 +1327,26 @@ execution implementation
 game-side failure
 ```
 
+`Capability.description` 是 model-facing 自然语言说明。它可以包含具体游戏工具的用途、参数解释和游戏侧效果。
+
+Runtime-facing 执行策略必须使用结构化 metadata，不从 description 解析：
+
+```text
+Capability.extensions.gameagent.tool_policy
+```
+
+当前已确定的最小 policy 词表：
+
+```text
+exclusive_per_step
+    该 tool call 必须单独占据当前 AgentStep。
+
+settle_after_success
+    该 tool call 成功后，当前 Turn 应收敛到 settle。
+```
+
+后续玩家输入或环境进展由新的 GameEvent 驱动这一事实，属于 capability description 与 event contract，不作为 Runtime-facing policy。
+
 Runtime MUST NOT 写死：
 
 ```text
@@ -1313,7 +1354,11 @@ Stardew emote enum
 Stardew speak 参数规则
 NPC.doEmote mapping
 Stardew movement semantics
+present_dialogue 特殊执行语义
+任意 game-specific capability name 对应的 Runtime policy
 ```
+
+不同游戏可以用不同 capability name 表达同类能力。Runtime 只能通过 `execution_mode`、`concurrency_mode` 和 `extensions.gameagent.tool_policy` 执行通用调度规则。
 
 Environment Tool 的通用链路：
 
@@ -1427,6 +1472,14 @@ Tool
 Environment Tool
     speak
     emote
+    present_dialogue
+    face_player
+```
+
+Phase6 待验证的异步 Environment Tool：
+
+```text
+move_to
 ```
 
 未来 Runtime Tool MAY 包括：
@@ -2591,7 +2644,7 @@ Dependency impact:
 23. Stardew Adapter 可以通过 conversation_id、present_dialogue、player_said_to_npc 和 face_player 提供正式对话交互面。
 ```
 
-这些构成 v0.3 的实际证据基础。
+这些构成 v0.6 的实际证据基础。
 
 ------
 
@@ -2614,7 +2667,13 @@ TriggerDecision 与 EventAck 应逻辑分离
 
 Runtime 必须允许 Policy 位于 Capability 与 Tool exposure 之间
 
+Runtime tool policy 必须来自结构化 capability metadata，不来自 game-specific capability name
+
+Tool-specific Turn 收敛语义应由 Capability.extensions.gameagent.tool_policy 承载，不应硬编码在 Runtime Core 的 capability name 分支里
+
 Action 模型必须允许长时间异步执行
+
+ActionRequest 必须能把事件触发的 Action 绑定回 source_event_id / source_turn_id
 
 AgentTurn 必须允许未来 waiting / suspend / resume
 
@@ -2705,7 +2764,7 @@ Trace backend
 Evaluation framework
 ```
 
-这些内容不得因为 Architecture v0.4 存在就被认为已经设计完成。
+这些内容不得因为 Architecture v0.6 存在就被认为已经设计完成。
 
 ------
 
@@ -2803,4 +2862,4 @@ Adapter owns translation.
 Game owns execution.
 ```
 
-这组边界构成 **GameAgent Runtime Architecture v0.4 Baseline**。
+这组边界构成 **GameAgent Runtime Architecture v0.6 Baseline**。

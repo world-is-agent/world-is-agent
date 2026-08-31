@@ -31,7 +31,7 @@ const (
 	toolResultCodeToolArgumentsInvalid   = "tool_arguments_invalid"
 	toolResultCodeActionRequestInvalid   = "action_request_invalid"
 	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
-	toolResultCodePresentDialogueBatch   = "present_dialogue_must_be_only_tool_call"
+	toolResultCodeExclusiveToolBatch     = "exclusive_tool_must_be_only_tool_call"
 )
 
 type toolBatchScheduler struct {
@@ -46,11 +46,13 @@ type toolBatchOutcome struct {
 	Results                []model.ToolResult
 	SuccessfulActions      []completedToolAction
 	HasModelVisibleFailure bool
+	SettleAfterSuccess     bool
 }
 
 type completedToolAction struct {
 	ToolCall     model.ToolCall
 	ActionResult *protocolv1alpha2.ActionResult
+	Policy       tool.ToolPolicy
 }
 
 type plannedToolCall struct {
@@ -84,6 +86,7 @@ func (s toolBatchScheduler) Run(
 
 	results := make([]model.ToolResult, len(calls))
 	successfulActions := make([]completedToolAction, 0, len(calls))
+	settleAfterSuccess := false
 	for i := 0; i < len(plan); {
 		if plan[i].entry.Concurrency == tool.ConcurrencyParallelSafe {
 			end := i + 1
@@ -93,15 +96,18 @@ func (s toolBatchScheduler) Run(
 			groupSuccessfulActions, failed, err := s.runParallelGroup(ctx, env, plan[i:end], results)
 			if err != nil {
 				successfulActions = append(successfulActions, groupSuccessfulActions...)
-				return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, err
+				settleAfterSuccess = settleAfterSuccess || completedActionsShouldSettle(groupSuccessfulActions)
+				return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions, SettleAfterSuccess: settleAfterSuccess}, err
 			}
 			successfulActions = append(successfulActions, groupSuccessfulActions...)
+			settleAfterSuccess = settleAfterSuccess || completedActionsShouldSettle(groupSuccessfulActions)
 			if failed {
 				fillPriorGroupSkipped(results, plan[end:])
 				return toolBatchOutcome{
 					Results:                results,
 					SuccessfulActions:      successfulActions,
 					HasModelVisibleFailure: true,
+					SettleAfterSuccess:     settleAfterSuccess,
 				}, nil
 			}
 			i = end
@@ -110,7 +116,7 @@ func (s toolBatchScheduler) Run(
 
 		result, actionResult, err := s.runOne(ctx, env, plan[i])
 		if err != nil {
-			return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, err
+			return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions, SettleAfterSuccess: settleAfterSuccess}, err
 		}
 		results[plan[i].index] = result
 		if result.Status != toolResultStatusSucceeded {
@@ -119,16 +125,20 @@ func (s toolBatchScheduler) Run(
 				Results:                results,
 				SuccessfulActions:      successfulActions,
 				HasModelVisibleFailure: true,
+				SettleAfterSuccess:     settleAfterSuccess,
 			}, nil
 		}
-		successfulActions = append(successfulActions, completedToolAction{
+		action := completedToolAction{
 			ToolCall:     plan[i].call,
 			ActionResult: actionResult,
-		})
+			Policy:       plan[i].entry.Policy,
+		}
+		successfulActions = append(successfulActions, action)
+		settleAfterSuccess = settleAfterSuccess || action.Policy.SettleAfterSuccess
 		i++
 	}
 
-	return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions}, nil
+	return toolBatchOutcome{Results: results, SuccessfulActions: successfulActions, SettleAfterSuccess: settleAfterSuccess}, nil
 }
 
 func (s toolBatchScheduler) preflight(
@@ -153,6 +163,12 @@ func (s toolBatchScheduler) preflight(
 		entry, ok := s.lookup(call.Name)
 		if !ok {
 			results[i] = invalidToolResult(call, toolResultCodeToolNotRegistered, fmt.Sprintf("tool %q is not registered", call.Name))
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+		if entry.Policy.ExclusivePerStep && len(calls) > 1 {
+			results[i] = invalidToolResult(call, toolResultCodeExclusiveToolBatch, "tool with exclusive_per_step policy must be the only tool call in the model response")
 			invalid[i] = true
 			hasFailure = true
 			continue
@@ -262,6 +278,7 @@ func (s toolBatchScheduler) runParallelGroup(
 				successfulActionsByIndex[executed.item.index] = completedToolAction{
 					ToolCall:     executed.item.call,
 					ActionResult: executed.actionResult,
+					Policy:       executed.item.entry.Policy,
 				}
 			}
 		}
@@ -286,6 +303,15 @@ func successfulActionsFromParallelGroup(group []plannedToolCall, actionsByIndex 
 		}
 	}
 	return successfulActions
+}
+
+func completedActionsShouldSettle(actions []completedToolAction) bool {
+	for _, action := range actions {
+		if action.Policy.SettleAfterSuccess {
+			return true
+		}
+	}
+	return false
 }
 
 func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, *protocolv1alpha2.ActionResult, error) {

@@ -152,44 +152,50 @@ func TestConfigWithDefaultsFillsPromptConfig(t *testing.T) {
 	}
 }
 
-func TestDefaultPromptGuidesOngoingDialogueChoices(t *testing.T) {
+func TestDefaultToolInstructionDoesNotNameGameSpecificTools(t *testing.T) {
 	cfg := agent.DefaultConfig()
 	instruction := cfg.Prompt.ToolInstruction
 
-	for _, want := range []string{"player_said_to_npc", "2-3", "reply_options", "allow_free_text=true"} {
+	for _, forbidden := range gameSpecificToolInstructionTerms() {
+		if strings.Contains(instruction, forbidden) {
+			t.Fatalf("default tool instruction should not mention game-specific term %q: %q", forbidden, instruction)
+		}
+	}
+}
+
+func TestDefaultToolInstructionKeepsGenericToolGuidance(t *testing.T) {
+	cfg := agent.DefaultConfig()
+	instruction := cfg.Prompt.ToolInstruction
+
+	for _, want := range []string{"available tools", "descriptions", "input schemas", "settle"} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("expected default tool instruction to mention %q, got %q", want, instruction)
 		}
 	}
 }
 
-func TestDefaultPromptSettlesAfterPresentDialogue(t *testing.T) {
-	cfg := agent.DefaultConfig()
-
-	assertPresentDialogueSettleInstruction(t, cfg.Prompt.ToolInstruction)
-}
-
-func TestConfigPromptSettlesAfterPresentDialogue(t *testing.T) {
+func TestBundledToolInstructionDoesNotNameGameSpecificTools(t *testing.T) {
 	cfg, err := agent.LoadConfigFile(filepath.Join("..", "..", "config", "agent.json"))
 	if err != nil {
 		t.Fatalf("load bundled config: %v", err)
 	}
 
-	assertPresentDialogueSettleInstruction(t, cfg.Prompt.ToolInstruction)
+	for _, forbidden := range gameSpecificToolInstructionTerms() {
+		if strings.Contains(cfg.Prompt.ToolInstruction, forbidden) {
+			t.Fatalf("bundled tool instruction should not mention game-specific term %q: %q", forbidden, cfg.Prompt.ToolInstruction)
+		}
+	}
 }
 
-func assertPresentDialogueSettleInstruction(t *testing.T, instruction string) {
-	t.Helper()
-
-	for _, want := range []string{
-		"After calling present_dialogue",
-		"must be the only tool call",
-		"settle the current turn",
-		"wait for the next player_said_to_npc",
-	} {
-		if !strings.Contains(instruction, want) {
-			t.Fatalf("expected present_dialogue settle instruction to mention %q, got %q", want, instruction)
-		}
+func gameSpecificToolInstructionTerms() []string {
+	return []string{
+		"present_dialogue",
+		"player_said_to_npc",
+		"reply_options",
+		"allow_free_text",
+		"speak",
+		"emote",
+		"face_player",
 	}
 }
 

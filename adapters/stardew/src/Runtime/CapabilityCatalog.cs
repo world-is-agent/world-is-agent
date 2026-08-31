@@ -1,4 +1,5 @@
 using GameAgent.Protocol.V1Alpha2;
+using Google.Protobuf.WellKnownTypes;
 
 namespace GameAgent.Stardew.Runtime;
 
@@ -45,10 +46,11 @@ public static class CapabilityCatalog
                 {
                     Name = "present_dialogue",
                     Version = "0.1.0",
-                    Description = "Displays NPC dialogue with optional reply options or free-text input for the player; after using it, wait for player_said_to_npc before continuing that conversation.",
+                    Description = "Displays NPC dialogue with optional reply options or free-text input for the player. Use it when the player should be able to reply; it must be the only tool call in its model response. After it succeeds, the current turn ends; wait for player_said_to_npc before continuing that conversation. Omitting reply options and free text means the conversation ends after the NPC line is shown.",
                     InputSchemaJson = PresentDialogueInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
                     ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
+                    Extensions = PresentDialogueExtensions(),
                 },
                 new Capability
                 {
@@ -61,5 +63,19 @@ public static class CapabilityCatalog
                 },
             },
         };
+    }
+
+    private static Struct PresentDialogueExtensions()
+    {
+        Struct toolPolicy = new();
+        toolPolicy.Fields.Add("exclusive_per_step", Value.ForBool(true));
+        toolPolicy.Fields.Add("settle_after_success", Value.ForBool(true));
+
+        Struct gameagent = new();
+        gameagent.Fields.Add("tool_policy", Value.ForStruct(toolPolicy));
+
+        Struct extensions = new();
+        extensions.Fields.Add("gameagent", Value.ForStruct(gameagent));
+        return extensions;
     }
 }

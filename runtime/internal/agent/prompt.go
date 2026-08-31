@@ -12,7 +12,7 @@ Your job:
 - %s
 - Language: %s.
 - Style: %s.
-- The speak text must be no more than %d characters.
+- Keep NPC-authored text no more than %d characters unless a tool schema gives a stricter limit.
 - Keep dialogue short and natural.`,
 		cfg.ToolInstruction,
 		cfg.Language,

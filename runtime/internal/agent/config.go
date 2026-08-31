@@ -83,7 +83,7 @@ func DefaultConfig() Config {
 			Language:        "Simplified Chinese",
 			NPCStyle:        "自然、简短、符合当前游戏 NPC 的语气",
 			MaxSpeakChars:   60,
-			ToolInstruction: "Use available tools only when the NPC should take an environment action. Use present_dialogue for interactive conversation. present_dialogue must be the only tool call in its model response. After calling present_dialogue, settle the current turn and wait for the next player_said_to_npc event before any further NPC dialogue/action for that conversation. After player_said_to_npc in an ongoing conversation, prefer 2-3 concise reply_options plus allow_free_text=true so the player can choose or type. Use allow_free_text=true without reply_options only for intentionally open-ended questions or when no useful suggested replies exist. Omitting reply_options and allow_free_text=false means the conversation ends after the NPC line is shown. Use speak for a plain one-line NPC remark without player replies. Use emote for clear visible emotion, and face_player when the NPC should turn toward the player.",
+			ToolInstruction: "Use available tools only when the NPC should take an environment action. Choose tools from their descriptions and input schemas. If a tool result reports rejected, failed, invalid, cancelled, or interrupted, use the next step to adjust or settle. Use settle when no more environment action is needed.",
 		},
 	}
 }

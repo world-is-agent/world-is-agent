@@ -25,4 +25,7 @@ func TestBuildSystemPromptUsesPromptConfig(t *testing.T) {
 			t.Fatalf("expected prompt to contain %q, got:\n%s", want, prompt)
 		}
 	}
+	if strings.Contains(prompt, "speak") {
+		t.Fatalf("prompt should not name a concrete tool capability:\n%s", prompt)
+	}
 }

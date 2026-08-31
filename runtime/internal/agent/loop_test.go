@@ -476,7 +476,7 @@ func newSpeakEmoteRegistry() *tool.Registry {
 	return registry
 }
 
-func newSpeakPresentDialogueRegistry() *tool.Registry {
+func newSpeakAskPlayerRegistry() *tool.Registry {
 	registry := tool.NewRegistry()
 	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 		{
@@ -486,13 +486,29 @@ func newSpeakPresentDialogueRegistry() *tool.Registry {
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		},
 		{
-			Name:            "present_dialogue",
-			Description:     "Show NPC dialogue and wait for player input.",
+			Name:            "ask_player",
+			Description:     "Show a player-facing prompt and wait for a later player response event.",
 			InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`,
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+			Extensions:      loopToolPolicyExtensions(true, true),
 		},
 	})
 	return registry
+}
+
+func loopToolPolicyExtensions(exclusivePerStep bool, settleAfterSuccess bool) *structpb.Struct {
+	extensions, err := structpb.NewStruct(map[string]any{
+		"gameagent": map[string]any{
+			"tool_policy": map[string]any{
+				"exclusive_per_step":   exclusivePerStep,
+				"settle_after_success": settleAfterSuccess,
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return extensions
 }
 
 func newParallelSenseRegistry() *tool.Registry {
@@ -864,8 +880,8 @@ func TestHandleEventRunsBatchToolCallsThenSettle(t *testing.T) {
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }
 
-func TestHandleEventRejectsPresentDialogueMixedWithOtherToolCalls(t *testing.T) {
-	registry := newSpeakPresentDialogueRegistry()
+func TestHandleEventRejectsExclusivePolicyToolMixedWithOtherToolCalls(t *testing.T) {
+	registry := newSpeakAskPlayerRegistry()
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &scriptedProvider{
@@ -873,7 +889,7 @@ func TestHandleEventRejectsPresentDialogueMixedWithOtherToolCalls(t *testing.T) 
 			{
 				Decision: model.ModelDecision{
 					ToolCalls: []model.ToolCall{
-						{ID: "call_1", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+						{ID: "call_1", Name: "ask_player", Arguments: map[string]any{"text": "Choose one."}},
 						{ID: "call_2", Name: "speak", Arguments: map[string]any{"text": "This would overwrite the menu."}},
 					},
 					Control: model.ControlDirective{Kind: model.ControlContinue},
@@ -882,7 +898,7 @@ func TestHandleEventRejectsPresentDialogueMixedWithOtherToolCalls(t *testing.T) 
 			{
 				Decision: model.ModelDecision{
 					ToolCalls: []model.ToolCall{
-						{ID: "call_3", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+						{ID: "call_3", Name: "ask_player", Arguments: map[string]any{"text": "Choose one."}},
 					},
 					Control: model.ControlDirective{Kind: model.ControlSettle},
 				},
@@ -897,23 +913,26 @@ func TestHandleEventRejectsPresentDialogueMixedWithOtherToolCalls(t *testing.T) 
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
-		t.Fatalf("submitted action count = %d, want only retried present_dialogue", got)
+		t.Fatalf("submitted action count = %d, want only retried exclusive policy tool", got)
 	}
-	if env.submittedActions[0].Capability != "present_dialogue" {
-		t.Fatalf("submitted capability = %q, want present_dialogue", env.submittedActions[0].Capability)
+	if env.submittedActions[0].Capability != "ask_player" {
+		t.Fatalf("submitted capability = %q, want ask_player", env.submittedActions[0].Capability)
 	}
 	if got := len(provider.requests); got != 2 {
-		t.Fatalf("provider request count = %d, want retry after invalid present_dialogue batch", got)
+		t.Fatalf("provider request count = %d, want retry after invalid exclusive policy batch", got)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "present_dialogue_must_be_only_tool_call") {
-		t.Fatalf("retry request should explain present_dialogue batch validation; messages=%+v", provider.requests[1].Messages)
+	if !requestMessagesContain(provider.requests[1].Messages, "exclusive_tool_must_be_only_tool_call") {
+		t.Fatalf("retry request should explain exclusive policy batch validation; messages=%+v", provider.requests[1].Messages)
+	}
+	if requestMessagesContain(provider.requests[1].Messages, "present_dialogue_must_be_only_tool_call") {
+		t.Fatalf("retry request should not expose old present_dialogue-specific code; messages=%+v", provider.requests[1].Messages)
 	}
 	assertTraceContains(t, recorder.events, trace.EventToolBatchFailed)
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }
 
-func TestHandleEventSettlesAfterPresentDialogueEvenWhenModelContinues(t *testing.T) {
-	registry := newSpeakPresentDialogueRegistry()
+func TestHandleEventSettlesAfterSuccessfulPolicyToolWithoutNextModelRequest(t *testing.T) {
+	registry := newSpeakAskPlayerRegistry()
 	env := &fakeEnvironment{}
 	recorder := &recordingTraceRecorder{}
 	provider := &scriptedProvider{
@@ -921,7 +940,7 @@ func TestHandleEventSettlesAfterPresentDialogueEvenWhenModelContinues(t *testing
 			{
 				Decision: model.ModelDecision{
 					ToolCalls: []model.ToolCall{
-						{ID: "call_1", Name: "present_dialogue", Arguments: map[string]any{"text": "Choose one."}},
+						{ID: "call_1", Name: "ask_player", Arguments: map[string]any{"text": "Choose one."}},
 					},
 					Control: model.ControlDirective{Kind: model.ControlContinue},
 				},
@@ -944,13 +963,13 @@ func TestHandleEventSettlesAfterPresentDialogueEvenWhenModelContinues(t *testing
 		t.Fatalf("HandleEvent returned error: %v", err)
 	}
 	if got := len(env.submittedActions); got != 1 {
-		t.Fatalf("submitted action count = %d, want only present_dialogue", got)
+		t.Fatalf("submitted action count = %d, want only policy-settled action", got)
 	}
-	if env.submittedActions[0].Capability != "present_dialogue" {
-		t.Fatalf("submitted capability = %q, want present_dialogue", env.submittedActions[0].Capability)
+	if env.submittedActions[0].Capability != "ask_player" {
+		t.Fatalf("submitted capability = %q, want ask_player", env.submittedActions[0].Capability)
 	}
 	if got := len(provider.requests); got != 1 {
-		t.Fatalf("provider request count = %d, want present_dialogue to settle the turn", got)
+		t.Fatalf("provider request count = %d, want policy-settled action to complete the turn", got)
 	}
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }

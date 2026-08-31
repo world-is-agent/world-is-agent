@@ -422,11 +422,17 @@ Assert(speak.Description.Contains("dialogue text", StringComparison.OrdinalIgnor
 Assert(emote.Description.Contains("emote bubble", StringComparison.OrdinalIgnoreCase), "emote description should describe emote bubble effect");
 Assert(presentDialogue.Description.Contains("reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe reply options");
 Assert(presentDialogue.Description.Contains("wait for player_said_to_npc", StringComparison.OrdinalIgnoreCase), "present_dialogue description should tell the agent to wait for player input");
+Assert(presentDialogue.Description.Contains("only tool call", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe exclusive tool-call use");
+Assert(presentDialogue.Description.Contains("conversation ends", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe ending without reply inputs");
 Assert(facePlayer.Description.Contains("face the player", StringComparison.OrdinalIgnoreCase), "face_player description should describe facing effect");
 Assert(speak.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "speak capability should be sequential");
 Assert(emote.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "emote capability should be sequential");
 Assert(presentDialogue.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "present_dialogue capability should be sequential");
 Assert(facePlayer.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "face_player capability should be sequential");
+Struct presentDialogueGameAgentExtensions = RequireStruct(presentDialogue.Extensions, "gameagent");
+Struct presentDialogueToolPolicy = RequireStruct(presentDialogueGameAgentExtensions, "tool_policy");
+Assert(presentDialogueToolPolicy.Fields["exclusive_per_step"].BoolValue, "present_dialogue should declare exclusive_per_step policy");
+Assert(presentDialogueToolPolicy.Fields["settle_after_success"].BoolValue, "present_dialogue should declare settle_after_success policy");
 
 ActionRequest presentDialogueRequest = new()
 {

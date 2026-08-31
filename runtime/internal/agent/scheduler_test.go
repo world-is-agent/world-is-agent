@@ -320,6 +320,35 @@ func TestSchedulerProducesOneToolResultPerToolCallWhenBatchValidationFails(t *te
 	}
 }
 
+func TestSchedulerRejectsExclusivePolicyToolMixedBatchBeforeExecution(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerCapabilityWithPolicy("ask_player", tool.ConcurrencySequential, tool.ToolPolicy{ExclusivePerStep: true}),
+		schedulerCapability("speak", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, maxParallelToolCalls: 2, actionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_1", "ask_player", "question"),
+		schedulerCall("call_2", "speak", "aside"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_1", "ask_player", "invalid", "exclusive_tool_must_be_only_tool_call")
+	assertToolResult(t, outcome.Results[1], "call_2", "speak", "skipped", "batch_validation_failed")
+	if strings.Contains(outcome.Results[0].Message, "ask_player") {
+		t.Fatalf("exclusive policy error message should not contain capability name: %q", outcome.Results[0].Message)
+	}
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
 func TestSchedulerPreflightsBuildActionRequestBeforeAnyExecution(t *testing.T) {
 	registry := schedulerRegistry(
 		schedulerCapability("speak", tool.ConcurrencySequential),
@@ -657,6 +686,27 @@ func schedulerCapabilityWithSchema(name string, concurrency tool.ConcurrencyMode
 		ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
 		ConcurrencyMode: mode,
 	}
+}
+
+func schedulerCapabilityWithPolicy(name string, concurrency tool.ConcurrencyMode, policy tool.ToolPolicy) *protocolv1alpha2.Capability {
+	capability := schedulerCapability(name, concurrency)
+	capability.Extensions = schedulerToolPolicyExtensions(policy)
+	return capability
+}
+
+func schedulerToolPolicyExtensions(policy tool.ToolPolicy) *structpb.Struct {
+	extensions, err := structpb.NewStruct(map[string]any{
+		"gameagent": map[string]any{
+			"tool_policy": map[string]any{
+				"exclusive_per_step":   policy.ExclusivePerStep,
+				"settle_after_success": policy.SettleAfterSuccess,
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return extensions
 }
 
 func schedulerCall(id string, name string, label string) model.ToolCall {

@@ -8,6 +8,8 @@ import (
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
 	"gameagent/runtime/internal/model"
+
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Registry 保存 Runtime 当前可暴露给 Agent Loop 的工具。
@@ -35,6 +37,12 @@ type Entry struct {
 	Definition  model.ToolDefinition
 	Kind        Kind
 	Concurrency ConcurrencyMode
+	Policy      ToolPolicy
+}
+
+type ToolPolicy struct {
+	ExclusivePerStep   bool
+	SettleAfterSuccess bool
 }
 
 func NewRegistry() *Registry {
@@ -56,6 +64,11 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 		if capability.GetExecutionMode() == protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC {
 			continue
 		}
+		policy, ok := toolPolicyFromCapability(capability)
+		if !ok {
+			fmt.Printf("skip capability %q: invalid tool_policy metadata\n", capability.Name)
+			continue
+		}
 		var raw json.RawMessage
 		if err := json.Unmarshal([]byte(capability.InputSchemaJson), &raw); err != nil {
 			fmt.Printf("skip capability %q: invalid input_schema_json: %v\n", capability.Name, err)
@@ -75,6 +88,7 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 			},
 			Kind:        KindEnvironment,
 			Concurrency: concurrencyModeFromCapability(capability),
+			Policy:      policy,
 		}
 		r.mu.Unlock()
 	}
@@ -112,4 +126,46 @@ func concurrencyModeFromCapability(capability *protocolv1alpha2.Capability) Conc
 		return ConcurrencyParallelSafe
 	}
 	return ConcurrencySequential
+}
+
+func toolPolicyFromCapability(capability *protocolv1alpha2.Capability) (ToolPolicy, bool) {
+	extensions := capability.GetExtensions()
+	if extensions == nil {
+		return ToolPolicy{}, true
+	}
+
+	gameagentValue, ok := extensions.GetFields()["gameagent"]
+	if !ok {
+		return ToolPolicy{}, true
+	}
+	gameagent := gameagentValue.GetStructValue()
+	if gameagent == nil {
+		return ToolPolicy{}, false
+	}
+
+	toolPolicyValue, ok := gameagent.GetFields()["tool_policy"]
+	if !ok {
+		return ToolPolicy{}, true
+	}
+	toolPolicyStruct := toolPolicyValue.GetStructValue()
+	if toolPolicyStruct == nil {
+		return ToolPolicy{}, false
+	}
+
+	var policy ToolPolicy
+	if value, ok := toolPolicyStruct.GetFields()["exclusive_per_step"]; ok {
+		boolValue, ok := value.GetKind().(*structpb.Value_BoolValue)
+		if !ok {
+			return ToolPolicy{}, false
+		}
+		policy.ExclusivePerStep = boolValue.BoolValue
+	}
+	if value, ok := toolPolicyStruct.GetFields()["settle_after_success"]; ok {
+		boolValue, ok := value.GetKind().(*structpb.Value_BoolValue)
+		if !ok {
+			return ToolPolicy{}, false
+		}
+		policy.SettleAfterSuccess = boolValue.BoolValue
+	}
+	return policy, true
 }

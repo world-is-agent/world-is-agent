@@ -171,12 +171,7 @@ func (l *Loop) HandleEvent(
 	cancelObserve()
 
 	if err != nil {
-		reason := "observation_failed"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "observe_timeout"
-		} else if reasoner, ok := err.(interface{ FailureReason() string }); ok {
-			reason = reasoner.FailureReason()
-		}
+		reason := observationFailureReason(err)
 		l.failTurn(ctx, env, turnTracer, key, event, turnID, "observation", reason, err, trace.EventData{})
 		return err
 	}
@@ -199,6 +194,7 @@ func (l *Loop) runBoundedSteps(
 	transcript := make([]model.Message, 0)
 	successfulActions := make([]completedToolAction, 0)
 	totalToolCalls := 0
+	asyncActionsStarted := 0
 	seenToolCallIDs := make(map[string]struct{})
 
 	for stepIndex := 1; stepIndex <= l.config.MaxSteps; stepIndex++ {
@@ -351,7 +347,7 @@ func (l *Loop) runBoundedSteps(
 			})
 			continue
 		}
-		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex, event, turnID)
+		scheduler := l.newToolBatchScheduler(turnTracer, stepIndex, event, turnID, asyncActionsStarted >= l.config.MaxAsyncActionsPerTurn)
 		outcome, err := scheduler.Run(ctx, env, key.WorldID, key.EntityID, calls)
 		if err != nil {
 			successfulActions = append(successfulActions, outcome.SuccessfulActions...)
@@ -378,6 +374,30 @@ func (l *Loop) runBoundedSteps(
 			ToolResults: copyToolResultsForTranscript(outcome.Results),
 		})
 		successfulActions = append(successfulActions, outcome.SuccessfulActions...)
+		if outcome.AsyncActionStarted {
+			asyncActionsStarted++
+			turnTracer.Emit(trace.EventObservationRequested, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex, "reason": "async_resume"},
+			})
+			resumeObserveCtx, cancelResumeObserve := context.WithTimeout(ctx, l.config.ObserveTimeout)
+			resumedObservation, err := env.Observe(resumeObserveCtx, key.WorldID, key.EntityID)
+			cancelResumeObserve()
+			if err != nil {
+				l.updateMemoryForCompletedTurn(ctx, turnTracer, key, turnID, event, successfulActions, memoryProjectionPriorSuccessfulActions)
+				reason := observationFailureReason(err)
+				turnTracer.Emit(trace.EventAgentStepFailed, trace.EventData{
+					Fields: trace.Fields{"step_index": stepIndex, "reason": reason},
+				})
+				l.failTurn(ctx, env, turnTracer, key, event, turnID, "observation", reason, err, trace.EventData{
+					Fields: trace.Fields{"step_index": stepIndex},
+				})
+				return err
+			}
+			obs = resumedObservation
+			turnTracer.Emit(trace.EventObservationReceived, trace.EventData{
+				Fields: trace.Fields{"step_index": stepIndex, "reason": "async_resume"},
+			})
+		}
 
 		if outcome.HasModelVisibleFailure {
 			turnTracer.Emit(trace.EventToolBatchFailed, trace.EventData{
@@ -402,6 +422,9 @@ func (l *Loop) runBoundedSteps(
 		turnTracer.Emit(trace.EventAgentStepCompleted, trace.EventData{
 			Fields: trace.Fields{"step_index": stepIndex},
 		})
+		if outcome.AsyncActionStarted {
+			continue
+		}
 		if decision.Control.Kind == model.ControlSettle || outcome.SettleAfterSuccess {
 			turnTracer.Emit(trace.EventTurnSettled, trace.EventData{
 				Fields: trace.Fields{"step_index": stepIndex},
@@ -528,13 +551,14 @@ func (l *Loop) buildModelRequest(
 	return req, nil
 }
 
-func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int, event *protocolv1alpha2.GameEvent, turnID string) toolBatchScheduler {
+func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int, event *protocolv1alpha2.GameEvent, turnID string, asyncActionLimitFull bool) toolBatchScheduler {
 	return toolBatchScheduler{
 		registry:             l.tools,
 		maxParallelToolCalls: l.config.MaxParallelToolCalls,
 		actionTimeout:        l.config.ActionTimeout,
 		actionStartTimeout:   l.config.ActionStartTimeout,
 		asyncActionTimeout:   l.config.AsyncActionTimeout,
+		asyncActionLimitFull: asyncActionLimitFull,
 		sourceEventID:        event.GetEventId(),
 		sourceTurnID:         turnID,
 		onActionSubmit: func(item plannedToolCall) {
@@ -547,6 +571,27 @@ func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int,
 				},
 			})
 		},
+		onActionStatusUpdate: func(item plannedToolCall, update *protocolv1alpha2.ActionStatusUpdate) {
+			turnTracer.Emit(trace.EventActionStatusUpdateReceived, trace.EventData{
+				ActionID: update.GetActionId(),
+				Tool:     item.request.GetCapability(),
+				Fields: trace.Fields{
+					"step_index":    stepIndex,
+					"tool_call_id":  item.call.ID,
+					"action_status": update.GetStatus().String(),
+				},
+			})
+			if item.entry.Execution == tool.ExecutionAsync {
+				turnTracer.Emit(trace.EventTurnSuspended, trace.EventData{
+					ActionID: update.GetActionId(),
+					Tool:     item.request.GetCapability(),
+					Fields: trace.Fields{
+						"step_index":   stepIndex,
+						"tool_call_id": item.call.ID,
+					},
+				})
+			}
+		},
 		onActionResult: func(item plannedToolCall, result *protocolv1alpha2.ActionResult) {
 			turnTracer.Emit(trace.EventActionResultReceived, trace.EventData{
 				ActionID: result.GetActionId(),
@@ -557,6 +602,16 @@ func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int,
 					"action_status": result.GetStatus().String(),
 				},
 			})
+			if item.entry.Execution == tool.ExecutionAsync {
+				turnTracer.Emit(trace.EventTurnResumed, trace.EventData{
+					ActionID: result.GetActionId(),
+					Tool:     item.request.GetCapability(),
+					Fields: trace.Fields{
+						"step_index":   stepIndex,
+						"tool_call_id": item.call.ID,
+					},
+				})
+			}
 		},
 	}
 }
@@ -636,6 +691,16 @@ func contextFailureReason(err error) string {
 		return "context_build_failed"
 	}
 	return "context_render_failed"
+}
+
+func observationFailureReason(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "observe_timeout"
+	}
+	if reasoner, ok := err.(interface{ FailureReason() string }); ok {
+		return reasoner.FailureReason()
+	}
+	return "observation_failed"
 }
 
 func actionFailureReason(err error) string {

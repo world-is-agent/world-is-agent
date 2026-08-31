@@ -33,6 +33,7 @@ const (
 	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
 	toolResultCodeExclusiveToolBatch     = "exclusive_tool_must_be_only_tool_call"
 	toolResultCodeAsyncBatchUnsupported  = "async_batch_unsupported"
+	toolResultCodeAsyncActionLimit       = "async_action_limit_exceeded"
 	toolResultCodeActionStartRejected    = "action_start_rejected"
 )
 
@@ -42,6 +43,7 @@ type toolBatchScheduler struct {
 	actionTimeout        time.Duration
 	actionStartTimeout   time.Duration
 	asyncActionTimeout   time.Duration
+	asyncActionLimitFull bool
 	sourceEventID        string
 	sourceTurnID         string
 	onActionSubmit       func(plannedToolCall)
@@ -54,6 +56,7 @@ type toolBatchOutcome struct {
 	SuccessfulActions      []completedToolAction
 	HasModelVisibleFailure bool
 	SettleAfterSuccess     bool
+	AsyncActionStarted     bool
 }
 
 type completedToolAction struct {
@@ -96,7 +99,8 @@ func (s toolBatchScheduler) Run(
 			return toolBatchOutcome{}, err
 		}
 		outcome := toolBatchOutcome{
-			Results: []model.ToolResult{result},
+			Results:            []model.ToolResult{result},
+			AsyncActionStarted: true,
 		}
 		if result.Status == toolResultStatusSucceeded {
 			outcome.SuccessfulActions = []completedToolAction{{
@@ -228,6 +232,12 @@ func (s toolBatchScheduler) preflight(
 		})
 		if err != nil {
 			results[i] = invalidToolResult(call, toolResultCodeActionRequestInvalid, err.Error())
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+		if entry.Execution == tool.ExecutionAsync && s.asyncActionLimitFull {
+			results[i] = invalidToolResult(call, toolResultCodeAsyncActionLimit, "async action limit exceeded for this turn")
 			invalid[i] = true
 			hasFailure = true
 			continue

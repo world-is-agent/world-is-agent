@@ -1006,6 +1006,49 @@ func TestSchedulerAsyncFastTerminalStartResult(t *testing.T) {
 	assertNotContains(t, env.eventOrder(), "wait:already_there")
 }
 
+func TestSchedulerAsyncLimitRunsAfterPreflight(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, asyncActionLimitFull: true}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		{ID: "call_move", Name: "move_to"},
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "invalid", "tool_arguments_missing")
+}
+
+func TestSchedulerAsyncLimitRejectsExecutableAsyncCallBeforeExecution(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, asyncActionLimitFull: true}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "destination"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "invalid", "async_action_limit_exceeded")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
 func TestSchedulerAsyncStartTimeoutCancelsAction(t *testing.T) {
 	registry := schedulerRegistry(
 		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),

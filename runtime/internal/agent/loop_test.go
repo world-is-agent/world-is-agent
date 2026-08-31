@@ -34,13 +34,21 @@ func (r *recordingTraceRecorder) Close(ctx context.Context) error {
 }
 
 type fakeEnvironment struct {
-	observedWorldID  string
-	observedEntityID string
-	submittedAction  *protocolv1alpha2.ActionRequest
-	submittedActions []*protocolv1alpha2.ActionRequest
-	turnCompletions  []*protocolv1alpha2.TurnCompletion
-	completeErr      error
-	statusByTool     map[string]protocolv1alpha2.ActionStatus
+	observedWorldID   string
+	observedEntityID  string
+	observeCount      int
+	observations      []*protocolv1alpha2.Observation
+	observeErrors     []error
+	submittedAction   *protocolv1alpha2.ActionRequest
+	submittedActions  []*protocolv1alpha2.ActionRequest
+	turnCompletions   []*protocolv1alpha2.TurnCompletion
+	completeErr       error
+	statusByTool      map[string]protocolv1alpha2.ActionStatus
+	startStatusByTool map[string]protocolv1alpha2.ActionStatus
+	waitErrorsByTool  map[string]error
+	waitDelayByTool   map[string]time.Duration
+	asyncActionTools  map[string]string
+	cancelledActions  []string
 }
 
 type technicalActionEnvironment struct {
@@ -138,6 +146,21 @@ func (failProjector) Project(input memory.ProjectInput) (memory.Record, error) {
 func (f *fakeEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
 	f.observedWorldID = worldID
 	f.observedEntityID = entityID
+	f.observeCount++
+
+	if len(f.observeErrors) > 0 {
+		err := f.observeErrors[0]
+		f.observeErrors = f.observeErrors[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if len(f.observations) > 0 {
+		obs := f.observations[0]
+		f.observations = f.observations[1:]
+		return obs, nil
+	}
 
 	state, err := structpb.NewStruct(map[string]any{
 		"weather": "snow",
@@ -529,6 +552,26 @@ func newSpeakAskPlayerRegistry() *tool.Registry {
 	return registry
 }
 
+func newMoveToRegistry() *tool.Registry {
+	return newMoveToRegistryWithPolicy(tool.ToolPolicy{})
+}
+
+func newMoveToRegistryWithPolicy(policy tool.ToolPolicy) *tool.Registry {
+	registry := tool.NewRegistry()
+	capability := &protocolv1alpha2.Capability{
+		Name:            "move_to",
+		Description:     "Move the NPC to a target location and tile.",
+		InputSchemaJson: `{"type":"object","properties":{"label":{"type":"string"}},"required":["label"],"additionalProperties":false}`,
+		ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC,
+		ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+	}
+	if policy.ExclusivePerStep || policy.SettleAfterSuccess {
+		capability.Extensions = loopToolPolicyExtensions(policy.ExclusivePerStep, policy.SettleAfterSuccess)
+	}
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{capability})
+	return registry
+}
+
 func loopToolPolicyExtensions(exclusivePerStep bool, settleAfterSuccess bool) *structpb.Struct {
 	extensions, err := structpb.NewStruct(map[string]any{
 		"gameagent": map[string]any{
@@ -592,6 +635,20 @@ func playerUtteranceEvent(eventID string, key session.AgentSessionKey, sequence 
 	return event
 }
 
+func observationWithState(worldID string, entityID string, marker string) *protocolv1alpha2.Observation {
+	state, err := structpb.NewStruct(map[string]any{
+		"marker": marker,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return &protocolv1alpha2.Observation{
+		EntityId: entityID,
+		WorldId:  worldID,
+		State:    state,
+	}
+}
+
 func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
 	f.submittedAction = req
 	f.submittedActions = append(f.submittedActions, req)
@@ -612,14 +669,56 @@ func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha
 }
 
 func (f *fakeEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (agent.ActionStart, error) {
-	return agent.ActionStart{}, errors.New("StartAction is not implemented for sync loop tests")
+	f.submittedAction = req
+	f.submittedActions = append(f.submittedActions, req)
+	if f.asyncActionTools == nil {
+		f.asyncActionTools = make(map[string]string)
+	}
+	f.asyncActionTools[req.GetActionId()] = req.GetCapability()
+
+	status := protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED
+	if configured := f.startStatusByTool[req.GetCapability()]; configured != protocolv1alpha2.ActionStatus_ACTION_STATUS_UNSPECIFIED {
+		status = configured
+	}
+
+	return agent.ActionStart{Update: &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: req.GetActionId(),
+		Status:   status,
+	}}, nil
 }
 
 func (f *fakeEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
-	return nil, errors.New("WaitActionResult is not implemented for sync loop tests")
+	toolName := f.asyncActionTools[actionID]
+	if delay := f.waitDelayByTool[toolName]; delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			f.CancelAction(actionID, "async_action_timeout")
+			return nil, ctx.Err()
+		}
+	}
+	if err := f.waitErrorsByTool[toolName]; err != nil {
+		return nil, err
+	}
+
+	status := protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED
+	if configured := f.statusByTool[toolName]; configured != protocolv1alpha2.ActionStatus_ACTION_STATUS_UNSPECIFIED {
+		status = configured
+	}
+
+	return &protocolv1alpha2.ActionResult{
+		ActionId: actionID,
+		Status:   status,
+		Error: &protocolv1alpha2.Error{
+			Code:    "adapter_" + strings.ToLower(strings.TrimPrefix(status.String(), "ACTION_STATUS_")),
+			Message: "adapter returned " + status.String(),
+		},
+	}, nil
 }
 
-func (f *fakeEnvironment) CancelAction(actionID string, reason string) {}
+func (f *fakeEnvironment) CancelAction(actionID string, reason string) {
+	f.cancelledActions = append(f.cancelledActions, actionID+":"+reason)
+}
 
 func (f *fakeEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
 	f.turnCompletions = append(f.turnCompletions, completion)
@@ -1154,6 +1253,285 @@ func TestHandleEventSettlesAfterSuccessfulPolicyToolWithoutNextModelRequest(t *t
 	}
 	if got := len(provider.requests); got != 1 {
 		t.Fatalf("provider request count = %d, want policy-settled action to complete the turn", got)
+	}
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventSuspendsResumesAndReobservesAfterAsyncAction(t *testing.T) {
+	registry := newMoveToRegistry()
+	env := &fakeEnvironment{observations: []*protocolv1alpha2.Observation{
+		observationWithState("world:test", "npc:Abigail", "before_move"),
+		observationWithState("world:test", "npc:Abigail", "after_move"),
+	}}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_move", Name: "move_to", Arguments: map[string]any{"label": "town_square"}}},
+					Control:   model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := env.observeCount; got != 2 {
+		t.Fatalf("observe count = %d, want initial observe plus async resume re-observe", got)
+	}
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want resumed settle step", got)
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "action_succeeded") {
+		t.Fatalf("resumed request missing async terminal ToolResult transcript: %+v", provider.requests[1].Messages)
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "after_move") {
+		t.Fatalf("resumed request missing re-observed state: %+v", provider.requests[1].Messages)
+	}
+	if got := len(env.submittedActions); got != 1 {
+		t.Fatalf("submitted action count = %d, want 1", got)
+	}
+	if env.submittedActions[0].SourceEventId != "event_1" {
+		t.Fatalf("SourceEventId = %q, want event_1", env.submittedActions[0].SourceEventId)
+	}
+	if env.submittedActions[0].SourceTurnId == "" {
+		t.Fatal("SourceTurnId is empty")
+	}
+	assertTraceContainsInOrder(t, recorder.events, []trace.EventName{
+		trace.EventActionStatusUpdateReceived,
+		trace.EventTurnSuspended,
+		trace.EventActionResultReceived,
+		trace.EventTurnResumed,
+		trace.EventObservationRequested,
+		trace.EventObservationReceived,
+		trace.EventTurnCompleted,
+	})
+}
+
+func TestHandleEventAsyncSuccessContinuesToResumeStepBeforeSettling(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		registry *tool.Registry
+		control  model.ControlKind
+	}{
+		{
+			name:     "same_step_control_settle",
+			registry: newMoveToRegistry(),
+			control:  model.ControlSettle,
+		},
+		{
+			name:     "settle_after_success_policy",
+			registry: newMoveToRegistryWithPolicy(tool.ToolPolicy{SettleAfterSuccess: true}),
+			control:  model.ControlContinue,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &fakeEnvironment{observations: []*protocolv1alpha2.Observation{
+				observationWithState("world:test", "npc:Abigail", "before_move"),
+				observationWithState("world:test", "npc:Abigail", "after_move"),
+			}}
+			recorder := &recordingTraceRecorder{}
+			provider := &scriptedProvider{
+				responses: []model.Response{
+					{
+						Decision: model.ModelDecision{
+							ToolCalls: []model.ToolCall{{ID: "call_move", Name: "move_to", Arguments: map[string]any{"label": "town_square"}}},
+							Control:   model.ControlDirective{Kind: tc.control},
+						},
+					},
+					{
+						Decision: model.ModelDecision{
+							Control: model.ControlDirective{Kind: model.ControlSettle},
+						},
+					},
+				},
+			}
+			loop := agent.NewLoop(provider, tc.registry, recorder, agent.DefaultConfig())
+			conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+			key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+			if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+				t.Fatalf("HandleEvent returned error: %v", err)
+			}
+
+			if got := env.observeCount; got != 2 {
+				t.Fatalf("observe count = %d, want initial observe plus async resume re-observe", got)
+			}
+			if got := len(provider.requests); got != 2 {
+				t.Fatalf("provider request count = %d, want resumed settle step", got)
+			}
+			if !requestMessagesContain(provider.requests[1].Messages, "action_succeeded") {
+				t.Fatalf("resumed request missing async ToolResult transcript: %+v", provider.requests[1].Messages)
+			}
+			assertTraceContainsInOrder(t, recorder.events, []trace.EventName{
+				trace.EventTurnSuspended,
+				trace.EventTurnResumed,
+				trace.EventTurnCompleted,
+			})
+		})
+	}
+}
+
+func TestHandleEventRejectsSecondAsyncActionPerTurn(t *testing.T) {
+	registry := newMoveToRegistry()
+	env := &fakeEnvironment{observations: []*protocolv1alpha2.Observation{
+		observationWithState("world:test", "npc:Abigail", "before_first_move"),
+		observationWithState("world:test", "npc:Abigail", "after_first_move"),
+	}}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_move_1", Name: "move_to", Arguments: map[string]any{"label": "first"}}},
+					Control:   model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_move_2", Name: "move_to", Arguments: map[string]any{"label": "second"}}},
+					Control:   model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	config := agent.DefaultConfig()
+	config.MaxAsyncActionsPerTurn = 1
+	loop := agent.NewLoop(provider, registry, recorder, config)
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := len(env.submittedActions); got != 1 {
+		t.Fatalf("submitted action count = %d, want only first async action started", got)
+	}
+	if got := len(provider.requests); got != 3 {
+		t.Fatalf("provider request count = %d, want retry after async limit feedback", got)
+	}
+	if !requestMessagesContain(provider.requests[2].Messages, "async_action_limit_exceeded") {
+		t.Fatalf("third request missing async limit feedback: %+v", provider.requests[2].Messages)
+	}
+	assertTraceContains(t, recorder.events, trace.EventToolBatchFailed)
+	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
+}
+
+func TestHandleEventFailsTurnWhenReobserveFailsAfterAsyncSuccess(t *testing.T) {
+	registry := newMoveToRegistry()
+	env := &fakeEnvironment{
+		observeErrors: []error{nil, errors.New("adapter observe closed")},
+	}
+	recorder := &recordingTraceRecorder{}
+	store := &failRecentStore{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_move", Name: "move_to", Arguments: map[string]any{"label": "town_square"}}},
+					Control:   model.ControlDirective{Kind: model.ControlContinue},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig(), agent.WithMemoryStore(store))
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key))
+	if err == nil || !strings.Contains(err.Error(), "adapter observe closed") {
+		t.Fatalf("HandleEvent error = %v, want re-observe failure", err)
+	}
+
+	if got := env.observeCount; got != 2 {
+		t.Fatalf("observe count = %d, want initial observe and failed re-observe", got)
+	}
+	if got := len(provider.requests); got != 1 {
+		t.Fatalf("provider request count = %d, want no stale-observation continuation", got)
+	}
+	if got := len(store.appended); got != 1 {
+		t.Fatalf("appended memory count = %d, want successful async outcome recorded", got)
+	}
+	if got := len(store.appended[0].Outcomes); got != 1 {
+		t.Fatalf("memory outcome count = %d, want 1", got)
+	}
+	completion := requireSingleTurnCompletion(t, env.turnCompletions)
+	if completion.Status != protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED {
+		t.Fatalf("completion status = %s, want failed", completion.Status)
+	}
+	assertTraceContainsInOrder(t, recorder.events, []trace.EventName{
+		trace.EventTurnSuspended,
+		trace.EventTurnResumed,
+		trace.EventObservationRequested,
+		trace.EventTurnFailed,
+	})
+}
+
+func TestHandleEventAsyncTerminalFailureFeedsNextStep(t *testing.T) {
+	registry := newMoveToRegistry()
+	env := &fakeEnvironment{
+		statusByTool: map[string]protocolv1alpha2.ActionStatus{
+			"move_to": protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED,
+		},
+		observations: []*protocolv1alpha2.Observation{
+			observationWithState("world:test", "npc:Abigail", "before_move"),
+			observationWithState("world:test", "npc:Abigail", "after_rejected_move"),
+		},
+	}
+	recorder := &recordingTraceRecorder{}
+	provider := &scriptedProvider{
+		responses: []model.Response{
+			{
+				Decision: model.ModelDecision{
+					ToolCalls: []model.ToolCall{{ID: "call_move", Name: "move_to", Arguments: map[string]any{"label": "blocked"}}},
+					Control:   model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+			{
+				Decision: model.ModelDecision{
+					Control: model.ControlDirective{Kind: model.ControlSettle},
+				},
+			},
+		},
+	}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	conn := agent.ConnectionContext{GameID: "fake-game", SessionID: "session:test"}
+	key := session.AgentSessionKey{GameID: conn.GameID, WorldID: "world:test", EntityID: "npc:Abigail"}
+
+	if err := loop.HandleEvent(context.Background(), env, conn, key, gameEvent("event_1", key)); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	if got := env.observeCount; got != 2 {
+		t.Fatalf("observe count = %d, want re-observe after async terminal failure", got)
+	}
+	if got := len(provider.requests); got != 2 {
+		t.Fatalf("provider request count = %d, want retry step", got)
+	}
+	if !requestMessagesContain(provider.requests[1].Messages, "adapter_rejected") {
+		t.Fatalf("retry request missing rejected async ToolResult: %+v", provider.requests[1].Messages)
 	}
 	assertTraceContains(t, recorder.events, trace.EventTurnCompleted)
 }

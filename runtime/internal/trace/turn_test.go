@@ -183,3 +183,36 @@ func TestTurnTracerFailAcceptsNilError(t *testing.T) {
 		t.Fatalf("expected action_status REJECTED, got %#v", event.Fields["action_status"])
 	}
 }
+
+func TestTurnTracerSuspendResumeEventsAreNonTerminal(t *testing.T) {
+	recorder := &memoryRecorder{}
+	tracer := NewTurnTracer(recorder, TurnContext{EntityID: "npc:Linus"})
+
+	tracer.Emit(EventTurnStarted, EventData{})
+	tracer.Emit(EventActionStatusUpdateReceived, EventData{
+		ActionID: "act-1",
+		Tool:     "move_to",
+		Fields: Fields{
+			"action_status": "ACTION_STATUS_ACCEPTED",
+		},
+	})
+	tracer.Emit(EventTurnSuspended, EventData{ActionID: "act-1", Tool: "move_to"})
+	tracer.Emit(EventTurnResumed, EventData{ActionID: "act-1", Tool: "move_to"})
+	tracer.Complete(EventData{})
+
+	if len(recorder.events) != 5 {
+		t.Fatalf("event count = %d, want 5", len(recorder.events))
+	}
+	if recorder.events[1].Event != EventActionStatusUpdateReceived {
+		t.Fatalf("second event = %q, want %q", recorder.events[1].Event, EventActionStatusUpdateReceived)
+	}
+	if recorder.events[2].Event != EventTurnSuspended {
+		t.Fatalf("third event = %q, want %q", recorder.events[2].Event, EventTurnSuspended)
+	}
+	if recorder.events[3].Event != EventTurnResumed {
+		t.Fatalf("fourth event = %q, want %q", recorder.events[3].Event, EventTurnResumed)
+	}
+	if recorder.events[4].Event != EventTurnCompleted {
+		t.Fatalf("last event = %q, want %q", recorder.events[4].Event, EventTurnCompleted)
+	}
+}

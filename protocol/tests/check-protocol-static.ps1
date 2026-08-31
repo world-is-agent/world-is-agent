@@ -54,12 +54,25 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         'message\s+CapabilityRequest\s*\{',
         'message\s+CapabilityList\s*\{',
         'message\s+ActionRequest\s*\{',
+        'message\s+ActionRequest\s*\{[^}]*string\s+source_event_id\s*=\s*7;',
+        'message\s+ActionRequest\s*\{[^}]*string\s+source_turn_id\s*=\s*8;',
         'enum\s+ActionStatus\s*\{',
         'ACTION_STATUS_CANCELLED\s*=\s*7;',
         'ACTION_STATUS_REJECTED\s*=\s*8;',
         'message\s+ActionStatusUpdate\s*\{',
         'message\s+ActionResult\s*\{',
         'message\s+CancelActionRequest\s*\{',
+        'enum\s+TurnCompletionStatus\s*\{',
+        'TURN_COMPLETION_STATUS_COMPLETED\s*=\s*1;',
+        'TURN_COMPLETION_STATUS_FAILED\s*=\s*2;',
+        'TURN_COMPLETION_STATUS_CANCELLED\s*=\s*3;',
+        'message\s+TurnCompletion\s*\{',
+        'message\s+TurnCompletion\s*\{[^}]*string\s+turn_id\s*=\s*1;',
+        'message\s+TurnCompletion\s*\{[^}]*string\s+event_id\s*=\s*2;',
+        'message\s+TurnCompletion\s*\{[^}]*string\s+world_id\s*=\s*3;',
+        'message\s+TurnCompletion\s*\{[^}]*string\s+entity_id\s*=\s*4;',
+        'message\s+TurnCompletion\s*\{[^}]*TurnCompletionStatus\s+status\s*=\s*5;',
+        'message\s+TurnCompletion\s*\{[^}]*Error\s+error\s*=\s*6;',
         'message\s+Error\s*\{',
         'message\s+Heartbeat\s*\{',
         'message\s+AdapterMessage\s*\{',
@@ -125,6 +138,18 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         Add-Violation 'ActionRequest.world_id must use field 6'
     }
 
+    if ($proto -notmatch 'message\s+ActionRequest\s*\{[^}]*string\s+source_event_id\s*=\s*7;') {
+        Add-Violation 'ActionRequest.source_event_id must use field 7'
+    }
+
+    if ($proto -notmatch 'message\s+ActionRequest\s*\{[^}]*string\s+source_turn_id\s*=\s*8;') {
+        Add-Violation 'ActionRequest.source_turn_id must use field 8'
+    }
+
+    if ($proto -notmatch 'message\s+TurnCompletion\s*\{[^}]*string\s+turn_id\s*=\s*1;[^}]*string\s+event_id\s*=\s*2;[^}]*string\s+world_id\s*=\s*3;[^}]*string\s+entity_id\s*=\s*4;[^}]*TurnCompletionStatus\s+status\s*=\s*5;[^}]*Error\s+error\s*=\s*6;') {
+        Add-Violation 'TurnCompletion fields must match approved field numbers'
+    }
+
     if ($proto -notmatch 'EVENT_ACK_STATUS_DUPLICATE\s*=\s*2;') {
         Add-Violation 'EventAckStatus must keep DUPLICATE at field value 2'
     }
@@ -137,7 +162,7 @@ if (-not (Test-Path -LiteralPath $protoPath)) {
         Add-Violation 'AdapterMessage envelope oneof must match v1alpha2 contract'
     }
 
-    if ($proto -notmatch 'message\s+RuntimeMessage\s*\{[^}]*EnvironmentReady\s+environment_ready\s*=\s*10;[^}]*ObserveRequest\s+observe\s*=\s*11;[^}]*CapabilityRequest\s+capability_request\s*=\s*12;[^}]*ActionRequest\s+action\s*=\s*13;[^}]*CancelActionRequest\s+cancel_action\s*=\s*14;[^}]*EventAck\s+event_ack\s*=\s*15;[^}]*Error\s+error\s*=\s*16;') {
+    if ($proto -notmatch 'message\s+RuntimeMessage\s*\{[^}]*EnvironmentReady\s+environment_ready\s*=\s*10;[^}]*ObserveRequest\s+observe\s*=\s*11;[^}]*CapabilityRequest\s+capability_request\s*=\s*12;[^}]*ActionRequest\s+action\s*=\s*13;[^}]*CancelActionRequest\s+cancel_action\s*=\s*14;[^}]*EventAck\s+event_ack\s*=\s*15;[^}]*Error\s+error\s*=\s*16;[^}]*TurnCompletion\s+turn_completion\s*=\s*17;') {
         Add-Violation 'RuntimeMessage envelope oneof must match v1alpha2 contract'
     }
 

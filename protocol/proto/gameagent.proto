@@ -130,6 +130,8 @@ message ActionRequest {
   google.protobuf.Struct arguments = 4;
   google.protobuf.Struct extensions = 5;
   string world_id = 6;
+  string source_event_id = 7;
+  string source_turn_id = 8;
 }
 
 enum ActionStatus {
@@ -160,6 +162,22 @@ message ActionResult {
 message CancelActionRequest {
   string action_id = 1;
   string reason = 2;
+}
+
+enum TurnCompletionStatus {
+  TURN_COMPLETION_STATUS_UNSPECIFIED = 0;
+  TURN_COMPLETION_STATUS_COMPLETED = 1;
+  TURN_COMPLETION_STATUS_FAILED = 2;
+  TURN_COMPLETION_STATUS_CANCELLED = 3;
+}
+
+message TurnCompletion {
+  string turn_id = 1;
+  string event_id = 2;
+  string world_id = 3;
+  string entity_id = 4;
+  TurnCompletionStatus status = 5;
+  Error error = 6;
 }
 
 message Error {
@@ -201,5 +219,6 @@ message RuntimeMessage {
     CancelActionRequest cancel_action = 14;
     EventAck event_ack = 15;
     Error error = 16;
+    TurnCompletion turn_completion = 17;
   }
 }

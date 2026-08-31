@@ -239,6 +239,58 @@ func (ActionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_gameagent_proto_rawDescGZIP(), []int{3}
 }
 
+type TurnCompletionStatus int32
+
+const (
+	TurnCompletionStatus_TURN_COMPLETION_STATUS_UNSPECIFIED TurnCompletionStatus = 0
+	TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED   TurnCompletionStatus = 1
+	TurnCompletionStatus_TURN_COMPLETION_STATUS_FAILED      TurnCompletionStatus = 2
+	TurnCompletionStatus_TURN_COMPLETION_STATUS_CANCELLED   TurnCompletionStatus = 3
+)
+
+// Enum value maps for TurnCompletionStatus.
+var (
+	TurnCompletionStatus_name = map[int32]string{
+		0: "TURN_COMPLETION_STATUS_UNSPECIFIED",
+		1: "TURN_COMPLETION_STATUS_COMPLETED",
+		2: "TURN_COMPLETION_STATUS_FAILED",
+		3: "TURN_COMPLETION_STATUS_CANCELLED",
+	}
+	TurnCompletionStatus_value = map[string]int32{
+		"TURN_COMPLETION_STATUS_UNSPECIFIED": 0,
+		"TURN_COMPLETION_STATUS_COMPLETED":   1,
+		"TURN_COMPLETION_STATUS_FAILED":      2,
+		"TURN_COMPLETION_STATUS_CANCELLED":   3,
+	}
+)
+
+func (x TurnCompletionStatus) Enum() *TurnCompletionStatus {
+	p := new(TurnCompletionStatus)
+	*p = x
+	return p
+}
+
+func (x TurnCompletionStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TurnCompletionStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_gameagent_proto_enumTypes[4].Descriptor()
+}
+
+func (TurnCompletionStatus) Type() protoreflect.EnumType {
+	return &file_gameagent_proto_enumTypes[4]
+}
+
+func (x TurnCompletionStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TurnCompletionStatus.Descriptor instead.
+func (TurnCompletionStatus) EnumDescriptor() ([]byte, []int) {
+	return file_gameagent_proto_rawDescGZIP(), []int{4}
+}
+
 type AdapterHello struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	AdapterId       string                 `protobuf:"bytes,1,opt,name=adapter_id,json=adapterId,proto3" json:"adapter_id,omitempty"`
@@ -1135,6 +1187,8 @@ type ActionRequest struct {
 	Arguments     *structpb.Struct       `protobuf:"bytes,4,opt,name=arguments,proto3" json:"arguments,omitempty"`
 	Extensions    *structpb.Struct       `protobuf:"bytes,5,opt,name=extensions,proto3" json:"extensions,omitempty"`
 	WorldId       string                 `protobuf:"bytes,6,opt,name=world_id,json=worldId,proto3" json:"world_id,omitempty"`
+	SourceEventId string                 `protobuf:"bytes,7,opt,name=source_event_id,json=sourceEventId,proto3" json:"source_event_id,omitempty"`
+	SourceTurnId  string                 `protobuf:"bytes,8,opt,name=source_turn_id,json=sourceTurnId,proto3" json:"source_turn_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1207,6 +1261,20 @@ func (x *ActionRequest) GetExtensions() *structpb.Struct {
 func (x *ActionRequest) GetWorldId() string {
 	if x != nil {
 		return x.WorldId
+	}
+	return ""
+}
+
+func (x *ActionRequest) GetSourceEventId() string {
+	if x != nil {
+		return x.SourceEventId
+	}
+	return ""
+}
+
+func (x *ActionRequest) GetSourceTurnId() string {
+	if x != nil {
+		return x.SourceTurnId
 	}
 	return ""
 }
@@ -1391,6 +1459,90 @@ func (x *CancelActionRequest) GetReason() string {
 	return ""
 }
 
+type TurnCompletion struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TurnId        string                 `protobuf:"bytes,1,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	EventId       string                 `protobuf:"bytes,2,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	WorldId       string                 `protobuf:"bytes,3,opt,name=world_id,json=worldId,proto3" json:"world_id,omitempty"`
+	EntityId      string                 `protobuf:"bytes,4,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"`
+	Status        TurnCompletionStatus   `protobuf:"varint,5,opt,name=status,proto3,enum=gameagent.protocol.v1alpha2.TurnCompletionStatus" json:"status,omitempty"`
+	Error         *Error                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TurnCompletion) Reset() {
+	*x = TurnCompletion{}
+	mi := &file_gameagent_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TurnCompletion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TurnCompletion) ProtoMessage() {}
+
+func (x *TurnCompletion) ProtoReflect() protoreflect.Message {
+	mi := &file_gameagent_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TurnCompletion.ProtoReflect.Descriptor instead.
+func (*TurnCompletion) Descriptor() ([]byte, []int) {
+	return file_gameagent_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *TurnCompletion) GetTurnId() string {
+	if x != nil {
+		return x.TurnId
+	}
+	return ""
+}
+
+func (x *TurnCompletion) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *TurnCompletion) GetWorldId() string {
+	if x != nil {
+		return x.WorldId
+	}
+	return ""
+}
+
+func (x *TurnCompletion) GetEntityId() string {
+	if x != nil {
+		return x.EntityId
+	}
+	return ""
+}
+
+func (x *TurnCompletion) GetStatus() TurnCompletionStatus {
+	if x != nil {
+		return x.Status
+	}
+	return TurnCompletionStatus_TURN_COMPLETION_STATUS_UNSPECIFIED
+}
+
+func (x *TurnCompletion) GetError() *Error {
+	if x != nil {
+		return x.Error
+	}
+	return nil
+}
+
 type Error struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          string                 `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
@@ -1402,7 +1554,7 @@ type Error struct {
 
 func (x *Error) Reset() {
 	*x = Error{}
-	mi := &file_gameagent_proto_msgTypes[16]
+	mi := &file_gameagent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1414,7 +1566,7 @@ func (x *Error) String() string {
 func (*Error) ProtoMessage() {}
 
 func (x *Error) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[16]
+	mi := &file_gameagent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1427,7 +1579,7 @@ func (x *Error) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Error.ProtoReflect.Descriptor instead.
 func (*Error) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{16}
+	return file_gameagent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Error) GetCode() string {
@@ -1461,7 +1613,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_gameagent_proto_msgTypes[17]
+	mi := &file_gameagent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1473,7 +1625,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[17]
+	mi := &file_gameagent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1486,7 +1638,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{17}
+	return file_gameagent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *Heartbeat) GetTimestampUnixMs() int64 {
@@ -1524,7 +1676,7 @@ type AdapterMessage struct {
 
 func (x *AdapterMessage) Reset() {
 	*x = AdapterMessage{}
-	mi := &file_gameagent_proto_msgTypes[18]
+	mi := &file_gameagent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1536,7 +1688,7 @@ func (x *AdapterMessage) String() string {
 func (*AdapterMessage) ProtoMessage() {}
 
 func (x *AdapterMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[18]
+	mi := &file_gameagent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1549,7 +1701,7 @@ func (x *AdapterMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdapterMessage.ProtoReflect.Descriptor instead.
 func (*AdapterMessage) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{18}
+	return file_gameagent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AdapterMessage) GetMessageId() string {
@@ -1710,6 +1862,7 @@ type RuntimeMessage struct {
 	//	*RuntimeMessage_CancelAction
 	//	*RuntimeMessage_EventAck
 	//	*RuntimeMessage_Error
+	//	*RuntimeMessage_TurnCompletion
 	Payload       isRuntimeMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1717,7 +1870,7 @@ type RuntimeMessage struct {
 
 func (x *RuntimeMessage) Reset() {
 	*x = RuntimeMessage{}
-	mi := &file_gameagent_proto_msgTypes[19]
+	mi := &file_gameagent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1729,7 +1882,7 @@ func (x *RuntimeMessage) String() string {
 func (*RuntimeMessage) ProtoMessage() {}
 
 func (x *RuntimeMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_gameagent_proto_msgTypes[19]
+	mi := &file_gameagent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1742,7 +1895,7 @@ func (x *RuntimeMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeMessage.ProtoReflect.Descriptor instead.
 func (*RuntimeMessage) Descriptor() ([]byte, []int) {
-	return file_gameagent_proto_rawDescGZIP(), []int{19}
+	return file_gameagent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *RuntimeMessage) GetMessageId() string {
@@ -1829,6 +1982,15 @@ func (x *RuntimeMessage) GetError() *Error {
 	return nil
 }
 
+func (x *RuntimeMessage) GetTurnCompletion() *TurnCompletion {
+	if x != nil {
+		if x, ok := x.Payload.(*RuntimeMessage_TurnCompletion); ok {
+			return x.TurnCompletion
+		}
+	}
+	return nil
+}
+
 type isRuntimeMessage_Payload interface {
 	isRuntimeMessage_Payload()
 }
@@ -1861,6 +2023,10 @@ type RuntimeMessage_Error struct {
 	Error *Error `protobuf:"bytes,16,opt,name=error,proto3,oneof"`
 }
 
+type RuntimeMessage_TurnCompletion struct {
+	TurnCompletion *TurnCompletion `protobuf:"bytes,17,opt,name=turn_completion,json=turnCompletion,proto3,oneof"`
+}
+
 func (*RuntimeMessage_EnvironmentReady) isRuntimeMessage_Payload() {}
 
 func (*RuntimeMessage_Observe) isRuntimeMessage_Payload() {}
@@ -1874,6 +2040,8 @@ func (*RuntimeMessage_CancelAction) isRuntimeMessage_Payload() {}
 func (*RuntimeMessage_EventAck) isRuntimeMessage_Payload() {}
 
 func (*RuntimeMessage_Error) isRuntimeMessage_Payload() {}
+
+func (*RuntimeMessage_TurnCompletion) isRuntimeMessage_Payload() {}
 
 var File_gameagent_proto protoreflect.FileDescriptor
 
@@ -1970,7 +2138,7 @@ const file_gameagent_proto_rawDesc = "" +
 	"\fcapabilities\x18\x02 \x03(\v2'.gameagent.protocol.v1alpha2.CapabilityR\fcapabilities\x12\x1a\n" +
 	"\brevision\x18\x03 \x01(\x04R\brevisionB\f\n" +
 	"\n" +
-	"_entity_id\"\xf4\x01\n" +
+	"_entity_id\"\xc2\x02\n" +
 	"\rActionRequest\x12\x1b\n" +
 	"\taction_id\x18\x01 \x01(\tR\bactionId\x12\x1b\n" +
 	"\tentity_id\x18\x02 \x01(\tR\bentityId\x12\x1e\n" +
@@ -1981,7 +2149,9 @@ const file_gameagent_proto_rawDesc = "" +
 	"\n" +
 	"extensions\x18\x05 \x01(\v2\x17.google.protobuf.StructR\n" +
 	"extensions\x12\x19\n" +
-	"\bworld_id\x18\x06 \x01(\tR\aworldId\"\xa9\x01\n" +
+	"\bworld_id\x18\x06 \x01(\tR\aworldId\x12&\n" +
+	"\x0fsource_event_id\x18\a \x01(\tR\rsourceEventId\x12$\n" +
+	"\x0esource_turn_id\x18\b \x01(\tR\fsourceTurnId\"\xa9\x01\n" +
 	"\x12ActionStatusUpdate\x12\x1b\n" +
 	"\taction_id\x18\x01 \x01(\tR\bactionId\x12A\n" +
 	"\x06status\x18\x02 \x01(\x0e2).gameagent.protocol.v1alpha2.ActionStatusR\x06status\x123\n" +
@@ -1993,7 +2163,14 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x05error\x18\x04 \x01(\v2\".gameagent.protocol.v1alpha2.ErrorR\x05error\"J\n" +
 	"\x13CancelActionRequest\x12\x1b\n" +
 	"\taction_id\x18\x01 \x01(\tR\bactionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"h\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\x81\x02\n" +
+	"\x0eTurnCompletion\x12\x17\n" +
+	"\aturn_id\x18\x01 \x01(\tR\x06turnId\x12\x19\n" +
+	"\bevent_id\x18\x02 \x01(\tR\aeventId\x12\x19\n" +
+	"\bworld_id\x18\x03 \x01(\tR\aworldId\x12\x1b\n" +
+	"\tentity_id\x18\x04 \x01(\tR\bentityId\x12I\n" +
+	"\x06status\x18\x05 \x01(\x0e21.gameagent.protocol.v1alpha2.TurnCompletionStatusR\x06status\x128\n" +
+	"\x05error\x18\x06 \x01(\v2\".gameagent.protocol.v1alpha2.ErrorR\x05error\"h\n" +
 	"\x05Error\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x121\n" +
@@ -2014,7 +2191,7 @@ const file_gameagent_proto_rawDesc = "" +
 	"\raction_result\x18\x0f \x01(\v2).gameagent.protocol.v1alpha2.ActionResultH\x00R\factionResult\x12F\n" +
 	"\theartbeat\x18\x10 \x01(\v2&.gameagent.protocol.v1alpha2.HeartbeatH\x00R\theartbeat\x12:\n" +
 	"\x05error\x18\x11 \x01(\v2\".gameagent.protocol.v1alpha2.ErrorH\x00R\x05errorB\t\n" +
-	"\apayload\"\x8a\x05\n" +
+	"\apayload\"\xe2\x05\n" +
 	"\x0eRuntimeMessage\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId\x12%\n" +
@@ -2026,7 +2203,8 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x06action\x18\r \x01(\v2*.gameagent.protocol.v1alpha2.ActionRequestH\x00R\x06action\x12W\n" +
 	"\rcancel_action\x18\x0e \x01(\v20.gameagent.protocol.v1alpha2.CancelActionRequestH\x00R\fcancelAction\x12D\n" +
 	"\tevent_ack\x18\x0f \x01(\v2%.gameagent.protocol.v1alpha2.EventAckH\x00R\beventAck\x12:\n" +
-	"\x05error\x18\x10 \x01(\v2\".gameagent.protocol.v1alpha2.ErrorH\x00R\x05errorB\t\n" +
+	"\x05error\x18\x10 \x01(\v2\".gameagent.protocol.v1alpha2.ErrorH\x00R\x05error\x12V\n" +
+	"\x0fturn_completion\x18\x11 \x01(\v2+.gameagent.protocol.v1alpha2.TurnCompletionH\x00R\x0eturnCompletionB\t\n" +
 	"\apayload*\x90\x01\n" +
 	"\x0eEventAckStatus\x12 \n" +
 	"\x1cEVENT_ACK_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
@@ -2050,7 +2228,12 @@ const file_gameagent_proto_rawDesc = "" +
 	"\x14ACTION_STATUS_FAILED\x10\x05\x12\x1d\n" +
 	"\x19ACTION_STATUS_INTERRUPTED\x10\x06\x12\x1b\n" +
 	"\x17ACTION_STATUS_CANCELLED\x10\a\x12\x1a\n" +
-	"\x16ACTION_STATUS_REJECTED\x10\b2{\n" +
+	"\x16ACTION_STATUS_REJECTED\x10\b*\xad\x01\n" +
+	"\x14TurnCompletionStatus\x12&\n" +
+	"\"TURN_COMPLETION_STATUS_UNSPECIFIED\x10\x00\x12$\n" +
+	" TURN_COMPLETION_STATUS_COMPLETED\x10\x01\x12!\n" +
+	"\x1dTURN_COMPLETION_STATUS_FAILED\x10\x02\x12$\n" +
+	" TURN_COMPLETION_STATUS_CANCELLED\x10\x032{\n" +
 	"\x10GameAgentGateway\x12g\n" +
 	"\aConnect\x12+.gameagent.protocol.v1alpha2.AdapterMessage\x1a+.gameagent.protocol.v1alpha2.RuntimeMessage(\x010\x01BfZFgameagent/protocol/gen/go/gameagent/protocol/v1alpha2;protocolv1alpha2\xaa\x02\x1bGameAgent.Protocol.V1Alpha2b\x06proto3"
 
@@ -2066,81 +2249,86 @@ func file_gameagent_proto_rawDescGZIP() []byte {
 	return file_gameagent_proto_rawDescData
 }
 
-var file_gameagent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_gameagent_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_gameagent_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_gameagent_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_gameagent_proto_goTypes = []any{
 	(EventAckStatus)(0),            // 0: gameagent.protocol.v1alpha2.EventAckStatus
 	(ExecutionMode)(0),             // 1: gameagent.protocol.v1alpha2.ExecutionMode
 	(CapabilityConcurrencyMode)(0), // 2: gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
 	(ActionStatus)(0),              // 3: gameagent.protocol.v1alpha2.ActionStatus
-	(*AdapterHello)(nil),           // 4: gameagent.protocol.v1alpha2.AdapterHello
-	(*EnvironmentReady)(nil),       // 5: gameagent.protocol.v1alpha2.EnvironmentReady
-	(*EntityRef)(nil),              // 6: gameagent.protocol.v1alpha2.EntityRef
-	(*GameTime)(nil),               // 7: gameagent.protocol.v1alpha2.GameTime
-	(*ContextFact)(nil),            // 8: gameagent.protocol.v1alpha2.ContextFact
-	(*GameEvent)(nil),              // 9: gameagent.protocol.v1alpha2.GameEvent
-	(*EventAck)(nil),               // 10: gameagent.protocol.v1alpha2.EventAck
-	(*ObserveRequest)(nil),         // 11: gameagent.protocol.v1alpha2.ObserveRequest
-	(*Observation)(nil),            // 12: gameagent.protocol.v1alpha2.Observation
-	(*Capability)(nil),             // 13: gameagent.protocol.v1alpha2.Capability
-	(*CapabilityRequest)(nil),      // 14: gameagent.protocol.v1alpha2.CapabilityRequest
-	(*CapabilityList)(nil),         // 15: gameagent.protocol.v1alpha2.CapabilityList
-	(*ActionRequest)(nil),          // 16: gameagent.protocol.v1alpha2.ActionRequest
-	(*ActionStatusUpdate)(nil),     // 17: gameagent.protocol.v1alpha2.ActionStatusUpdate
-	(*ActionResult)(nil),           // 18: gameagent.protocol.v1alpha2.ActionResult
-	(*CancelActionRequest)(nil),    // 19: gameagent.protocol.v1alpha2.CancelActionRequest
-	(*Error)(nil),                  // 20: gameagent.protocol.v1alpha2.Error
-	(*Heartbeat)(nil),              // 21: gameagent.protocol.v1alpha2.Heartbeat
-	(*AdapterMessage)(nil),         // 22: gameagent.protocol.v1alpha2.AdapterMessage
-	(*RuntimeMessage)(nil),         // 23: gameagent.protocol.v1alpha2.RuntimeMessage
-	(*structpb.Struct)(nil),        // 24: google.protobuf.Struct
+	(TurnCompletionStatus)(0),      // 4: gameagent.protocol.v1alpha2.TurnCompletionStatus
+	(*AdapterHello)(nil),           // 5: gameagent.protocol.v1alpha2.AdapterHello
+	(*EnvironmentReady)(nil),       // 6: gameagent.protocol.v1alpha2.EnvironmentReady
+	(*EntityRef)(nil),              // 7: gameagent.protocol.v1alpha2.EntityRef
+	(*GameTime)(nil),               // 8: gameagent.protocol.v1alpha2.GameTime
+	(*ContextFact)(nil),            // 9: gameagent.protocol.v1alpha2.ContextFact
+	(*GameEvent)(nil),              // 10: gameagent.protocol.v1alpha2.GameEvent
+	(*EventAck)(nil),               // 11: gameagent.protocol.v1alpha2.EventAck
+	(*ObserveRequest)(nil),         // 12: gameagent.protocol.v1alpha2.ObserveRequest
+	(*Observation)(nil),            // 13: gameagent.protocol.v1alpha2.Observation
+	(*Capability)(nil),             // 14: gameagent.protocol.v1alpha2.Capability
+	(*CapabilityRequest)(nil),      // 15: gameagent.protocol.v1alpha2.CapabilityRequest
+	(*CapabilityList)(nil),         // 16: gameagent.protocol.v1alpha2.CapabilityList
+	(*ActionRequest)(nil),          // 17: gameagent.protocol.v1alpha2.ActionRequest
+	(*ActionStatusUpdate)(nil),     // 18: gameagent.protocol.v1alpha2.ActionStatusUpdate
+	(*ActionResult)(nil),           // 19: gameagent.protocol.v1alpha2.ActionResult
+	(*CancelActionRequest)(nil),    // 20: gameagent.protocol.v1alpha2.CancelActionRequest
+	(*TurnCompletion)(nil),         // 21: gameagent.protocol.v1alpha2.TurnCompletion
+	(*Error)(nil),                  // 22: gameagent.protocol.v1alpha2.Error
+	(*Heartbeat)(nil),              // 23: gameagent.protocol.v1alpha2.Heartbeat
+	(*AdapterMessage)(nil),         // 24: gameagent.protocol.v1alpha2.AdapterMessage
+	(*RuntimeMessage)(nil),         // 25: gameagent.protocol.v1alpha2.RuntimeMessage
+	(*structpb.Struct)(nil),        // 26: google.protobuf.Struct
 }
 var file_gameagent_proto_depIdxs = []int32{
-	24, // 0: gameagent.protocol.v1alpha2.ContextFact.attributes:type_name -> google.protobuf.Struct
-	6,  // 1: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	7,  // 2: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	24, // 3: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
-	8,  // 4: gameagent.protocol.v1alpha2.GameEvent.context_facts:type_name -> gameagent.protocol.v1alpha2.ContextFact
+	26, // 0: gameagent.protocol.v1alpha2.ContextFact.attributes:type_name -> google.protobuf.Struct
+	7,  // 1: gameagent.protocol.v1alpha2.GameEvent.entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	8,  // 2: gameagent.protocol.v1alpha2.GameEvent.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	26, // 3: gameagent.protocol.v1alpha2.GameEvent.payload:type_name -> google.protobuf.Struct
+	9,  // 4: gameagent.protocol.v1alpha2.GameEvent.context_facts:type_name -> gameagent.protocol.v1alpha2.ContextFact
 	0,  // 5: gameagent.protocol.v1alpha2.EventAck.status:type_name -> gameagent.protocol.v1alpha2.EventAckStatus
-	20, // 6: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
-	7,  // 7: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
-	24, // 8: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
-	6,  // 9: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
-	24, // 10: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
+	22, // 6: gameagent.protocol.v1alpha2.EventAck.error:type_name -> gameagent.protocol.v1alpha2.Error
+	8,  // 7: gameagent.protocol.v1alpha2.Observation.game_time:type_name -> gameagent.protocol.v1alpha2.GameTime
+	26, // 8: gameagent.protocol.v1alpha2.Observation.state:type_name -> google.protobuf.Struct
+	7,  // 9: gameagent.protocol.v1alpha2.Observation.nearby_entities:type_name -> gameagent.protocol.v1alpha2.EntityRef
+	26, // 10: gameagent.protocol.v1alpha2.Observation.extensions:type_name -> google.protobuf.Struct
 	1,  // 11: gameagent.protocol.v1alpha2.Capability.execution_mode:type_name -> gameagent.protocol.v1alpha2.ExecutionMode
-	24, // 12: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
+	26, // 12: gameagent.protocol.v1alpha2.Capability.extensions:type_name -> google.protobuf.Struct
 	2,  // 13: gameagent.protocol.v1alpha2.Capability.concurrency_mode:type_name -> gameagent.protocol.v1alpha2.CapabilityConcurrencyMode
-	13, // 14: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
-	24, // 15: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
-	24, // 16: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
+	14, // 14: gameagent.protocol.v1alpha2.CapabilityList.capabilities:type_name -> gameagent.protocol.v1alpha2.Capability
+	26, // 15: gameagent.protocol.v1alpha2.ActionRequest.arguments:type_name -> google.protobuf.Struct
+	26, // 16: gameagent.protocol.v1alpha2.ActionRequest.extensions:type_name -> google.protobuf.Struct
 	3,  // 17: gameagent.protocol.v1alpha2.ActionStatusUpdate.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	24, // 18: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
+	26, // 18: gameagent.protocol.v1alpha2.ActionStatusUpdate.metadata:type_name -> google.protobuf.Struct
 	3,  // 19: gameagent.protocol.v1alpha2.ActionResult.status:type_name -> gameagent.protocol.v1alpha2.ActionStatus
-	24, // 20: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
-	20, // 21: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
-	24, // 22: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
-	4,  // 23: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
-	9,  // 24: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
-	12, // 25: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
-	15, // 26: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
-	17, // 27: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
-	18, // 28: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
-	21, // 29: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
-	20, // 30: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	5,  // 31: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
-	11, // 32: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
-	14, // 33: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
-	16, // 34: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
-	19, // 35: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
-	10, // 36: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
-	20, // 37: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
-	22, // 38: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
-	23, // 39: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
-	39, // [39:40] is the sub-list for method output_type
-	38, // [38:39] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	26, // 20: gameagent.protocol.v1alpha2.ActionResult.output:type_name -> google.protobuf.Struct
+	22, // 21: gameagent.protocol.v1alpha2.ActionResult.error:type_name -> gameagent.protocol.v1alpha2.Error
+	4,  // 22: gameagent.protocol.v1alpha2.TurnCompletion.status:type_name -> gameagent.protocol.v1alpha2.TurnCompletionStatus
+	22, // 23: gameagent.protocol.v1alpha2.TurnCompletion.error:type_name -> gameagent.protocol.v1alpha2.Error
+	26, // 24: gameagent.protocol.v1alpha2.Error.details:type_name -> google.protobuf.Struct
+	5,  // 25: gameagent.protocol.v1alpha2.AdapterMessage.hello:type_name -> gameagent.protocol.v1alpha2.AdapterHello
+	10, // 26: gameagent.protocol.v1alpha2.AdapterMessage.event:type_name -> gameagent.protocol.v1alpha2.GameEvent
+	13, // 27: gameagent.protocol.v1alpha2.AdapterMessage.observation:type_name -> gameagent.protocol.v1alpha2.Observation
+	16, // 28: gameagent.protocol.v1alpha2.AdapterMessage.capabilities:type_name -> gameagent.protocol.v1alpha2.CapabilityList
+	18, // 29: gameagent.protocol.v1alpha2.AdapterMessage.action_status:type_name -> gameagent.protocol.v1alpha2.ActionStatusUpdate
+	19, // 30: gameagent.protocol.v1alpha2.AdapterMessage.action_result:type_name -> gameagent.protocol.v1alpha2.ActionResult
+	23, // 31: gameagent.protocol.v1alpha2.AdapterMessage.heartbeat:type_name -> gameagent.protocol.v1alpha2.Heartbeat
+	22, // 32: gameagent.protocol.v1alpha2.AdapterMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	6,  // 33: gameagent.protocol.v1alpha2.RuntimeMessage.environment_ready:type_name -> gameagent.protocol.v1alpha2.EnvironmentReady
+	12, // 34: gameagent.protocol.v1alpha2.RuntimeMessage.observe:type_name -> gameagent.protocol.v1alpha2.ObserveRequest
+	15, // 35: gameagent.protocol.v1alpha2.RuntimeMessage.capability_request:type_name -> gameagent.protocol.v1alpha2.CapabilityRequest
+	17, // 36: gameagent.protocol.v1alpha2.RuntimeMessage.action:type_name -> gameagent.protocol.v1alpha2.ActionRequest
+	20, // 37: gameagent.protocol.v1alpha2.RuntimeMessage.cancel_action:type_name -> gameagent.protocol.v1alpha2.CancelActionRequest
+	11, // 38: gameagent.protocol.v1alpha2.RuntimeMessage.event_ack:type_name -> gameagent.protocol.v1alpha2.EventAck
+	22, // 39: gameagent.protocol.v1alpha2.RuntimeMessage.error:type_name -> gameagent.protocol.v1alpha2.Error
+	21, // 40: gameagent.protocol.v1alpha2.RuntimeMessage.turn_completion:type_name -> gameagent.protocol.v1alpha2.TurnCompletion
+	24, // 41: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:input_type -> gameagent.protocol.v1alpha2.AdapterMessage
+	25, // 42: gameagent.protocol.v1alpha2.GameAgentGateway.Connect:output_type -> gameagent.protocol.v1alpha2.RuntimeMessage
+	42, // [42:43] is the sub-list for method output_type
+	41, // [41:42] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_gameagent_proto_init() }
@@ -2151,7 +2339,7 @@ func file_gameagent_proto_init() {
 	file_gameagent_proto_msgTypes[3].OneofWrappers = []any{}
 	file_gameagent_proto_msgTypes[10].OneofWrappers = []any{}
 	file_gameagent_proto_msgTypes[11].OneofWrappers = []any{}
-	file_gameagent_proto_msgTypes[18].OneofWrappers = []any{
+	file_gameagent_proto_msgTypes[19].OneofWrappers = []any{
 		(*AdapterMessage_Hello)(nil),
 		(*AdapterMessage_Event)(nil),
 		(*AdapterMessage_Observation)(nil),
@@ -2161,7 +2349,7 @@ func file_gameagent_proto_init() {
 		(*AdapterMessage_Heartbeat)(nil),
 		(*AdapterMessage_Error)(nil),
 	}
-	file_gameagent_proto_msgTypes[19].OneofWrappers = []any{
+	file_gameagent_proto_msgTypes[20].OneofWrappers = []any{
 		(*RuntimeMessage_EnvironmentReady)(nil),
 		(*RuntimeMessage_Observe)(nil),
 		(*RuntimeMessage_CapabilityRequest)(nil),
@@ -2169,14 +2357,15 @@ func file_gameagent_proto_init() {
 		(*RuntimeMessage_CancelAction)(nil),
 		(*RuntimeMessage_EventAck)(nil),
 		(*RuntimeMessage_Error)(nil),
+		(*RuntimeMessage_TurnCompletion)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gameagent_proto_rawDesc), len(file_gameagent_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   20,
+			NumEnums:      5,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

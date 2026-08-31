@@ -421,6 +421,173 @@ func TestConnectForwardsDynamicEmoteToolCall(t *testing.T) {
 	}
 }
 
+func TestConnectSettlesAfterPresentDialogueAndPreservesSourceCorrelation(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{{
+		Decision: model.ModelDecision{
+			ToolCalls: []model.ToolCall{{
+				ID:        "call_present",
+				Name:      "present_dialogue",
+				Arguments: map[string]any{"text": "Want to walk to the bridge?", "reply_options": []any{"Yes", "Not now"}},
+			}},
+			Control: model.ControlDirective{Kind: model.ControlContinue},
+		},
+	}}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-present-dialogue", capabilityListWithPresentDialogueMessage)
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send observation: %v", err)
+	}
+
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil || action.Capability != "present_dialogue" {
+		t.Fatalf("action = %+v, want present_dialogue", action)
+	}
+	if action.SourceEventId != "event_1" {
+		t.Fatalf("action source_event_id = %q, want event_1", action.SourceEventId)
+	}
+	if action.SourceTurnId == "" {
+		t.Fatal("action source_turn_id is empty")
+	}
+
+	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
+		t.Fatalf("send present_dialogue result: %v", err)
+	}
+	completion := recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	if completion.TurnId != action.SourceTurnId {
+		t.Fatalf("completion turn_id = %q, want action source_turn_id %q", completion.TurnId, action.SourceTurnId)
+	}
+	if got := len(provider.Requests()); got != 1 {
+		t.Fatalf("provider request count = %d, want settle_after_success without next request", got)
+	}
+	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
+func TestConnectRunsAsyncMoveToSuspendResumeTurnLifecycle(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	listener := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	registry := tool.NewRegistry()
+	provider := &scriptedGatewayProvider{responses: []model.Response{
+		{
+			Decision: model.ModelDecision{
+				ToolCalls: []model.ToolCall{{
+					ID:   "call_move",
+					Name: "move_to",
+					Arguments: map[string]any{
+						"location": "Mountain",
+						"tile":     map[string]any{"x": 42, "y": 18},
+					},
+				}},
+				Control: model.ControlDirective{Kind: model.ControlContinue},
+			},
+		},
+		{
+			Decision: model.ModelDecision{
+				Control: model.ControlDirective{Kind: model.ControlSettle},
+			},
+		},
+	}}
+	recorder := &recordingGatewayTraceRecorder{}
+	loop := agent.NewLoop(provider, registry, recorder, agent.DefaultConfig())
+	protocolv1alpha2.RegisterGameAgentGatewayServer(grpcServer, NewServer(loop, registry))
+	startGatewayServer(t, grpcServer, listener)
+
+	conn := dialGateway(t, ctx, listener)
+	defer conn.Close()
+
+	client := protocolv1alpha2.NewGameAgentGatewayClient(conn)
+	stream := connectReadyStreamWithCapabilities(t, ctx, client, registry, "session:test-move-to", capabilityListWithMoveToMessage)
+
+	if err := stream.Send(npcInteractionEventMessage()); err != nil {
+		t.Fatalf("send game event: %v", err)
+	}
+	if ack := recvRuntimeMessage(t, stream).GetEventAck(); ack == nil || ack.Status != protocolv1alpha2.EventAckStatus_EVENT_ACK_STATUS_ACCEPTED {
+		t.Fatalf("ack = %+v, want accepted", ack)
+	}
+	observeMessage := recvRuntimeMessage(t, stream)
+	if err := stream.Send(observationMessage(observeMessage.MessageId)); err != nil {
+		t.Fatalf("send initial observation: %v", err)
+	}
+
+	action := recvRuntimeMessage(t, stream).GetAction()
+	if action == nil || action.Capability != "move_to" {
+		t.Fatalf("action = %+v, want move_to", action)
+	}
+	if action.SourceEventId != "event_1" {
+		t.Fatalf("action source_event_id = %q, want event_1", action.SourceEventId)
+	}
+	if action.SourceTurnId == "" {
+		t.Fatal("action source_turn_id is empty")
+	}
+	if got := action.Arguments.GetFields()["location"].GetStringValue(); got != "Mountain" {
+		t.Fatalf("move_to location = %q, want Mountain", got)
+	}
+	if got := action.Arguments.GetFields()["tile"].GetStructValue().GetFields()["x"].GetNumberValue(); got != 42 {
+		t.Fatalf("move_to tile.x = %v, want 42", got)
+	}
+
+	if err := stream.Send(actionStatusUpdateMessage(action.ActionId, protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED)); err != nil {
+		t.Fatalf("send accepted status: %v", err)
+	}
+	if err := stream.Send(actionStatusUpdateMessage(action.ActionId, protocolv1alpha2.ActionStatus_ACTION_STATUS_RUNNING)); err != nil {
+		t.Fatalf("send running status: %v", err)
+	}
+	if err := stream.Send(actionResultMessage(action.ActionId)); err != nil {
+		t.Fatalf("send move_to action result: %v", err)
+	}
+
+	resumeObserve := recvRuntimeMessage(t, stream)
+	if observe := resumeObserve.GetObserve(); observe == nil || observe.EntityId != "npc:Linus" || observe.WorldId != "world:test" {
+		t.Fatalf("resume observe = %+v, want npc:Linus/world:test", observe)
+	}
+	if err := stream.Send(observationMessage(resumeObserve.MessageId)); err != nil {
+		t.Fatalf("send resumed observation: %v", err)
+	}
+
+	waitForGatewayProviderRequestCount(t, provider, 2)
+	completion := recvTurnCompletion(t, stream, "event_1", "npc:Linus", protocolv1alpha2.TurnCompletionStatus_TURN_COMPLETION_STATUS_COMPLETED)
+	if completion.TurnId != action.SourceTurnId {
+		t.Fatalf("completion turn_id = %q, want action source_turn_id %q", completion.TurnId, action.SourceTurnId)
+	}
+	if !requestMessagesContain(provider.Requests()[1].Messages, "action_succeeded") {
+		t.Fatalf("resumed request missing async tool result transcript: %+v", provider.Requests()[1].Messages)
+	}
+	waitForTraceEventCount(t, recorder, trace.EventActionStatusUpdateReceived, 1)
+	waitForTraceEventCount(t, recorder, trace.EventTurnSuspended, 1)
+	waitForTraceEventCount(t, recorder, trace.EventTurnResumed, 1)
+	waitForTraceEventCount(t, recorder, trace.EventTurnCompleted, 1)
+	if err := stream.CloseSend(); err != nil {
+		t.Fatalf("close send: %v", err)
+	}
+}
+
 func TestConnectRunsSingleStepBatchWithTwoActionsAndSettle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -1672,6 +1839,15 @@ func waitForGatewayProviderRequestCount(t *testing.T, provider *scriptedGatewayP
 	}
 }
 
+func requestMessagesContain(messages []model.Message, needle string) bool {
+	for _, message := range messages {
+		if strings.Contains(message.Content, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func startGatewayServer(t *testing.T, grpcServer *grpc.Server, listener *bufconn.Listener) {
 	t.Helper()
 
@@ -1894,6 +2070,51 @@ func capabilityListWithEmoteMessage(correlationID string) *protocolv1alpha2.Adap
 	}
 }
 
+func capabilityListWithPresentDialogueMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return &protocolv1alpha2.AdapterMessage{
+		MessageId:     "capabilities_msg_1",
+		CorrelationId: correlationID,
+		Payload: &protocolv1alpha2.AdapterMessage_Capabilities{
+			Capabilities: &protocolv1alpha2.CapabilityList{
+				Capabilities: []*protocolv1alpha2.Capability{
+					{
+						Name:            "present_dialogue",
+						Version:         "0.1.0",
+						Description:     "Show dialogue with reply options and wait for player_said_to_npc.",
+						InputSchemaJson: `{"type":"object","properties":{"text":{"type":"string"},"reply_options":{"type":"array","items":{"type":"string"}}},"required":["text"],"additionalProperties":false}`,
+						ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_SYNC,
+						ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+						Extensions:      toolPolicyExtensionsForGateway(true, true),
+					},
+				},
+				Revision: 1,
+			},
+		},
+	}
+}
+
+func capabilityListWithMoveToMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
+	return &protocolv1alpha2.AdapterMessage{
+		MessageId:     "capabilities_msg_1",
+		CorrelationId: correlationID,
+		Payload: &protocolv1alpha2.AdapterMessage_Capabilities{
+			Capabilities: &protocolv1alpha2.CapabilityList{
+				Capabilities: []*protocolv1alpha2.Capability{
+					{
+						Name:            "move_to",
+						Version:         "0.1.0",
+						Description:     "Move to a reachable tile in the current location.",
+						InputSchemaJson: `{"type":"object","properties":{"location":{"type":"string"},"tile":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"}},"required":["x","y"],"additionalProperties":false}},"required":["location","tile"],"additionalProperties":false}`,
+						ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC,
+						ConcurrencyMode: protocolv1alpha2.CapabilityConcurrencyMode_CAPABILITY_CONCURRENCY_MODE_SEQUENTIAL,
+					},
+				},
+				Revision: 1,
+			},
+		},
+	}
+}
+
 func capabilityListWithParallelSenseMessage(correlationID string) *protocolv1alpha2.AdapterMessage {
 	return &protocolv1alpha2.AdapterMessage{
 		MessageId:     "capabilities_msg_1",
@@ -1914,6 +2135,21 @@ func capabilityListWithParallelSenseMessage(correlationID string) *protocolv1alp
 			},
 		},
 	}
+}
+
+func toolPolicyExtensionsForGateway(exclusivePerStep bool, settleAfterSuccess bool) *structpb.Struct {
+	extensions, err := structpb.NewStruct(map[string]any{
+		"gameagent": map[string]any{
+			"tool_policy": map[string]any{
+				"exclusive_per_step":   exclusivePerStep,
+				"settle_after_success": settleAfterSuccess,
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return extensions
 }
 
 func npcInteractionEventMessage() *protocolv1alpha2.AdapterMessage {
@@ -1996,6 +2232,18 @@ func observationMessageForEntity(correlationID string, entityID string, entityTy
 
 func actionResultMessage(actionID string) *protocolv1alpha2.AdapterMessage {
 	return actionResultStatusMessage(actionID, protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED)
+}
+
+func actionStatusUpdateMessage(actionID string, status protocolv1alpha2.ActionStatus) *protocolv1alpha2.AdapterMessage {
+	return &protocolv1alpha2.AdapterMessage{
+		MessageId: "action_status_msg_1",
+		Payload: &protocolv1alpha2.AdapterMessage_ActionStatus{
+			ActionStatus: &protocolv1alpha2.ActionStatusUpdate{
+				ActionId: actionID,
+				Status:   status,
+			},
+		},
+	}
 }
 
 func actionResultStatusMessage(actionID string, status protocolv1alpha2.ActionStatus) *protocolv1alpha2.AdapterMessage {

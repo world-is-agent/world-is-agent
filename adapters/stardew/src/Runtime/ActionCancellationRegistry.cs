@@ -21,4 +21,20 @@ public sealed class ActionCancellationRegistry
 
         return this.cancelledActions.TryRemove(actionId, out _);
     }
+
+    public bool IsCancelled(string actionId)
+    {
+        if (string.IsNullOrWhiteSpace(actionId))
+            return false;
+
+        return this.cancelledActions.ContainsKey(actionId);
+    }
+
+    public void Clear(string actionId)
+    {
+        if (string.IsNullOrWhiteSpace(actionId))
+            return;
+
+        this.cancelledActions.TryRemove(actionId, out _);
+    }
 }

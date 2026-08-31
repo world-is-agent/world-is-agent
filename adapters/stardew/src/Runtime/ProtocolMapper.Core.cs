@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using GameAgent.Protocol.V1Alpha2;
+using GameAgent.Stardew.Capabilities;
 using GameAgent.Stardew.Dialogue;
 using GameAgent.Stardew.State;
 using Google.Protobuf.WellKnownTypes;
@@ -412,6 +413,27 @@ public static partial class ProtocolMapper
         return new PresentDialogueInput(text, replyOptions, allowFreeText);
     }
 
+    public static MoveToInput RequireMoveToArgument(ActionRequest request)
+    {
+        if (request.Arguments is null)
+            throw new ArgumentException("missing required move_to arguments");
+
+        if (!request.Arguments.Fields.TryGetValue("location", out Value? locationValue))
+            throw new ArgumentException("missing required move_to argument: location");
+        if (locationValue.KindCase != Value.KindOneofCase.StringValue)
+            throw new ArgumentException("move_to location must be a string");
+
+        if (!request.Arguments.Fields.TryGetValue("tile", out Value? tileValue))
+            throw new ArgumentException("missing required move_to argument: tile");
+        if (tileValue.KindCase != Value.KindOneofCase.StructValue)
+            throw new ArgumentException("move_to tile must be an object");
+
+        Struct tile = tileValue.StructValue;
+        int x = RequireIntegerField(tile, "x", "move_to tile.x");
+        int y = RequireIntegerField(tile, "y", "move_to tile.y");
+        return new MoveToInput(RequireNonEmpty(locationValue.StringValue, "move_to location"), x, y);
+    }
+
     public static ActionResult BuildSucceededActionResult(ActionRequest request, string displayedText)
     {
         return BuildSucceededActionResult(request, "displayed_text", displayedText);
@@ -455,6 +477,21 @@ public static partial class ProtocolMapper
     public static ActionResult BuildFacePlayerSucceededActionResult(ActionRequest request, string facing)
     {
         return BuildSucceededActionResult(request, "facing", facing);
+    }
+
+    public static ActionResult BuildMoveToSucceededActionResult(ActionRequest request, MoveToProgress progress)
+    {
+        return new ActionResult
+        {
+            ActionId = request.ActionId,
+            Status = ActionStatus.Succeeded,
+            Output = BuildMoveToLocationOutput(progress),
+        };
+    }
+
+    public static Struct BuildMoveToStatusMetadata(MoveToProgress progress)
+    {
+        return BuildMoveToLocationOutput(progress);
     }
 
     public static ActionResult BuildFailedActionResult(ActionRequest request, string code, Exception ex)
@@ -539,6 +576,41 @@ public static partial class ProtocolMapper
             throw new ArgumentException($"{name} must not be empty");
 
         return value.Trim();
+    }
+
+    private static int RequireIntegerField(Struct structure, string fieldName, string name)
+    {
+        if (!structure.Fields.TryGetValue(fieldName, out Value? value))
+            throw new ArgumentException($"missing required {name}");
+        if (value.KindCase != Value.KindOneofCase.NumberValue)
+            throw new ArgumentException($"{name} must be a number");
+
+        double number = value.NumberValue;
+        if (double.IsNaN(number) || double.IsInfinity(number) || Math.Round(number) != number)
+            throw new ArgumentException($"{name} must be an integer");
+        if (number < int.MinValue || number > int.MaxValue)
+            throw new ArgumentException($"{name} is outside supported integer range");
+
+        return (int)number;
+    }
+
+    private static Struct BuildMoveToLocationOutput(MoveToProgress progress)
+    {
+        return new Struct
+        {
+            Fields =
+            {
+                ["location"] = Value.ForString(progress.Location),
+                ["tile"] = ForStruct(new Struct
+                {
+                    Fields =
+                    {
+                        ["x"] = Value.ForNumber(progress.TileX),
+                        ["y"] = Value.ForNumber(progress.TileY),
+                    },
+                }),
+            },
+        };
     }
 
     private static EntityRef BuildEntity(string entityId, string entityType, string displayName)

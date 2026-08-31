@@ -19,6 +19,7 @@
     <Compile Include="..\..\src\Runtime\ProtocolMapper.Core.cs" Link="ProtocolMapper.Core.cs" />
     <Compile Include="..\..\src\Runtime\RuntimeWorldScope.cs" Link="RuntimeWorldScope.cs" />
     <Compile Include="..\..\src\Capabilities\FacePlayerDirection.cs" Link="FacePlayerDirection.cs" />
+    <Compile Include="..\..\src\Capabilities\MoveToInput.cs" Link="MoveToInput.cs" />
     <Compile Include="..\..\src\Dialogue\DialoguePresentationFlow.cs" Link="DialoguePresentationFlow.cs" />
     <Compile Include="..\..\src\Dialogue\DialogueResponseMenuLayout.cs" Link="DialogueResponseMenuLayout.cs" />
     <Compile Include="..\..\src\Dialogue\DialogueReplyChoice.cs" Link="DialogueReplyChoice.cs" />

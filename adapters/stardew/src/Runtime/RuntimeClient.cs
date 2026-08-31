@@ -5,6 +5,7 @@ using GameAgent.Protocol.V1Alpha2;
 using GameAgent.Stardew.Capabilities;
 using GameAgent.Stardew.Dialogue;
 using GameAgent.Stardew.State;
+using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Grpc.Net.Client;
 using StardewModdingAPI;
@@ -26,6 +27,7 @@ public sealed class RuntimeClient : IDisposable
     private readonly EmoteCapability emoteCapability;
     private readonly PresentDialogueCapability presentDialogueCapability;
     private readonly FacePlayerCapability facePlayerCapability;
+    private readonly MoveToCapability moveToCapability;
     private readonly ActionCancellationRegistry actionCancellationRegistry = new();
     private readonly IMonitor monitor;
     private readonly SemaphoreSlim sendMu = new(1, 1);
@@ -50,6 +52,7 @@ public sealed class RuntimeClient : IDisposable
         EmoteCapability emoteCapability,
         PresentDialogueCapability presentDialogueCapability,
         FacePlayerCapability facePlayerCapability,
+        MoveToCapability moveToCapability,
         IMonitor monitor
     )
     {
@@ -61,6 +64,7 @@ public sealed class RuntimeClient : IDisposable
         this.emoteCapability = emoteCapability;
         this.presentDialogueCapability = presentDialogueCapability;
         this.facePlayerCapability = facePlayerCapability;
+        this.moveToCapability = moveToCapability;
         this.monitor = monitor;
     }
 
@@ -207,6 +211,7 @@ public sealed class RuntimeClient : IDisposable
         this.stream?.Dispose();
         this.channel?.Dispose();
         this.cancellation?.Dispose();
+        this.moveToCapability.Clear();
         this.sendMu.Dispose();
         this.interactionContextStore.Clear();
     }
@@ -235,6 +240,7 @@ public sealed class RuntimeClient : IDisposable
         finally
         {
             this.isReady = false;
+            this.moveToCapability.Clear();
             this.conversationStore.Clear();
             this.interactionContextStore.Clear();
         }
@@ -402,6 +408,12 @@ public sealed class RuntimeClient : IDisposable
                     return;
                 }
 
+                if (request.Capability == "move_to")
+                {
+                    this.HandleMoveToAction(request);
+                    return;
+                }
+
                 result = request.Capability switch
                 {
                     "speak" => this.HandleSpeakAction(request),
@@ -479,6 +491,7 @@ public sealed class RuntimeClient : IDisposable
 
     public void ClearWorldContext()
     {
+        this.moveToCapability.CancelAll("world context cleared before movement completed");
         this.currentWorldId = string.Empty;
         this.conversationStore.Clear();
         this.interactionContextStore.Clear();
@@ -486,6 +499,7 @@ public sealed class RuntimeClient : IDisposable
 
     public void ClearConversations()
     {
+        this.moveToCapability.CancelAll("conversation context cleared before movement completed");
         this.conversationStore.Clear();
         this.interactionContextStore.Clear();
     }
@@ -535,6 +549,8 @@ public sealed class RuntimeClient : IDisposable
                 $"Observation message_id={message.MessageId} correlation_id={message.CorrelationId} entity_id={message.Observation?.EntityId} world_id={message.Observation?.WorldId}",
             AdapterMessage.PayloadOneofCase.ActionResult =>
                 $"ActionResult message_id={message.MessageId} action_id={message.ActionResult?.ActionId} status={message.ActionResult?.Status}",
+            AdapterMessage.PayloadOneofCase.ActionStatus =>
+                $"ActionStatusUpdate message_id={message.MessageId} action_id={message.ActionStatus?.ActionId} status={message.ActionStatus?.Status}",
             AdapterMessage.PayloadOneofCase.Error =>
                 $"Error message_id={message.MessageId} correlation_id={message.CorrelationId} code={message.Error?.Code} message={message.Error?.Message}",
             _ =>
@@ -560,7 +576,7 @@ public sealed class RuntimeClient : IDisposable
             RuntimeMessage.PayloadOneofCase.Observe =>
                 $"ObserveRequest message_id={message.MessageId} entity_id={message.Observe?.EntityId} world_id={message.Observe?.WorldId}",
             RuntimeMessage.PayloadOneofCase.Action =>
-                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} world_id={message.Action?.WorldId} capability={message.Action?.Capability} {FormatActionArguments(message.Action)}",
+                $"ActionRequest message_id={message.MessageId} action_id={message.Action?.ActionId} entity_id={message.Action?.EntityId} world_id={message.Action?.WorldId} capability={message.Action?.Capability} source_event_id={message.Action?.SourceEventId} source_turn_id={message.Action?.SourceTurnId} {FormatActionArguments(message.Action)}",
             RuntimeMessage.PayloadOneofCase.CancelAction =>
                 $"CancelActionRequest message_id={message.MessageId} action_id={message.CancelAction?.ActionId} reason={message.CancelAction?.Reason}",
             RuntimeMessage.PayloadOneofCase.Error =>
@@ -623,6 +639,66 @@ public sealed class RuntimeClient : IDisposable
         {
             this.monitor.Log($"GameAgent present_dialogue failed: {ex.Message}", LogLevel.Error);
             this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex));
+        }
+    }
+
+    private void HandleMoveToAction(ActionRequest request)
+    {
+        try
+        {
+            if (!this.TryGuardInteractionContext(request, out NPC? npc, out _, out ActionResult? rejected))
+            {
+                this.SendActionResult(rejected ?? throw new InvalidOperationException("interaction guard rejected without ActionResult"));
+                return;
+            }
+
+            if (this.actionCancellationRegistry.TryConsumeCancelled(request.ActionId))
+            {
+                this.SendActionResult(ProtocolMapper.BuildCancelledActionResult(request, "action cancelled before execution"));
+                return;
+            }
+
+            NPC guardedNpc = npc ?? throw new InvalidOperationException("interaction guard passed without NPC");
+            MoveToInput input = ProtocolMapper.RequireMoveToArgument(request);
+            MoveToStart start = this.moveToCapability.Start(
+                request.ActionId,
+                guardedNpc,
+                input,
+                isCancelled: () => this.actionCancellationRegistry.IsCancelled(request.ActionId),
+                onSucceeded: progress =>
+                {
+                    this.actionCancellationRegistry.Clear(request.ActionId);
+                    this.SendActionResult(ProtocolMapper.BuildMoveToSucceededActionResult(request, progress));
+                },
+                onCancelled: reason =>
+                {
+                    this.actionCancellationRegistry.Clear(request.ActionId);
+                    this.SendActionResult(ProtocolMapper.BuildCancelledActionResult(request, reason));
+                },
+                onFailed: (code, ex) =>
+                {
+                    this.actionCancellationRegistry.Clear(request.ActionId);
+                    this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, code, ex));
+                }
+            );
+
+            this.SendActionStatusUpdate(request, ActionStatus.Accepted, ProtocolMapper.BuildMoveToStatusMetadata(start.Progress));
+            this.SendActionStatusUpdate(request, ActionStatus.Running, ProtocolMapper.BuildMoveToStatusMetadata(start.Progress));
+            if (start.AlreadyAtTarget)
+            {
+                this.actionCancellationRegistry.Clear(request.ActionId);
+                this.SendActionResult(ProtocolMapper.BuildMoveToSucceededActionResult(request, start.Progress));
+            }
+        }
+        catch (ArgumentException ex)
+        {
+            this.monitor.Log($"GameAgent move_to rejected: {ex.Message}", LogLevel.Warn);
+            this.SendActionResult(ProtocolMapper.BuildRejectedActionResult(request, "invalid_move_target", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            this.monitor.Log($"GameAgent move_to failed: {ex.Message}", LogLevel.Error);
+            this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, "move_failed", ex));
         }
     }
 
@@ -726,6 +802,28 @@ public sealed class RuntimeClient : IDisposable
         this.monitor.Log($"GameAgent ActionResult sent: {result.ActionId} {result.Status}.", LogLevel.Debug);
     }
 
+    private void SendActionStatusUpdate(ActionRequest request, ActionStatus status, Struct metadata)
+    {
+        this.SendFireAndForget(
+            this.SendAsync(
+                new AdapterMessage
+                {
+                    MessageId = ProtocolMapper.NewMessageId("action_status_msg"),
+                    ActionStatus = new ActionStatusUpdate
+                    {
+                        ActionId = request.ActionId,
+                        Status = status,
+                        Metadata = metadata,
+                    },
+                },
+                this.cancellation?.Token ?? CancellationToken.None
+            ),
+            "ActionStatusUpdate"
+        );
+
+        this.monitor.Log($"GameAgent ActionStatusUpdate sent: {request.ActionId} {status}.", LogLevel.Debug);
+    }
+
     private static string FormatEntities(GameEvent? gameEvent)
     {
         if (gameEvent is null)
@@ -741,6 +839,7 @@ public sealed class RuntimeClient : IDisposable
             "speak" => $"text=\"{FormatStringArgument(request, "text")}\"",
             "emote" => $"emote=\"{FormatStringArgument(request, "emote")}\"",
             "present_dialogue" => $"text=\"{FormatStringArgument(request, "text")}\"",
+            "move_to" => $"location=\"{FormatStringArgument(request, "location")}\"",
             _ => string.Empty,
         };
     }

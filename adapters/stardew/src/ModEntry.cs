@@ -22,6 +22,7 @@ public sealed class ModEntry : Mod
     private EmoteCapability? emoteCapability;
     private PresentDialogueCapability? presentDialogueCapability;
     private FacePlayerCapability? facePlayerCapability;
+    private MoveToCapability? moveToCapability;
     private PlayerInteractProbe? playerInteractProbe;
     private RuntimeClient? runtimeClient;
 
@@ -36,6 +37,7 @@ public sealed class ModEntry : Mod
         this.emoteCapability = new EmoteCapability();
         this.presentDialogueCapability = new PresentDialogueCapability(this.conversationStore, this.dialogueController);
         this.facePlayerCapability = new FacePlayerCapability();
+        this.moveToCapability = new MoveToCapability();
         this.runtimeClient = new RuntimeClient(
             this.config,
             this.dispatcher,
@@ -45,6 +47,7 @@ public sealed class ModEntry : Mod
             this.emoteCapability,
             this.presentDialogueCapability,
             this.facePlayerCapability,
+            this.moveToCapability,
             this.Monitor
         );
         this.playerInteractProbe = new PlayerInteractProbe(
@@ -108,6 +111,7 @@ public sealed class ModEntry : Mod
     {
         this.dispatcher?.Drain();
         this.dialogueController?.Update();
+        this.moveToCapability?.Update();
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)

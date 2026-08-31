@@ -17,6 +17,8 @@ $requiredFiles = @(
     'src/Capabilities/PresentDialogueCapability.cs',
     'src/Capabilities/FacePlayerCapability.cs',
     'src/Capabilities/FacePlayerDirection.cs',
+    'src/Capabilities/MoveToInput.cs',
+    'src/Capabilities/MoveToCapability.cs',
     'src/Dialogue/ConversationStateStore.cs',
     'src/Dialogue/PresentDialogueInput.cs',
     'src/Dialogue/DialogueReplyChoice.cs',
@@ -86,6 +88,8 @@ Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ContextFacts' 'ProtocolMap
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' '"utterance"' 'ProtocolMapper must mark player dialogue context facts as utterance.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'present_dialogue' 'CapabilityCatalog must register present_dialogue.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'face_player' 'CapabilityCatalog must register face_player.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'move_to' 'CapabilityCatalog must register move_to.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'ExecutionMode\.Async' 'move_to must be registered as an async capability.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'tool_policy' 'CapabilityCatalog must publish GameAgent tool policy metadata.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'exclusive_per_step' 'present_dialogue must declare exclusive_per_step policy.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'settle_after_success' 'present_dialogue must declare settle_after_success policy.'
@@ -95,6 +99,13 @@ Require-Content 'src/Runtime/RuntimeClient.cs' 'InteractionContextStore' 'Runtim
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext' 'RuntimeClient must use ActionRequest.source_event_id for interaction context guards.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseInteractionConversation' 'RuntimeClient must close matching conversations after interaction guard failure.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'interactionContextStore\.Clear\(\)' 'RuntimeClient must clear interaction contexts when local runtime state is cleared.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'HandleMoveToAction' 'RuntimeClient must route move_to through the async adapter action handler.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'ActionStatusUpdate' 'RuntimeClient must send async ActionStatusUpdate messages.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'BuildMoveToSucceededActionResult' 'RuntimeClient must send terminal move_to ActionResult after movement completes.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'moveToCapability\.Clear\(\)' 'RuntimeClient must stop active movement when the runtime stream ends.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'moveToCapability\.CancelAll' 'RuntimeClient must cancel active movement with terminal results during local context reset.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'IsCancelled' 'ActionCancellationRegistry must expose running-action cancellation checks.'
+Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'Clear' 'ActionCancellationRegistry must clear terminal action cancellation markers.'
 Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_missing' 'InteractionContextStore must reject interaction-bound actions without source context.'
 Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_changed' 'InteractionContextStore must reject stale interaction-bound actions.'
 Require-Content 'src/Runtime/InteractionContextStore.cs' 'MaxInteractionDistance' 'InteractionContextStore must preserve max interaction distance in snapshots.'
@@ -108,14 +119,23 @@ Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'keyboardDispatcher\.S
 Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'BodyFont\s*=>\s*Game1\.dialogueFont' 'Dialogue response body text must use Stardew dialogueFont for NPC-dialogue visual consistency.'
 Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'dialogue_option' 'Dialogue response menu must submit clicked generated reply options.'
 Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'dialogue_free_text' 'Dialogue response menu must submit inline free-text replies.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'PathFindController' 'MoveToCapability must use Stardew pathfinding for movement.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'pathToEndPoint' 'MoveToCapability must reject unreachable paths before starting movement.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'npc\.controller' 'MoveToCapability must own the NPC path controller while moving.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'Halt\(\)' 'MoveToCapability must stop the NPC on cancel or local clear.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'CancelAll' 'MoveToCapability must support terminal cancellation for local context reset.'
+Require-Content 'src/Capabilities/MoveToCapability.cs' 'ContainsKey\(actionId\)' 'MoveToCapability must reject duplicate active action ids.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'nearby_npcs_omitted_count' 'ProtocolMapper tests must cover nearby NPC truncation.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'friendship_points' 'ProtocolMapper tests must cover relationship visibility.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'present_dialogue' 'ProtocolMapper tests must cover present_dialogue.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'ConversationStateStore' 'ProtocolMapper tests must cover conversation state.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'ContextFacts' 'ProtocolMapper tests must cover player dialogue context facts.'
+Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'move_to' 'ProtocolMapper tests must cover move_to capability metadata and argument mapping.'
+Require-Content 'tests/ActionCancellationRegistry.Tests/Program.cs' 'IsCancelled' 'ActionCancellationRegistry tests must cover running-action cancellation checks.'
 
 Reject-Content 'src/State/StardewObservationFactory.cs' 'using StardewValley|StardewValley\.|Game1\.|\bNPC\b|\bFarmer\b' 'StardewObservationFactory must not reference Stardew live objects.'
 Reject-Content 'src/Capabilities/PresentDialogueCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper' 'PresentDialogueCapability must not depend on Runtime mapper.'
+Reject-Content 'src/Capabilities/MoveToCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper|ActionRequest|ActionResult|ActionStatusUpdate' 'MoveToCapability must not depend on Runtime protocol mapping.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' '\["agent_id"\]|\["agent_tile_x"\]|\["player_tile_x"\]|\["friendship"\]' 'ProtocolMapper must not write legacy flat observation state.'
 Reject-Content 'src/Runtime/RuntimeClient.cs' 'ProbeObservation' 'RuntimeClient must use StardewObservation in the production observation path.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ProbeObservation' 'ProtocolMapper must not consume ProbeObservation.'

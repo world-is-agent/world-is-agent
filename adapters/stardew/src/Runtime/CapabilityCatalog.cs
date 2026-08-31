@@ -17,6 +17,9 @@ public static class CapabilityCatalog
     private const string FacePlayerInputSchemaJson =
         "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}";
 
+    private const string MoveToInputSchemaJson =
+        "{\"type\":\"object\",\"properties\":{\"location\":{\"type\":\"string\"},\"tile\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"integer\"},\"y\":{\"type\":\"integer\"}},\"required\":[\"x\",\"y\"],\"additionalProperties\":false}},\"required\":[\"location\",\"tile\"],\"additionalProperties\":false}";
+
     public static CapabilityList BuildEnvironmentCapabilities()
     {
         return new CapabilityList
@@ -59,6 +62,15 @@ public static class CapabilityCatalog
                     Description = "Turns the NPC to face the player when both are in the same location.",
                     InputSchemaJson = FacePlayerInputSchemaJson,
                     ExecutionMode = ExecutionMode.Sync,
+                    ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
+                },
+                new Capability
+                {
+                    Name = "move_to",
+                    Version = "0.1.0",
+                    Description = "Moves the NPC toward a reachable tile in the current location. The action is asynchronous; wait for the terminal result before deciding the next step.",
+                    InputSchemaJson = MoveToInputSchemaJson,
+                    ExecutionMode = ExecutionMode.Async,
                     ConcurrencyMode = CapabilityConcurrencyMode.Sequential,
                 },
             },

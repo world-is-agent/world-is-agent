@@ -486,6 +486,7 @@ Capability speak = capabilities.Capabilities.Single(capability => capability.Nam
 Capability emote = capabilities.Capabilities.Single(capability => capability.Name == "emote");
 Capability presentDialogue = capabilities.Capabilities.Single(capability => capability.Name == "present_dialogue");
 Capability facePlayer = capabilities.Capabilities.Single(capability => capability.Name == "face_player");
+Capability moveTo = capabilities.Capabilities.Single(capability => capability.Name == "move_to");
 Assert(speak.Description.Contains("dialogue text", StringComparison.OrdinalIgnoreCase), "speak description should describe dialogue text effect");
 Assert(emote.Description.Contains("emote bubble", StringComparison.OrdinalIgnoreCase), "emote description should describe emote bubble effect");
 Assert(presentDialogue.Description.Contains("reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe reply options");
@@ -493,10 +494,17 @@ Assert(presentDialogue.Description.Contains("wait for player_said_to_npc", Strin
 Assert(presentDialogue.Description.Contains("only tool call", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe exclusive tool-call use");
 Assert(presentDialogue.Description.Contains("conversation ends", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe ending without reply inputs");
 Assert(facePlayer.Description.Contains("face the player", StringComparison.OrdinalIgnoreCase), "face_player description should describe facing effect");
+Assert(moveTo.Description.Contains("reachable tile", StringComparison.OrdinalIgnoreCase), "move_to description should describe tile movement");
 Assert(speak.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "speak capability should be sequential");
 Assert(emote.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "emote capability should be sequential");
 Assert(presentDialogue.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "present_dialogue capability should be sequential");
 Assert(facePlayer.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "face_player capability should be sequential");
+Assert(moveTo.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "move_to capability should be sequential");
+Assert(moveTo.ExecutionMode == ExecutionMode.Async, "move_to capability should be async");
+Assert(moveTo.InputSchemaJson.Contains("\"location\"", StringComparison.Ordinal), "move_to schema should require location");
+Assert(moveTo.InputSchemaJson.Contains("\"tile\"", StringComparison.Ordinal), "move_to schema should require tile");
+Assert(moveTo.InputSchemaJson.Contains("\"x\":{\"type\":\"integer\"}", StringComparison.Ordinal), "move_to tile x schema should require integer coordinates");
+Assert(moveTo.InputSchemaJson.Contains("\"y\":{\"type\":\"integer\"}", StringComparison.Ordinal), "move_to tile y schema should require integer coordinates");
 Struct presentDialogueGameAgentExtensions = RequireStruct(presentDialogue.Extensions, "gameagent");
 Struct presentDialogueToolPolicy = RequireStruct(presentDialogueGameAgentExtensions, "tool_policy");
 Assert(presentDialogueToolPolicy.Fields["exclusive_per_step"].BoolValue, "present_dialogue should declare exclusive_per_step policy");
@@ -679,6 +687,60 @@ Assert(FacePlayerDirection.Resolve(npcTileX: 10, npcTileY: 10, playerTileX: 10, 
 ActionResult facePlayerResult = ProtocolMapper.BuildFacePlayerSucceededActionResult(presentDialogueRequest, "down");
 Assert(facePlayerResult.Output.Fields["facing"].StringValue == "down", "face_player result should carry facing");
 Assert(!facePlayerResult.Output.Fields.ContainsKey("facing_direction"), "face_player result should not expose facing_direction");
+
+ActionRequest moveToRequest = new()
+{
+    ActionId = "act_move",
+    EntityId = "npc:Abigail",
+    WorldId = "Farm_123456",
+    Capability = "move_to",
+    SourceEventId = "event_guard_1",
+    SourceTurnId = "turn_guard",
+    Arguments = new Struct
+    {
+        Fields =
+        {
+            ["location"] = Value.ForString("Town"),
+            ["tile"] = new Value
+            {
+                StructValue = new Struct
+                {
+                    Fields =
+                    {
+                        ["x"] = Value.ForNumber(12),
+                        ["y"] = Value.ForNumber(20),
+                    },
+                },
+            },
+        },
+    },
+};
+MoveToInput moveInput = ProtocolMapper.RequireMoveToArgument(moveToRequest);
+Assert(moveInput.Location == "Town", "move_to location should parse");
+Assert(moveInput.TileX == 12 && moveInput.TileY == 20, "move_to tile should parse");
+ActionResult moveResult = ProtocolMapper.BuildMoveToSucceededActionResult(moveToRequest, new MoveToProgress("Town", 12, 20));
+Assert(moveResult.Status == ActionStatus.Succeeded, "move_to result should succeed after reaching target");
+Assert(moveResult.Output.Fields["location"].StringValue == "Town", "move_to result should carry current location");
+Assert(RequireNumber(moveResult.Output.Fields["tile"].StructValue, "x") == 12, "move_to result should carry current tile x");
+Assert(RequireNumber(ProtocolMapper.BuildMoveToStatusMetadata(new MoveToProgress("Town", 12, 20)).Fields["tile"].StructValue, "y") == 20, "move_to status metadata should carry current tile y");
+ExpectArgumentException(
+    () =>
+    {
+        ActionRequest invalid = moveToRequest.Clone();
+        invalid.Arguments.Fields["tile"].StructValue.Fields["x"] = Value.ForNumber(12.5);
+        ProtocolMapper.RequireMoveToArgument(invalid);
+    },
+    "integer"
+);
+ExpectArgumentException(
+    () =>
+    {
+        ActionRequest invalid = moveToRequest.Clone();
+        invalid.Arguments.Fields.Remove("location");
+        ProtocolMapper.RequireMoveToArgument(invalid);
+    },
+    "location"
+);
 Assert(PlayerInteractTrigger.FromButton("action") == "action_button", "action button should map to action_button trigger");
 Assert(PlayerInteractTrigger.FromButton("mouse_left") == "mouse_left", "left mouse should map to mouse_left trigger");
 Assert(PlayerInteractTrigger.FromButton("mouse_right") == "mouse_right", "right mouse should map to mouse_right trigger");

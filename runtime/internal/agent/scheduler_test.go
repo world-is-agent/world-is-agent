@@ -16,15 +16,22 @@ import (
 )
 
 type schedulerTestEnvironment struct {
-	mu           sync.Mutex
-	calls        []string
-	events       []string
-	active       int
-	maxActive    int
-	statuses     map[string]protocolv1alpha2.ActionStatus
-	actionErrors map[string]*protocolv1alpha2.Error
-	submitErrors map[string]error
-	delays       map[string]time.Duration
+	mu                sync.Mutex
+	calls             []string
+	events            []string
+	active            int
+	maxActive         int
+	statuses          map[string]protocolv1alpha2.ActionStatus
+	startStatuses     map[string]protocolv1alpha2.ActionStatus
+	fastStartStatuses map[string]protocolv1alpha2.ActionStatus
+	actionErrors      map[string]*protocolv1alpha2.Error
+	submitErrors      map[string]error
+	waitErrors        map[string]error
+	delays            map[string]time.Duration
+	startDelays       map[string]time.Duration
+	waitDelays        map[string]time.Duration
+	actionIDLabels    map[string]string
+	cancelled         []string
 }
 
 func (e *schedulerTestEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
@@ -48,29 +55,74 @@ func (e *schedulerTestEnvironment) SubmitAction(ctx context.Context, req *protoc
 		return nil, err
 	}
 
-	status := e.status(label)
-	output, err := structpb.NewStruct(map[string]any{"label": label})
-	if err != nil {
-		return nil, err
-	}
-
-	return &protocolv1alpha2.ActionResult{
-		ActionId: req.GetActionId(),
-		Status:   status,
-		Output:   output,
-		Error:    e.actionError(label),
-	}, nil
+	return e.actionResult(req.GetActionId(), label, e.status(label)), nil
 }
 
 func (e *schedulerTestEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (ActionStart, error) {
-	return ActionStart{}, errors.New("StartAction is not implemented for sync scheduler tests")
+	label := schedulerActionLabel(req)
+	e.recordStart(label)
+	defer e.recordFinish(label)
+
+	e.rememberActionID(req.GetActionId(), label)
+
+	if delay := e.startDelay(label); delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			e.CancelAction(req.GetActionId(), "action_start_timeout")
+			return ActionStart{}, ctx.Err()
+		}
+	}
+
+	if err := e.submitError(label); err != nil {
+		return ActionStart{}, err
+	}
+	if status, ok := e.fastStartStatus(label); ok {
+		return ActionStart{Result: e.actionResult(req.GetActionId(), label, status)}, nil
+	}
+
+	status := e.startStatus(label)
+	actionID := req.GetActionId()
+	if status == protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED ||
+		status == protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED ||
+		status == protocolv1alpha2.ActionStatus_ACTION_STATUS_FAILED ||
+		status == protocolv1alpha2.ActionStatus_ACTION_STATUS_CANCELLED ||
+		status == protocolv1alpha2.ActionStatus_ACTION_STATUS_INTERRUPTED {
+		return ActionStart{Result: e.actionResult(actionID, label, status)}, nil
+	}
+
+	return ActionStart{Update: &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: actionID,
+		Status:   status,
+	}}, nil
 }
 
 func (e *schedulerTestEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
-	return nil, errors.New("WaitActionResult is not implemented for sync scheduler tests")
+	label := e.labelForActionID(actionID)
+	e.recordEvent("wait:" + label)
+
+	if delay := e.waitDelay(label); delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			e.CancelAction(actionID, "async_action_timeout")
+			return nil, ctx.Err()
+		}
+	}
+
+	if err := e.waitError(label); err != nil {
+		return nil, err
+	}
+
+	return e.actionResult(actionID, label, e.status(label)), nil
 }
 
-func (e *schedulerTestEnvironment) CancelAction(actionID string, reason string) {}
+func (e *schedulerTestEnvironment) CancelAction(actionID string, reason string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.cancelled = append(e.cancelled, actionID+":"+reason)
+}
 
 func (e *schedulerTestEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
 	return nil
@@ -96,6 +148,13 @@ func (e *schedulerTestEnvironment) recordFinish(label string) {
 	e.events = append(e.events, "finish:"+label)
 }
 
+func (e *schedulerTestEnvironment) recordEvent(event string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.events = append(e.events, event)
+}
+
 func (e *schedulerTestEnvironment) status(label string) protocolv1alpha2.ActionStatus {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -108,6 +167,31 @@ func (e *schedulerTestEnvironment) status(label string) protocolv1alpha2.ActionS
 		return protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED
 	}
 	return status
+}
+
+func (e *schedulerTestEnvironment) startStatus(label string) protocolv1alpha2.ActionStatus {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.startStatuses == nil {
+		return protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED
+	}
+	status := e.startStatuses[label]
+	if status == protocolv1alpha2.ActionStatus_ACTION_STATUS_UNSPECIFIED {
+		return protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED
+	}
+	return status
+}
+
+func (e *schedulerTestEnvironment) fastStartStatus(label string) (protocolv1alpha2.ActionStatus, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.fastStartStatuses == nil {
+		return protocolv1alpha2.ActionStatus_ACTION_STATUS_UNSPECIFIED, false
+	}
+	status, ok := e.fastStartStatuses[label]
+	return status, ok
 }
 
 func (e *schedulerTestEnvironment) actionError(label string) *protocolv1alpha2.Error {
@@ -130,6 +214,16 @@ func (e *schedulerTestEnvironment) submitError(label string) error {
 	return e.submitErrors[label]
 }
 
+func (e *schedulerTestEnvironment) waitError(label string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.waitErrors == nil {
+		return nil
+	}
+	return e.waitErrors[label]
+}
+
 func (e *schedulerTestEnvironment) delay(label string) time.Duration {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -138,6 +232,63 @@ func (e *schedulerTestEnvironment) delay(label string) time.Duration {
 		return 0
 	}
 	return e.delays[label]
+}
+
+func (e *schedulerTestEnvironment) startDelay(label string) time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.startDelays == nil {
+		return 0
+	}
+	return e.startDelays[label]
+}
+
+func (e *schedulerTestEnvironment) waitDelay(label string) time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.waitDelays == nil {
+		return 0
+	}
+	return e.waitDelays[label]
+}
+
+func (e *schedulerTestEnvironment) rememberActionID(actionID string, label string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.actionIDLabels == nil {
+		e.actionIDLabels = make(map[string]string)
+	}
+	e.actionIDLabels[actionID] = label
+}
+
+func (e *schedulerTestEnvironment) labelForActionID(actionID string) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.actionIDLabels == nil {
+		return actionID
+	}
+	label := e.actionIDLabels[actionID]
+	if label == "" {
+		return actionID
+	}
+	return label
+}
+
+func (e *schedulerTestEnvironment) actionResult(actionID string, label string, status protocolv1alpha2.ActionStatus) *protocolv1alpha2.ActionResult {
+	output, err := structpb.NewStruct(map[string]any{"label": label})
+	if err != nil {
+		panic(err)
+	}
+	return &protocolv1alpha2.ActionResult{
+		ActionId: actionID,
+		Status:   status,
+		Output:   output,
+		Error:    e.actionError(label),
+	}
 }
 
 func (e *schedulerTestEnvironment) callOrder() []string {
@@ -170,6 +321,15 @@ func (e *schedulerTestEnvironment) activeCount() int {
 	defer e.mu.Unlock()
 
 	return e.active
+}
+
+func (e *schedulerTestEnvironment) cancelledActions() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	out := make([]string, len(e.cancelled))
+	copy(out, e.cancelled)
+	return out
 }
 
 func TestSchedulerRunsSequentialCallsSerially(t *testing.T) {
@@ -679,6 +839,232 @@ func TestSchedulerHonorsMaxParallelToolCalls(t *testing.T) {
 	}
 }
 
+func TestSchedulerStartsAndWaitsForSingleAsyncAction(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	var statusUpdates []string
+	scheduler := toolBatchScheduler{
+		registry:           registry,
+		actionStartTimeout: time.Second,
+		asyncActionTimeout: time.Second,
+		sourceEventID:      "event_1",
+		sourceTurnID:       "turn_1",
+		onActionStatusUpdate: func(item plannedToolCall, update *protocolv1alpha2.ActionStatusUpdate) {
+			statusUpdates = append(statusUpdates, update.GetStatus().String())
+			if item.request.GetSourceEventId() != "event_1" || item.request.GetSourceTurnId() != "turn_1" {
+				t.Fatalf("source correlation = %q/%q, want event_1/turn_1", item.request.GetSourceEventId(), item.request.GetSourceTurnId())
+			}
+		},
+	}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "destination"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	assertStringSlice(t, env.callOrder(), []string{"destination"})
+	assertContainsAll(t, env.eventOrder(), []string{"start:destination", "finish:destination", "wait:destination"})
+	assertStringSlice(t, statusUpdates, []string{"ACTION_STATUS_ACCEPTED"})
+	if got := len(outcome.Results); got != 1 {
+		t.Fatalf("result count = %d, want 1", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "succeeded", "action_succeeded")
+	if outcome.Results[0].Output["label"] != "destination" {
+		t.Fatalf("result output = %+v, want destination label", outcome.Results[0].Output)
+	}
+	if got := len(outcome.SuccessfulActions); got != 1 {
+		t.Fatalf("successful action count = %d, want 1", got)
+	}
+	if outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = true, want false")
+	}
+}
+
+func TestSchedulerAsyncSuccessHonorsSettleAfterSuccessPolicy(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapabilityWithPolicy("move_to", tool.ConcurrencySequential, tool.ToolPolicy{SettleAfterSuccess: true}),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "destination"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if !outcome.SettleAfterSuccess {
+		t.Fatal("SettleAfterSuccess = false, want true")
+	}
+}
+
+func TestSchedulerRejectsAsyncMixedBatchBeforeExecution(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+		schedulerCapability("speak", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "destination"),
+		schedulerCall("call_speak", "speak", "line"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "invalid", "async_batch_unsupported")
+	assertToolResult(t, outcome.Results[1], "call_speak", "speak", "skipped", "batch_validation_failed")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
+func TestSchedulerRejectsMultipleAsyncCallsBeforeExecution(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_a", "move_to", "a"),
+		schedulerCall("call_b", "move_to", "b"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	if got := len(env.callOrder()); got != 0 {
+		t.Fatalf("submitted action count = %d, want 0", got)
+	}
+	assertToolResult(t, outcome.Results[0], "call_a", "move_to", "invalid", "async_batch_unsupported")
+	assertToolResult(t, outcome.Results[1], "call_b", "move_to", "invalid", "async_batch_unsupported")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+}
+
+func TestSchedulerAsyncTerminalFailureIsModelVisible(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{
+		statuses: map[string]protocolv1alpha2.ActionStatus{
+			"blocked": protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED,
+		},
+		actionErrors: map[string]*protocolv1alpha2.Error{
+			"blocked": {Code: "path_blocked", Message: "path is blocked"},
+		},
+	}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "blocked"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "rejected", "path_blocked")
+	if !outcome.HasModelVisibleFailure {
+		t.Fatal("HasModelVisibleFailure = false, want true")
+	}
+	if got := len(outcome.SuccessfulActions); got != 0 {
+		t.Fatalf("successful action count = %d, want 0", got)
+	}
+}
+
+func TestSchedulerAsyncFastTerminalStartResult(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{
+		fastStartStatuses: map[string]protocolv1alpha2.ActionStatus{
+			"already_there": protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+		},
+	}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+
+	outcome, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "already_there"),
+	})
+	if err != nil {
+		t.Fatalf("Run returned technical error: %v", err)
+	}
+
+	assertToolResult(t, outcome.Results[0], "call_move", "move_to", "succeeded", "action_succeeded")
+	assertNotContains(t, env.eventOrder(), "wait:already_there")
+}
+
+func TestSchedulerAsyncStartTimeoutCancelsAction(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{startDelays: map[string]time.Duration{
+		"slow_start": 50 * time.Millisecond,
+	}}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: 5 * time.Millisecond, asyncActionTimeout: time.Second}
+
+	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "slow_start"),
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want timeout")
+	}
+
+	assertCancelledWithReason(t, env.cancelledActions(), "action_start_timeout")
+}
+
+func TestSchedulerAsyncWaitTimeoutCancelsAction(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{waitDelays: map[string]time.Duration{
+		"slow_wait": 50 * time.Millisecond,
+	}}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: 5 * time.Millisecond}
+
+	_, err := scheduler.Run(context.Background(), env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "slow_wait"),
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want timeout")
+	}
+
+	assertCancelledWithReason(t, env.cancelledActions(), "async_action_timeout")
+}
+
+func TestSchedulerTurnTimeoutCancelsPendingAsyncAction(t *testing.T) {
+	registry := schedulerRegistry(
+		schedulerAsyncCapability("move_to", tool.ConcurrencySequential),
+	)
+	env := &schedulerTestEnvironment{waitDelays: map[string]time.Duration{
+		"slow_wait": 50 * time.Millisecond,
+	}}
+	scheduler := toolBatchScheduler{registry: registry, actionStartTimeout: time.Second, asyncActionTimeout: time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+
+	_, err := scheduler.Run(ctx, env, "world:test", "npc:Linus", []model.ToolCall{
+		schedulerCall("call_move", "move_to", "slow_wait"),
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want turn timeout")
+	}
+
+	assertCancelledWithReason(t, env.cancelledActions(), "async_action_timeout")
+}
+
 func schedulerRegistry(capabilities ...*protocolv1alpha2.Capability) *tool.Registry {
 	registry := tool.NewRegistry()
 	registry.RegisterEnvironmentCapabilities(capabilities)
@@ -704,6 +1090,18 @@ func schedulerCapabilityWithSchema(name string, concurrency tool.ConcurrencyMode
 
 func schedulerCapabilityWithPolicy(name string, concurrency tool.ConcurrencyMode, policy tool.ToolPolicy) *protocolv1alpha2.Capability {
 	capability := schedulerCapability(name, concurrency)
+	capability.Extensions = schedulerToolPolicyExtensions(policy)
+	return capability
+}
+
+func schedulerAsyncCapability(name string, concurrency tool.ConcurrencyMode) *protocolv1alpha2.Capability {
+	capability := schedulerCapability(name, concurrency)
+	capability.ExecutionMode = protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC
+	return capability
+}
+
+func schedulerAsyncCapabilityWithPolicy(name string, concurrency tool.ConcurrencyMode, policy tool.ToolPolicy) *protocolv1alpha2.Capability {
+	capability := schedulerAsyncCapability(name, concurrency)
 	capability.Extensions = schedulerToolPolicyExtensions(policy)
 	return capability
 }
@@ -783,6 +1181,17 @@ func assertNotContains(t *testing.T, got []string, unwanted string) {
 	if indexOf(got, unwanted) != -1 {
 		t.Fatalf("slice = %v, should not contain %q", got, unwanted)
 	}
+}
+
+func assertCancelledWithReason(t *testing.T, got []string, reason string) {
+	t.Helper()
+
+	for _, item := range got {
+		if strings.HasSuffix(item, ":"+reason) {
+			return
+		}
+	}
+	t.Fatalf("cancelled actions = %v, want reason %q", got, reason)
 }
 
 func indexOf(values []string, want string) int {

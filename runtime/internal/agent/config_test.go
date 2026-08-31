@@ -17,12 +17,15 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
   "llm_timeout_ms": 2000,
   "observe_timeout_ms": 3000,
   "action_timeout_ms": 4000,
+  "action_start_timeout_ms": 5000,
+  "async_action_timeout_ms": 6000,
   "memory_enabled": true,
   "recent_memory_limit": 7,
   "memory_context_size_limit": 2048,
   "max_steps": 5,
   "max_tool_calls_per_step": 3,
   "max_tool_calls_per_turn": 9,
+  "max_async_actions_per_turn": 2,
   "max_parallel_tool_calls": 2,
   "max_tool_result_output_bytes": 4096,
   "max_tool_result_output_depth": 3,
@@ -46,6 +49,12 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 
 	if cfg.TurnTimeout != time.Second {
 		t.Fatalf("expected turn timeout 1s, got %s", cfg.TurnTimeout)
+	}
+	if cfg.ActionStartTimeout != 5*time.Second {
+		t.Fatalf("expected action start timeout 5s, got %s", cfg.ActionStartTimeout)
+	}
+	if cfg.AsyncActionTimeout != 6*time.Second {
+		t.Fatalf("expected async action timeout 6s, got %s", cfg.AsyncActionTimeout)
 	}
 	if cfg.Prompt.Language != "Simplified Chinese" {
 		t.Fatalf("expected language from config, got %q", cfg.Prompt.Language)
@@ -76,6 +85,9 @@ func TestLoadConfigFileLoadsPromptConfig(t *testing.T) {
 	}
 	if cfg.MaxToolCallsPerTurn != 9 {
 		t.Fatalf("expected max tool calls per turn 9, got %d", cfg.MaxToolCallsPerTurn)
+	}
+	if cfg.MaxAsyncActionsPerTurn != 2 {
+		t.Fatalf("expected max async actions per turn 2, got %d", cfg.MaxAsyncActionsPerTurn)
 	}
 	if cfg.MaxParallelToolCalls != 2 {
 		t.Fatalf("expected max parallel tool calls 2, got %d", cfg.MaxParallelToolCalls)
@@ -237,6 +249,7 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 		MaxSteps:                      -1,
 		MaxToolCallsPerStep:           0,
 		MaxToolCallsPerTurn:           -2,
+		MaxAsyncActionsPerTurn:        0,
 		MaxParallelToolCalls:          0,
 		MaxToolResultOutputBytes:      -1,
 		MaxToolResultOutputDepth:      0,
@@ -253,6 +266,9 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 	if cfg.MaxToolCallsPerTurn != 6 {
 		t.Fatalf("MaxToolCallsPerTurn = %d, want 6", cfg.MaxToolCallsPerTurn)
 	}
+	if cfg.MaxAsyncActionsPerTurn != 1 {
+		t.Fatalf("MaxAsyncActionsPerTurn = %d, want 1", cfg.MaxAsyncActionsPerTurn)
+	}
 	if cfg.MaxParallelToolCalls != 4 {
 		t.Fatalf("MaxParallelToolCalls = %d, want 4", cfg.MaxParallelToolCalls)
 	}
@@ -268,14 +284,26 @@ func TestConfigDefaultsPhase5BudgetsWhenMissingZeroOrNegative(t *testing.T) {
 	if cfg.MaxToolResultOutputArrayItems != 32 {
 		t.Fatalf("MaxToolResultOutputArrayItems = %d, want 32", cfg.MaxToolResultOutputArrayItems)
 	}
-	if cfg.TurnTimeout != 60*time.Second {
-		t.Fatalf("TurnTimeout = %s, want 60s", cfg.TurnTimeout)
+	if cfg.ActionStartTimeout != 3*time.Second {
+		t.Fatalf("ActionStartTimeout = %s, want 3s", cfg.ActionStartTimeout)
+	}
+	if cfg.AsyncActionTimeout != 45*time.Second {
+		t.Fatalf("AsyncActionTimeout = %s, want 45s", cfg.AsyncActionTimeout)
+	}
+	if cfg.TurnTimeout != 90*time.Second {
+		t.Fatalf("TurnTimeout = %s, want 90s", cfg.TurnTimeout)
 	}
 }
 
-func TestConfigPhase5DefaultTurnTimeoutCoversWorstCaseBudget(t *testing.T) {
+func TestConfigPhase6DefaultTurnTimeoutCoversAsyncBudget(t *testing.T) {
 	cfg := agent.DefaultConfig()
-	worstCase := cfg.ObserveTimeout + time.Duration(cfg.MaxSteps)*cfg.LLMTimeout + time.Duration(cfg.MaxToolCallsPerTurn)*cfg.ActionTimeout
+	worstCase := cfg.ObserveTimeout +
+		time.Duration(cfg.MaxSteps)*cfg.LLMTimeout +
+		cfg.ActionStartTimeout +
+		cfg.AsyncActionTimeout +
+		cfg.ObserveTimeout +
+		cfg.LLMTimeout +
+		cfg.ActionTimeout
 
 	if cfg.TurnTimeout <= worstCase {
 		t.Fatalf("TurnTimeout = %s, want greater than worst case %s", cfg.TurnTimeout, worstCase)

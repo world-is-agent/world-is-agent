@@ -533,6 +533,8 @@ func (l *Loop) newToolBatchScheduler(turnTracer trace.TurnTracer, stepIndex int,
 		registry:             l.tools,
 		maxParallelToolCalls: l.config.MaxParallelToolCalls,
 		actionTimeout:        l.config.ActionTimeout,
+		actionStartTimeout:   l.config.ActionStartTimeout,
+		asyncActionTimeout:   l.config.AsyncActionTimeout,
 		sourceEventID:        event.GetEventId(),
 		sourceTurnID:         turnID,
 		onActionSubmit: func(item plannedToolCall) {

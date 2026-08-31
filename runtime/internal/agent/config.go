@@ -20,12 +20,15 @@ type Config struct {
 	LLMTimeout                    time.Duration
 	ObserveTimeout                time.Duration
 	ActionTimeout                 time.Duration
+	ActionStartTimeout            time.Duration
+	AsyncActionTimeout            time.Duration
 	MemoryEnabled                 *bool
 	RecentMemoryLimit             int
 	MemoryContextSizeLimit        int
 	MaxSteps                      int
 	MaxToolCallsPerStep           int
 	MaxToolCallsPerTurn           int
+	MaxAsyncActionsPerTurn        int
 	MaxParallelToolCalls          int
 	MaxToolResultOutputBytes      int
 	MaxToolResultOutputDepth      int
@@ -39,12 +42,15 @@ type fileConfig struct {
 	LLMTimeoutMS                  int64        `json:"llm_timeout_ms"`
 	ObserveTimeoutMS              int64        `json:"observe_timeout_ms"`
 	ActionTimeoutMS               int64        `json:"action_timeout_ms"`
+	ActionStartTimeoutMS          int64        `json:"action_start_timeout_ms"`
+	AsyncActionTimeoutMS          int64        `json:"async_action_timeout_ms"`
 	MemoryEnabled                 *bool        `json:"memory_enabled"`
 	RecentMemoryLimit             int          `json:"recent_memory_limit"`
 	MemoryContextSizeLimit        int          `json:"memory_context_size_limit"`
 	MaxSteps                      int          `json:"max_steps"`
 	MaxToolCallsPerStep           int          `json:"max_tool_calls_per_step"`
 	MaxToolCallsPerTurn           int          `json:"max_tool_calls_per_turn"`
+	MaxAsyncActionsPerTurn        int          `json:"max_async_actions_per_turn"`
 	MaxParallelToolCalls          int          `json:"max_parallel_tool_calls"`
 	MaxToolResultOutputBytes      int          `json:"max_tool_result_output_bytes"`
 	MaxToolResultOutputDepth      int          `json:"max_tool_result_output_depth"`
@@ -64,16 +70,19 @@ type PromptConfig struct {
 // 默认开启短期 Memory，并加载当前 Runtime 预算上限。
 func DefaultConfig() Config {
 	return Config{
-		TurnTimeout:                   60 * time.Second,
+		TurnTimeout:                   90 * time.Second,
 		LLMTimeout:                    8 * time.Second,
 		ObserveTimeout:                3 * time.Second,
 		ActionTimeout:                 3 * time.Second,
+		ActionStartTimeout:            3 * time.Second,
+		AsyncActionTimeout:            45 * time.Second,
 		MemoryEnabled:                 boolPtr(defaultMemoryEnabled),
 		RecentMemoryLimit:             5,
 		MemoryContextSizeLimit:        4096,
 		MaxSteps:                      3,
 		MaxToolCallsPerStep:           4,
 		MaxToolCallsPerTurn:           6,
+		MaxAsyncActionsPerTurn:        1,
 		MaxParallelToolCalls:          4,
 		MaxToolResultOutputBytes:      8192,
 		MaxToolResultOutputDepth:      4,
@@ -119,11 +128,14 @@ func LoadConfigFile(path string) (Config, error) {
 		LLMTimeout:                    durationMS(raw.LLMTimeoutMS),
 		ObserveTimeout:                durationMS(raw.ObserveTimeoutMS),
 		ActionTimeout:                 durationMS(raw.ActionTimeoutMS),
+		ActionStartTimeout:            durationMS(raw.ActionStartTimeoutMS),
+		AsyncActionTimeout:            durationMS(raw.AsyncActionTimeoutMS),
 		RecentMemoryLimit:             raw.RecentMemoryLimit,
 		MemoryContextSizeLimit:        raw.MemoryContextSizeLimit,
 		MaxSteps:                      raw.MaxSteps,
 		MaxToolCallsPerStep:           raw.MaxToolCallsPerStep,
 		MaxToolCallsPerTurn:           raw.MaxToolCallsPerTurn,
+		MaxAsyncActionsPerTurn:        raw.MaxAsyncActionsPerTurn,
 		MaxParallelToolCalls:          raw.MaxParallelToolCalls,
 		MaxToolResultOutputBytes:      raw.MaxToolResultOutputBytes,
 		MaxToolResultOutputDepth:      raw.MaxToolResultOutputDepth,
@@ -185,6 +197,12 @@ func (c Config) WithDefaults() Config {
 	if c.ActionTimeout <= 0 {
 		c.ActionTimeout = defaults.ActionTimeout
 	}
+	if c.ActionStartTimeout <= 0 {
+		c.ActionStartTimeout = defaults.ActionStartTimeout
+	}
+	if c.AsyncActionTimeout <= 0 {
+		c.AsyncActionTimeout = defaults.AsyncActionTimeout
+	}
 	if c.RecentMemoryLimit <= 0 {
 		c.RecentMemoryLimit = defaults.RecentMemoryLimit
 	}
@@ -199,6 +217,9 @@ func (c Config) WithDefaults() Config {
 	}
 	if c.MaxToolCallsPerTurn <= 0 {
 		c.MaxToolCallsPerTurn = defaults.MaxToolCallsPerTurn
+	}
+	if c.MaxAsyncActionsPerTurn <= 0 {
+		c.MaxAsyncActionsPerTurn = defaults.MaxAsyncActionsPerTurn
 	}
 	if c.MaxParallelToolCalls <= 0 {
 		c.MaxParallelToolCalls = defaults.MaxParallelToolCalls

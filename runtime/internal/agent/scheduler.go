@@ -32,15 +32,20 @@ const (
 	toolResultCodeActionRequestInvalid   = "action_request_invalid"
 	toolResultCodeNonTerminalActionState = "non_terminal_action_status"
 	toolResultCodeExclusiveToolBatch     = "exclusive_tool_must_be_only_tool_call"
+	toolResultCodeAsyncBatchUnsupported  = "async_batch_unsupported"
+	toolResultCodeActionStartRejected    = "action_start_rejected"
 )
 
 type toolBatchScheduler struct {
 	registry             *tool.Registry
 	maxParallelToolCalls int
 	actionTimeout        time.Duration
+	actionStartTimeout   time.Duration
+	asyncActionTimeout   time.Duration
 	sourceEventID        string
 	sourceTurnID         string
 	onActionSubmit       func(plannedToolCall)
+	onActionStatusUpdate func(plannedToolCall, *protocolv1alpha2.ActionStatusUpdate)
 	onActionResult       func(plannedToolCall, *protocolv1alpha2.ActionResult)
 }
 
@@ -84,6 +89,26 @@ func (s toolBatchScheduler) Run(
 			Results:                validationResults,
 			HasModelVisibleFailure: true,
 		}, nil
+	}
+	if len(plan) == 1 && plan[0].entry.Execution == tool.ExecutionAsync {
+		result, actionResult, err := s.runAsyncOne(ctx, env, plan[0])
+		if err != nil {
+			return toolBatchOutcome{}, err
+		}
+		outcome := toolBatchOutcome{
+			Results: []model.ToolResult{result},
+		}
+		if result.Status == toolResultStatusSucceeded {
+			outcome.SuccessfulActions = []completedToolAction{{
+				ToolCall:     plan[0].call,
+				ActionResult: actionResult,
+				Policy:       plan[0].entry.Policy,
+			}}
+			outcome.SettleAfterSuccess = plan[0].entry.Policy.SettleAfterSuccess
+		} else {
+			outcome.HasModelVisibleFailure = true
+		}
+		return outcome, nil
 	}
 
 	results := make([]model.ToolResult, len(calls))
@@ -171,6 +196,12 @@ func (s toolBatchScheduler) preflight(
 		}
 		if entry.Policy.ExclusivePerStep && len(calls) > 1 {
 			results[i] = invalidToolResult(call, toolResultCodeExclusiveToolBatch, "tool with exclusive_per_step policy must be the only tool call in the model response")
+			invalid[i] = true
+			hasFailure = true
+			continue
+		}
+		if entry.Execution == tool.ExecutionAsync && len(calls) > 1 {
+			results[i] = invalidToolResult(call, toolResultCodeAsyncBatchUnsupported, "async tool must be the only tool call in the model response")
 			invalid[i] = true
 			hasFailure = true
 			continue
@@ -353,6 +384,62 @@ func (s toolBatchScheduler) runOne(ctx context.Context, env Environment, item pl
 	return result, actionResult, err
 }
 
+func (s toolBatchScheduler) runAsyncOne(ctx context.Context, env Environment, item plannedToolCall) (model.ToolResult, *protocolv1alpha2.ActionResult, error) {
+	if env == nil {
+		return model.ToolResult{}, nil, errors.New("environment is nil")
+	}
+
+	startCtx := ctx
+	cancelStart := func() {}
+	if s.actionStartTimeout > 0 {
+		startCtx, cancelStart = context.WithTimeout(ctx, s.actionStartTimeout)
+	}
+	defer cancelStart()
+
+	if s.onActionSubmit != nil {
+		s.onActionSubmit(item)
+	}
+
+	start, err := env.StartAction(startCtx, item.request)
+	if err != nil {
+		return model.ToolResult{}, nil, err
+	}
+	if start.Result != nil {
+		if s.onActionResult != nil {
+			s.onActionResult(item, start.Result)
+		}
+		result, err := toolResultFromActionResultWithDefaultRejectedCode(item.call, start.Result, toolResultCodeActionStartRejected)
+		return result, start.Result, err
+	}
+	if start.Update == nil {
+		return model.ToolResult{}, nil, errors.New("action start is missing status update or terminal result")
+	}
+	if s.onActionStatusUpdate != nil {
+		s.onActionStatusUpdate(item, start.Update)
+	}
+
+	waitCtx := ctx
+	cancelWait := func() {}
+	if s.asyncActionTimeout > 0 {
+		waitCtx, cancelWait = context.WithTimeout(ctx, s.asyncActionTimeout)
+	}
+	defer cancelWait()
+
+	actionResult, err := env.WaitActionResult(waitCtx, item.request.GetActionId())
+	if err != nil {
+		return model.ToolResult{}, nil, err
+	}
+	if actionResult == nil {
+		return model.ToolResult{}, nil, errors.New("action result is nil")
+	}
+	if s.onActionResult != nil {
+		s.onActionResult(item, actionResult)
+	}
+
+	result, err := toolResultFromActionResult(item.call, actionResult)
+	return result, actionResult, err
+}
+
 func toolResultFromActionResult(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult) (model.ToolResult, error) {
 	switch actionResult.GetStatus() {
 	case protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED:
@@ -374,6 +461,19 @@ func toolResultFromActionResult(call model.ToolCall, actionResult *protocolv1alp
 	default:
 		return model.ToolResult{}, fmt.Errorf("%s: %s", toolResultCodeNonTerminalActionState, actionResult.GetStatus().String())
 	}
+}
+
+func toolResultFromActionResultWithDefaultRejectedCode(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult, defaultRejectedCode string) (model.ToolResult, error) {
+	if actionResult.GetStatus() != protocolv1alpha2.ActionStatus_ACTION_STATUS_REJECTED ||
+		strings.TrimSpace(actionResult.GetError().GetCode()) != "" {
+		return toolResultFromActionResult(call, actionResult)
+	}
+	result, err := toolResultFromActionResult(call, actionResult)
+	if err != nil {
+		return model.ToolResult{}, err
+	}
+	result.Code = defaultRejectedCode
+	return result, nil
 }
 
 func terminalActionToolResult(call model.ToolCall, actionResult *protocolv1alpha2.ActionResult, status string) model.ToolResult {

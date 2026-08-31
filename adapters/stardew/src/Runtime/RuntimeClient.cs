@@ -15,11 +15,13 @@ namespace GameAgent.Stardew.Runtime;
 public sealed class RuntimeClient : IDisposable
 {
     private const string ProtocolVersion = "v1alpha2";
+    private const int MaxInteractionDistance = 2;
 
     private readonly AdapterConfig config;
     private readonly MainThreadDispatcher dispatcher;
     private readonly ObservationBuilder observationBuilder;
     private readonly ConversationStateStore conversationStore;
+    private readonly InteractionContextStore interactionContextStore = new();
     private readonly SpeakCapability speakCapability;
     private readonly EmoteCapability emoteCapability;
     private readonly PresentDialogueCapability presentDialogueCapability;
@@ -106,6 +108,7 @@ public sealed class RuntimeClient : IDisposable
         try
         {
             string conversationId = this.conversationStore.PrepareInteraction(this.currentWorldId, npcEntityId, ProtocolMapper.PlayerEntityId, eventId);
+            this.interactionContextStore.Reserve(this.BuildInteractionContextSnapshot(eventId, npc, Game1.player, conversationId));
             gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(npc, player, conversationId, trigger, sequence, this.currentWorldId, eventId);
             await this.SendAsync(
                 new AdapterMessage
@@ -119,6 +122,7 @@ public sealed class RuntimeClient : IDisposable
         catch
         {
             this.conversationStore.DiscardPending(eventId);
+            this.interactionContextStore.Discard(eventId);
             throw;
         }
 
@@ -154,6 +158,7 @@ public sealed class RuntimeClient : IDisposable
                 this.currentWorldId,
                 eventId
             );
+            this.interactionContextStore.Reserve(this.BuildInteractionContextSnapshot(eventId, npc, player, submission.ConversationId));
             this.conversationStore.PreparePlayerLine(
                 this.currentWorldId,
                 npcEntityId,
@@ -177,6 +182,7 @@ public sealed class RuntimeClient : IDisposable
         catch
         {
             this.conversationStore.DiscardPending(eventId);
+            this.interactionContextStore.Discard(eventId);
             throw;
         }
 
@@ -202,6 +208,7 @@ public sealed class RuntimeClient : IDisposable
         this.channel?.Dispose();
         this.cancellation?.Dispose();
         this.sendMu.Dispose();
+        this.interactionContextStore.Clear();
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -229,6 +236,7 @@ public sealed class RuntimeClient : IDisposable
         {
             this.isReady = false;
             this.conversationStore.Clear();
+            this.interactionContextStore.Clear();
         }
     }
 
@@ -270,6 +278,10 @@ public sealed class RuntimeClient : IDisposable
 
             case RuntimeMessage.PayloadOneofCase.EventAck:
                 this.HandleEventAck(message.EventAck);
+                break;
+
+            case RuntimeMessage.PayloadOneofCase.TurnCompletion:
+                this.HandleTurnCompletion(message.TurnCompletion);
                 break;
 
             case RuntimeMessage.PayloadOneofCase.Observe:
@@ -422,15 +434,26 @@ public sealed class RuntimeClient : IDisposable
         {
             case EventAckStatus.Accepted:
                 this.conversationStore.CommitPending(ack.EventId);
+                this.interactionContextStore.Commit(ack.EventId);
                 break;
             case EventAckStatus.Duplicate:
             case EventAckStatus.Rejected:
             case EventAckStatus.Unspecified:
                 this.conversationStore.DiscardPending(ack.EventId);
+                this.interactionContextStore.Discard(ack.EventId);
                 break;
         }
 
         this.monitor.Log($"GameAgent EventAck received: {ack.EventId} {ack.Status}", LogLevel.Debug);
+    }
+
+    private void HandleTurnCompletion(TurnCompletion? completion)
+    {
+        if (completion is null)
+            return;
+
+        this.interactionContextStore.Release(completion);
+        this.monitor.Log($"GameAgent TurnCompletion received: {completion.EventId} {completion.Status}", LogLevel.Debug);
     }
 
     private NPC RequireNpc(string entityId)
@@ -458,11 +481,13 @@ public sealed class RuntimeClient : IDisposable
     {
         this.currentWorldId = string.Empty;
         this.conversationStore.Clear();
+        this.interactionContextStore.Clear();
     }
 
     public void ClearConversations()
     {
         this.conversationStore.Clear();
+        this.interactionContextStore.Clear();
     }
 
     private string ResolveCurrentWorldId()
@@ -569,10 +594,16 @@ public sealed class RuntimeClient : IDisposable
     {
         try
         {
-            NPC npc = this.RequireNpc(request.EntityId);
+            if (!this.TryGuardInteractionContext(request, out NPC? npc, out _, out ActionResult? rejected))
+            {
+                this.SendActionResult(rejected ?? throw new InvalidOperationException("interaction guard rejected without ActionResult"));
+                return;
+            }
+
+            NPC guardedNpc = npc ?? throw new InvalidOperationException("interaction guard passed without NPC");
             PresentDialogueInput input = ProtocolMapper.RequirePresentDialogueArgument(request);
             this.presentDialogueCapability.Present(
-                npc,
+                guardedNpc,
                 Game1.player,
                 this.currentWorldId,
                 input,
@@ -580,7 +611,7 @@ public sealed class RuntimeClient : IDisposable
                 onCancelled: () => this.SendActionResult(ProtocolMapper.BuildCancelledActionResult(request, "action cancelled before dialogue display")),
                 onDisplayed: conversationId => this.SendActionResult(ProtocolMapper.BuildPresentDialogueSucceededActionResult(request, conversationId, input)),
                 onFailed: ex => this.SendActionResult(ProtocolMapper.BuildFailedActionResult(request, "action_failed", ex)),
-                onSubmitted: submission => this.SendPlayerDialogueSubmission(npc, Game1.player, submission)
+                onSubmitted: submission => this.SendPlayerDialogueSubmission(guardedNpc, Game1.player, submission)
             );
         }
         catch (ArgumentException ex)
@@ -607,6 +638,75 @@ public sealed class RuntimeClient : IDisposable
         {
             return ProtocolMapper.BuildRejectedActionResult(request, "different_location", ex.Message);
         }
+    }
+
+    private InteractionContextSnapshot BuildInteractionContextSnapshot(string eventId, NPC npc, Farmer player, string conversationId)
+    {
+        return new InteractionContextSnapshot(
+            EventId: eventId,
+            WorldId: this.currentWorldId,
+            NpcEntityId: ProtocolMapper.ToNpcEntityId(npc),
+            PlayerEntityId: ProtocolMapper.PlayerEntityId,
+            ConversationId: conversationId,
+            NpcLocation: npc.currentLocation?.Name ?? "unknown",
+            NpcTileX: npc.TilePoint.X,
+            NpcTileY: npc.TilePoint.Y,
+            PlayerLocation: player.currentLocation?.Name ?? "unknown",
+            PlayerTileX: player.TilePoint.X,
+            PlayerTileY: player.TilePoint.Y,
+            MaxInteractionDistance: MaxInteractionDistance
+        );
+    }
+
+    private bool TryGuardInteractionContext(ActionRequest request, out NPC? npc, out InteractionContextSnapshot? snapshot, out ActionResult? rejected)
+    {
+        npc = null;
+        rejected = null;
+
+        if (!this.interactionContextStore.TryResolve(request, out snapshot, out string errorCode, out string message))
+        {
+            this.CloseInteractionConversation(snapshot);
+            rejected = ProtocolMapper.BuildRejectedActionResult(request, errorCode, message);
+            return false;
+        }
+
+        InteractionContextSnapshot resolvedSnapshot = snapshot ?? throw new InvalidOperationException("interaction context resolved without snapshot");
+        npc = this.RequireNpc(request.EntityId);
+        InteractionContextCurrentState current = this.BuildInteractionContextCurrentState(npc, Game1.player);
+        if (!this.interactionContextStore.TryValidateCurrentState(resolvedSnapshot, current, out errorCode, out message))
+        {
+            this.CloseInteractionConversation(resolvedSnapshot);
+            rejected = ProtocolMapper.BuildRejectedActionResult(request, errorCode, message);
+            return false;
+        }
+
+        return true;
+    }
+
+    private InteractionContextCurrentState BuildInteractionContextCurrentState(NPC npc, Farmer player)
+    {
+        string npcEntityId = ProtocolMapper.ToNpcEntityId(npc);
+        ConversationSnapshot? conversation = this.conversationStore.GetActiveConversation(this.currentWorldId, npcEntityId, ProtocolMapper.PlayerEntityId);
+        return new InteractionContextCurrentState(
+            WorldId: this.currentWorldId,
+            NpcEntityId: npcEntityId,
+            PlayerEntityId: ProtocolMapper.PlayerEntityId,
+            ConversationId: conversation?.ConversationId ?? string.Empty,
+            NpcLocation: npc.currentLocation?.Name ?? "unknown",
+            NpcTileX: npc.TilePoint.X,
+            NpcTileY: npc.TilePoint.Y,
+            PlayerLocation: player.currentLocation?.Name ?? "unknown",
+            PlayerTileX: player.TilePoint.X,
+            PlayerTileY: player.TilePoint.Y
+        );
+    }
+
+    private void CloseInteractionConversation(InteractionContextSnapshot? snapshot)
+    {
+        if (snapshot is null)
+            return;
+
+        this.conversationStore.CloseIfConversation(snapshot.WorldId, snapshot.NpcEntityId, snapshot.PlayerEntityId, snapshot.ConversationId);
     }
 
     private void SendActionResult(ActionResult result)

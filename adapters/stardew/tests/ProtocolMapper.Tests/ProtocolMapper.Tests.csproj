@@ -15,6 +15,7 @@
   <ItemGroup>
     <Protobuf Include="..\..\..\..\protocol\proto\gameagent.proto" GrpcServices="Client" />
     <Compile Include="..\..\src\Runtime\CapabilityCatalog.cs" Link="CapabilityCatalog.cs" />
+    <Compile Include="..\..\src\Runtime\InteractionContextStore.cs" Link="InteractionContextStore.cs" />
     <Compile Include="..\..\src\Runtime\ProtocolMapper.Core.cs" Link="ProtocolMapper.Core.cs" />
     <Compile Include="..\..\src\Runtime\RuntimeWorldScope.cs" Link="RuntimeWorldScope.cs" />
     <Compile Include="..\..\src\Capabilities\FacePlayerDirection.cs" Link="FacePlayerDirection.cs" />

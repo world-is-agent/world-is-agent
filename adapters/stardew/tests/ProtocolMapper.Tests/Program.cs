@@ -134,6 +134,74 @@ store.Clear();
 conversationId = store.PrepareInteraction("Farm_123456", "npc:Abigail", "player:local", "event_interact_4");
 Assert(conversationId == "conv_4", "cleared store should start a new conversation id");
 
+InteractionContextStore interactionContexts = new();
+InteractionContextSnapshot interactionSnapshot = new(
+    EventId: "event_guard_1",
+    WorldId: "Farm_123456",
+    NpcEntityId: "npc:Abigail",
+    PlayerEntityId: "player:local",
+    ConversationId: "conv_guard",
+    NpcLocation: "Town",
+    NpcTileX: 10,
+    NpcTileY: 12,
+    PlayerLocation: "Town",
+    PlayerTileX: 11,
+    PlayerTileY: 12,
+    MaxInteractionDistance: 2
+);
+interactionContexts.Reserve(interactionSnapshot);
+Assert(interactionContexts.TryGet("event_guard_1") is null, "interaction context should not be visible before EventAck.ACCEPTED");
+interactionContexts.Commit("event_guard_1");
+InteractionContextSnapshot? committedInteraction = interactionContexts.TryGet("event_guard_1");
+Assert(committedInteraction?.ConversationId == "conv_guard", "accepted event should expose interaction context snapshot");
+if (committedInteraction is null)
+    throw new InvalidOperationException("accepted event should expose a non-null interaction context snapshot");
+Assert(committedInteraction.NpcLocation == "Town", "interaction context should retain NPC location");
+ActionRequest guardedAction = new()
+{
+    ActionId = "act_guard",
+    EntityId = "npc:Abigail",
+    WorldId = "Farm_123456",
+    SourceEventId = "event_guard_1",
+    SourceTurnId = "turn_guard",
+};
+Assert(interactionContexts.TryResolve(guardedAction, out committedInteraction, out string guardErrorCode, out _), "guarded action should resolve source event context");
+Assert(committedInteraction?.NpcEntityId == "npc:Abigail", "guarded action should resolve NPC context");
+if (committedInteraction is null)
+    throw new InvalidOperationException("guarded action should resolve a non-null NPC context");
+InteractionContextCurrentState currentInteraction = new(
+    WorldId: "Farm_123456",
+    NpcEntityId: "npc:Abigail",
+    PlayerEntityId: "player:local",
+    ConversationId: "conv_guard",
+    NpcLocation: "Town",
+    NpcTileX: 10,
+    NpcTileY: 12,
+    PlayerLocation: "Town",
+    PlayerTileX: 11,
+    PlayerTileY: 12
+);
+Assert(interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction, out guardErrorCode, out _), "unchanged interaction context should pass effect-time guard");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { ConversationId = "conv_changed" }, out guardErrorCode, out _), "changed conversation should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_changed", "changed conversation should use interaction_context_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerLocation = "Farm" }, out guardErrorCode, out _), "changed player location should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_changed", "changed location should use interaction_context_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerTileX = 20 }, out guardErrorCode, out _), "distance beyond max interaction distance should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_changed", "changed distance should use interaction_context_changed");
+ActionRequest missingSourceAction = guardedAction.Clone();
+missingSourceAction.SourceEventId = "";
+Assert(!interactionContexts.TryResolve(missingSourceAction, out _, out guardErrorCode, out _), "missing source_event_id should reject interaction-bound action");
+Assert(guardErrorCode == "interaction_context_missing", "missing source_event_id should use interaction_context_missing");
+ActionRequest wrongEntityAction = guardedAction.Clone();
+wrongEntityAction.EntityId = "npc:Leah";
+Assert(!interactionContexts.TryResolve(wrongEntityAction, out _, out guardErrorCode, out _), "source context for a different entity should reject interaction-bound action");
+Assert(guardErrorCode == "interaction_context_changed", "wrong entity should use interaction_context_changed");
+interactionContexts.Release(new TurnCompletion { EventId = "event_guard_1", Status = TurnCompletionStatus.Completed });
+Assert(interactionContexts.TryGet("event_guard_1") is null, "TurnCompletion should release interaction context");
+interactionContexts.Reserve(interactionSnapshot with { EventId = "event_guard_2" });
+interactionContexts.Discard("event_guard_2");
+Assert(interactionContexts.TryGet("event_guard_2") is null, "rejected EventAck should discard reserved interaction context");
+
 GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(
     npcEntityId: "npc:Abigail",
     npcDisplayName: "Abigail",

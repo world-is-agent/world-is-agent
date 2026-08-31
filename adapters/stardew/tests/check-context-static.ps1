@@ -24,6 +24,7 @@ $requiredFiles = @(
     'src/Dialogue/DialogueInteractionController.cs',
     'src/Dialogue/DialogueInteractionMenu.cs',
     'src/Runtime/CapabilityCatalog.cs',
+    'src/Runtime/InteractionContextStore.cs',
     'src/Runtime/ProtocolMapper.Core.cs',
     'src/Runtime/RuntimeClient.cs',
     'src/Runtime/RuntimeWorldScope.cs',
@@ -89,6 +90,16 @@ Require-Content 'src/Runtime/CapabilityCatalog.cs' 'tool_policy' 'CapabilityCata
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'exclusive_per_step' 'present_dialogue must declare exclusive_per_step policy.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'settle_after_success' 'present_dialogue must declare settle_after_success policy.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'EventAckStatus\.Accepted' 'RuntimeClient must commit conversation state after accepted EventAck.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TurnCompletion' 'RuntimeClient must handle TurnCompletion lifecycle messages.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'InteractionContextStore' 'RuntimeClient must retain accepted interaction context snapshots.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext' 'RuntimeClient must use ActionRequest.source_event_id for interaction context guards.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseInteractionConversation' 'RuntimeClient must close matching conversations after interaction guard failure.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'interactionContextStore\.Clear\(\)' 'RuntimeClient must clear interaction contexts when local runtime state is cleared.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_missing' 'InteractionContextStore must reject interaction-bound actions without source context.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_changed' 'InteractionContextStore must reject stale interaction-bound actions.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'MaxInteractionDistance' 'InteractionContextStore must preserve max interaction distance in snapshots.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'TryValidateCurrentState' 'InteractionContextStore must validate effect-time world, conversation, location, and distance.'
+Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'InteractionContextStore' 'ProtocolMapper tests must cover interaction context lifecycle.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId\)' 'RuntimeClient must let delayed dialogue display honor CancelAction.'
 Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'Game1\.DrawDialogue\(new StardewValley\.Dialogue' 'Dialogue UI must show the NPC line through Stardew native dialogue first.'
 Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'new DialogueInteractionMenu' 'Dialogue UI must show reply choices in the adapter bottom response menu after the native NPC dialogue advances.'

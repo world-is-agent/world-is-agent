@@ -165,6 +165,8 @@ exclusive_per_step
 settle_after_success
     true 时，该 ToolCall terminal SUCCEEDED 且当前 step 无 model-visible failure 后，
     Runtime 不再发起下一次 model request，直接完成当前 Turn。
+    Phase6 仅用于 sync tool。async tool terminal 后必须 re-observe 当前 entity，
+    再进入下一 AgentStep；async tool 不使用 settle_after_success 直接收敛 Turn。
 ```
 
 缺失 policy 时按零值处理。字段存在但类型非法时，Runtime 注册 capability 时跳过该 capability。
@@ -322,11 +324,12 @@ ADR 通过标准：
 12. Runtime tests 证明 ActionStatusUpdate 会被接收和 trace。
 13. Runtime tests 证明 ASYNC capability 可以进入 tool view。
 14. Runtime tests 证明 async action terminal result 能恢复原 AgentTurn。
-15. Runtime tests 证明 re-observe 失败不会使用 stale observation 继续 Turn。
-16. Runtime tests 证明 async timeout 或 TurnTimeout 会发送 CancelActionRequest，并且 late result 不恢复已失败 Turn。
-17. Stardew adapter tests / build 证明 move_to 使用 EXECUTION_MODE_ASYNC。
-17. Stardew adapter tests 证明 TurnCompletion 可以释放 interaction context。
-18. Stardew adapter tests 证明 interaction-bound Action 使用 source_event_id 执行 guard。
+15. Runtime tests 证明 async ToolCall terminal 后必须 re-observe 并进入下一 AgentStep，不通过 settle_after_success 直接完成 Turn。
+16. Runtime tests 证明 re-observe 失败不会使用 stale observation 继续 Turn。
+17. Runtime tests 证明 async timeout 或 TurnTimeout 会发送 CancelActionRequest，并且 late result 不恢复已失败 Turn。
+18. Stardew adapter tests / build 证明 move_to 使用 EXECUTION_MODE_ASYNC。
+19. Stardew adapter tests 证明 TurnCompletion 可以释放 interaction context。
+20. Stardew adapter tests 证明 interaction-bound Action 使用 source_event_id 执行 guard。
 ```
 
 验收命令：

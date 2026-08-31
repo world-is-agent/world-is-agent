@@ -190,6 +190,8 @@ exclusive_per_step
 settle_after_success
     该 tool call terminal SUCCEEDED 且当前 step 无 model-visible failure 时，
     Runtime 不再发起下一次 model request，直接进入 Turn completed / settle path。
+    Phase6 仅用于 sync tool。async tool terminal 后必须 re-observe 当前 entity，
+    再进入下一 AgentStep；async tool 不使用 settle_after_success 直接收敛 Turn。
 ```
 
 Runtime Core MUST NOT 从 capability name 推断上述策略。Stardew 的 `present_dialogue`、其它游戏的 `ask_player` 或 `show_choices` 都必须通过同一套 policy 表达相同执行语义。
@@ -562,9 +564,10 @@ Phase6 支持的 async 调度规则：
 ```text
 - exclusive_per_step ToolCall 必须单独占据当前 AgentStep；
 - exclusive_per_step preflight 在 sync / async execution 分叉之前执行，M1 落地后 M6 复用，不在 async 路径重写；
-- settle_after_success ToolCall terminal SUCCEEDED 且当前 step 无 model-visible failure 后，Runtime 不再发起下一次 model request，直接完成 Turn；
+- sync settle_after_success ToolCall terminal SUCCEEDED 且当前 step 无 model-visible failure 后，Runtime 不再发起下一次 model request，直接完成 Turn；
 - async ToolCall 必须单独占据当前 AgentStep；
 - async ToolCall 不与其它 ToolCall 组成 batch；
+- async ToolCall terminal 后必须 re-observe 当前 entity 并进入下一 AgentStep，不通过 settle_after_success 直接完成 Turn；
 - async action 使用 ActionStartTimeout 等待 ACCEPTED / RUNNING；
 - async action 使用 AsyncActionTimeout 等待 terminal ActionResult；
 - timeout 时 Runtime 发送 CancelActionRequest；
@@ -1023,7 +1026,8 @@ powershell -ExecutionPolicy Bypass -File adapters/stardew/tests/check-context-st
 - exclusive_per_step 校验位于通用 preflight，先于 sync / async execution 分叉；
 - exclusive_per_step ToolCall 与其它 ToolCall 同 step 出现时，preflight 失败且不发送 ActionRequest；
 - exclusive_per_step 违规的 ToolResult code 不包含具体 capability name；
-- settle_after_success ToolCall terminal SUCCEEDED 且当前 step 无 model-visible failure 后，Runtime 不再发起下一次 model request，直接进入 completed / settle path；
+- sync settle_after_success ToolCall terminal SUCCEEDED 且当前 step 无 model-visible failure 后，Runtime 不再发起下一次 model request，直接进入 completed / settle path；
+- async ToolCall 即使 carrying settle_after_success policy，也必须先 re-observe 当前 entity 并进入下一 AgentStep；
 - 不新增 CapabilityPolicy proto 字段。
 ```
 
@@ -1583,5 +1587,6 @@ long-term memory persistence
 - Action lifecycle 是否需要独立子系统；
 - 当前 single async action per Turn 是否足够进入 Phase7；
 - TurnCompletion 是否足以支撑 Adapter interaction lifecycle；
+- Memory visible action summary 是否需要由 capability metadata 驱动，替代 Phase5.6 中对 `speak` / `emote` / `present_dialogue` / `face_player` 的渲染层摘要分支；
 - move_to 是否暴露出需要升级 protocol 的真实缺口。
 ```

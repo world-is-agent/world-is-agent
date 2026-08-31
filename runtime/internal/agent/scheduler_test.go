@@ -62,6 +62,16 @@ func (e *schedulerTestEnvironment) SubmitAction(ctx context.Context, req *protoc
 	}, nil
 }
 
+func (e *schedulerTestEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (ActionStart, error) {
+	return ActionStart{}, errors.New("StartAction is not implemented for sync scheduler tests")
+}
+
+func (e *schedulerTestEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
+	return nil, errors.New("WaitActionResult is not implemented for sync scheduler tests")
+}
+
+func (e *schedulerTestEnvironment) CancelAction(actionID string, reason string) {}
+
 func (e *schedulerTestEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
 	return nil
 }

@@ -611,6 +611,16 @@ func (f *fakeEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha
 	}, nil
 }
 
+func (f *fakeEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (agent.ActionStart, error) {
+	return agent.ActionStart{}, errors.New("StartAction is not implemented for sync loop tests")
+}
+
+func (f *fakeEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
+	return nil, errors.New("WaitActionResult is not implemented for sync loop tests")
+}
+
+func (f *fakeEnvironment) CancelAction(actionID string, reason string) {}
+
 func (f *fakeEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
 	f.turnCompletions = append(f.turnCompletions, completion)
 	return f.completeErr
@@ -641,6 +651,16 @@ func (e *technicalActionEnvironment) SubmitAction(ctx context.Context, req *prot
 		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
 	}, nil
 }
+
+func (e *technicalActionEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (agent.ActionStart, error) {
+	return agent.ActionStart{}, errors.New("StartAction is not implemented for sync loop tests")
+}
+
+func (e *technicalActionEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
+	return nil, errors.New("WaitActionResult is not implemented for sync loop tests")
+}
+
+func (e *technicalActionEnvironment) CancelAction(actionID string, reason string) {}
 
 func (e *technicalActionEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
 	e.mu.Lock()

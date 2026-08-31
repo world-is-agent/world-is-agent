@@ -22,7 +22,15 @@ import (
 type Environment interface {
 	Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error)
 	SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error)
+	StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (ActionStart, error)
+	WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error)
+	CancelAction(actionID string, reason string)
 	SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error
+}
+
+type ActionStart struct {
+	Update *protocolv1alpha2.ActionStatusUpdate
+	Result *protocolv1alpha2.ActionResult
 }
 
 // Loop 执行 Runtime MVP0 的 one-turn AgentRun。

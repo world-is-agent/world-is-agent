@@ -135,6 +135,12 @@ func (s *Server) Connect(stream protocolv1alpha2.GameAgentGateway_ConnectServer)
 			}
 			env.resolveActionResult(payload.ActionResult.ActionId, payload.ActionResult)
 
+		case *protocolv1alpha2.AdapterMessage_ActionStatus:
+			if payload.ActionStatus == nil {
+				continue
+			}
+			env.resolveActionStatusUpdate(payload.ActionStatus.ActionId, payload.ActionStatus)
+
 		case *protocolv1alpha2.AdapterMessage_Error:
 			if payload.Error == nil {
 				continue

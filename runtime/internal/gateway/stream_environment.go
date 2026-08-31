@@ -6,12 +6,9 @@ import (
 	"sync"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/agent"
 )
 
-// streamEnvironment 将一条 gRPC Adapter stream 适配成 agent.Environment。
-//
-// Agent Loop 看到的是同步的 Observe / SubmitAction 调用，底层协议实际是
-// bidirectional stream 上的异步 request / response。
 type streamEnvironment struct {
 	stream protocolv1alpha2.GameAgentGateway_ConnectServer
 
@@ -19,7 +16,7 @@ type streamEnvironment struct {
 
 	pendingMu           sync.Mutex
 	pendingObservations map[string]pendingObservation
-	pendingActions      map[string]chan actionResult
+	pendingActions      map[string]*pendingAction
 }
 
 type pendingObservation struct {
@@ -33,24 +30,29 @@ type observeResult struct {
 	err         error
 }
 
+type pendingAction struct {
+	updates chan actionStatusResult
+	results chan actionResult
+}
+
+type actionStatusResult struct {
+	update *protocolv1alpha2.ActionStatusUpdate
+	err    error
+}
+
 type actionResult struct {
 	result *protocolv1alpha2.ActionResult
 	err    error
 }
 
-// newStreamEnvironment 创建连接级环境状态。
-//
-// pendingObservations / pendingActions 必须属于单条 Connect stream，
-// 避免未来多个 Adapter 连接之间互相唤醒错误的 waiter。
 func newStreamEnvironment(stream protocolv1alpha2.GameAgentGateway_ConnectServer) *streamEnvironment {
 	return &streamEnvironment{
 		stream:              stream,
 		pendingObservations: make(map[string]pendingObservation),
-		pendingActions:      make(map[string]chan actionResult),
+		pendingActions:      make(map[string]*pendingAction),
 	}
 }
 
-// Observe 发送 ObserveRequest，并等待 recvLoop 通过 correlation_id 返回 Observation。
 func (e *streamEnvironment) Observe(ctx context.Context, worldID string, entityID string) (*protocolv1alpha2.Observation, error) {
 	if worldID == "" {
 		return nil, fmt.Errorf("world id is empty")
@@ -60,11 +62,8 @@ func (e *streamEnvironment) Observe(ctx context.Context, worldID string, entityI
 	}
 
 	messageID := newMessageID("observe")
-
 	ch := make(chan observeResult, 1)
 
-	// message_id 是这次 ObserveRequest 的协议编号；Adapter 回复时必须把它
-	// 放到 correlation_id，recvLoop 才能找到正确的等待者。
 	e.pendingMu.Lock()
 	e.pendingObservations[messageID] = pendingObservation{
 		worldID:  worldID,
@@ -101,7 +100,131 @@ func (e *streamEnvironment) Observe(ctx context.Context, worldID string, entityI
 	}
 }
 
-// resolveObservation 唤醒正在等待指定 correlation_id 的 Observe 调用。
+func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
+	if req == nil {
+		return nil, fmt.Errorf("action request is nil")
+	}
+	if req.ActionId == "" {
+		return nil, fmt.Errorf("action id is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	pending := newPendingAction()
+	e.setPendingAction(req.ActionId, pending)
+	defer e.deletePendingAction(req.ActionId)
+
+	if err := e.sendActionRequest(req); err != nil {
+		return nil, err
+	}
+
+	select {
+	case result := <-pending.results:
+		return result.result, result.err
+	case <-ctx.Done():
+		e.CancelAction(req.ActionId, "action_timeout")
+		return nil, ctx.Err()
+	}
+}
+
+func (e *streamEnvironment) StartAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (agent.ActionStart, error) {
+	if req == nil {
+		return agent.ActionStart{}, fmt.Errorf("action request is nil")
+	}
+	if req.ActionId == "" {
+		return agent.ActionStart{}, fmt.Errorf("action id is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return agent.ActionStart{}, err
+	}
+
+	pending := newPendingAction()
+	e.setPendingAction(req.ActionId, pending)
+
+	if err := e.sendActionRequest(req); err != nil {
+		e.deletePendingAction(req.ActionId)
+		return agent.ActionStart{}, err
+	}
+
+	for {
+		select {
+		case update := <-pending.updates:
+			if update.err != nil {
+				e.deletePendingAction(req.ActionId)
+				return agent.ActionStart{}, update.err
+			}
+			if update.update == nil || !isActionStartStatus(update.update.GetStatus()) {
+				continue
+			}
+			return agent.ActionStart{Update: update.update}, nil
+		case result := <-pending.results:
+			e.deletePendingAction(req.ActionId)
+			return agent.ActionStart{Result: result.result}, result.err
+		case <-ctx.Done():
+			e.deletePendingAction(req.ActionId)
+			e.CancelAction(req.ActionId, "action_start_timeout")
+			return agent.ActionStart{}, ctx.Err()
+		}
+	}
+}
+
+func (e *streamEnvironment) WaitActionResult(ctx context.Context, actionID string) (*protocolv1alpha2.ActionResult, error) {
+	if actionID == "" {
+		return nil, fmt.Errorf("action id is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	pending := e.getPendingAction(actionID)
+	if pending == nil {
+		return nil, fmt.Errorf("pending action %q not found", actionID)
+	}
+	defer e.deletePendingAction(actionID)
+
+	select {
+	case result := <-pending.results:
+		return result.result, result.err
+	case <-ctx.Done():
+		e.CancelAction(actionID, "async_action_timeout")
+		return nil, ctx.Err()
+	}
+}
+
+func (e *streamEnvironment) CancelAction(actionID string, reason string) {
+	if actionID == "" {
+		return
+	}
+	msg := &protocolv1alpha2.RuntimeMessage{
+		MessageId: newMessageID("cancel_action"),
+		Payload: &protocolv1alpha2.RuntimeMessage_CancelAction{
+			CancelAction: &protocolv1alpha2.CancelActionRequest{
+				ActionId: actionID,
+				Reason:   reason,
+			},
+		},
+	}
+	_ = e.send(msg)
+}
+
+func (e *streamEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
+	if completion == nil {
+		return fmt.Errorf("turn completion is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	msg := &protocolv1alpha2.RuntimeMessage{
+		MessageId: newMessageID("turn_completion"),
+		Payload: &protocolv1alpha2.RuntimeMessage_TurnCompletion{
+			TurnCompletion: completion,
+		},
+	}
+	return e.send(msg)
+}
+
 func (e *streamEnvironment) resolveObservation(correlationID string, observation *protocolv1alpha2.Observation) {
 	e.pendingMu.Lock()
 	pending, ok := e.pendingObservations[correlationID]
@@ -124,7 +247,6 @@ func (e *streamEnvironment) resolveObservation(correlationID string, observation
 	pending.ch <- observeResult{observation: observation}
 }
 
-// failObservation 用 Adapter 返回的 Error 唤醒对应 Observe 调用。
 func (e *streamEnvironment) failObservation(correlationID string, err error) {
 	e.pendingMu.Lock()
 	pending, ok := e.pendingObservations[correlationID]
@@ -137,104 +259,37 @@ func (e *streamEnvironment) failObservation(correlationID string, err error) {
 	pending.ch <- observeResult{err: err}
 }
 
-// SubmitAction 发送 ActionRequest，并等待 Adapter 返回对应 action_id 的 ActionResult。
-func (e *streamEnvironment) SubmitAction(ctx context.Context, req *protocolv1alpha2.ActionRequest) (*protocolv1alpha2.ActionResult, error) {
-	if req == nil {
-		return nil, fmt.Errorf("action request is nil")
+func (e *streamEnvironment) resolveActionStatusUpdate(actionID string, update *protocolv1alpha2.ActionStatusUpdate) {
+	pending := e.getPendingAction(actionID)
+	if pending == nil {
+		return
 	}
-	if req.ActionId == "" {
-		return nil, fmt.Errorf("action id is empty")
+	select {
+	case pending.updates <- actionStatusResult{update: update}:
+	default:
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+}
+
+func (e *streamEnvironment) resolveActionResult(actionID string, result *protocolv1alpha2.ActionResult) {
+	pending := e.getPendingAction(actionID)
+	if pending == nil {
+		return
 	}
+	select {
+	case pending.results <- actionResult{result: result}:
+	default:
+	}
+}
 
-	messageID := newMessageID("action")
-
-	ch := make(chan actionResult, 1)
-
-	// ActionResult 自带 action_id，所以这里用业务动作 ID 匹配结果；
-	// RuntimeMessage.message_id 只负责这条协议消息本身的身份。
-	e.pendingMu.Lock()
-	e.pendingActions[req.ActionId] = ch
-	e.pendingMu.Unlock()
-
-	defer func() {
-		e.pendingMu.Lock()
-		delete(e.pendingActions, req.ActionId)
-		e.pendingMu.Unlock()
-	}()
-
-	msg := &protocolv1alpha2.RuntimeMessage{
-		MessageId: messageID,
+func (e *streamEnvironment) sendActionRequest(req *protocolv1alpha2.ActionRequest) error {
+	return e.send(&protocolv1alpha2.RuntimeMessage{
+		MessageId: newMessageID("action"),
 		Payload: &protocolv1alpha2.RuntimeMessage_Action{
 			Action: req,
 		},
-	}
-
-	if err := e.send(msg); err != nil {
-		return nil, err
-	}
-
-	select {
-	case result := <-ch:
-		return result.result, result.err
-	case <-ctx.Done():
-		e.sendCancelActionBestEffort(req.ActionId, "action_timeout")
-		return nil, ctx.Err()
-	}
+	})
 }
 
-func (e *streamEnvironment) SendTurnCompletion(ctx context.Context, completion *protocolv1alpha2.TurnCompletion) error {
-	if completion == nil {
-		return fmt.Errorf("turn completion is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	msg := &protocolv1alpha2.RuntimeMessage{
-		MessageId: newMessageID("turn_completion"),
-		Payload: &protocolv1alpha2.RuntimeMessage_TurnCompletion{
-			TurnCompletion: completion,
-		},
-	}
-	return e.send(msg)
-}
-
-func (e *streamEnvironment) sendCancelActionBestEffort(actionID string, reason string) {
-	msg := &protocolv1alpha2.RuntimeMessage{
-		MessageId: newMessageID("cancel_action"),
-		Payload: &protocolv1alpha2.RuntimeMessage_CancelAction{
-			CancelAction: &protocolv1alpha2.CancelActionRequest{
-				ActionId: actionID,
-				Reason:   reason,
-			},
-		},
-	}
-
-	// Cancel 是 best-effort：action ctx 已经过期，但 cancel 仍要尽量通过连接级 stream 发出去。
-	// 发送失败不改变 SubmitAction 已经超时的结果。
-	_ = e.send(msg)
-}
-
-// resolveActionResult 唤醒正在等待指定 action_id 的 SubmitAction 调用。
-func (e *streamEnvironment) resolveActionResult(actionID string, result *protocolv1alpha2.ActionResult) {
-	e.pendingMu.Lock()
-	ch := e.pendingActions[actionID]
-	e.pendingMu.Unlock()
-
-	if ch == nil {
-		return
-	}
-
-	ch <- actionResult{result: result}
-}
-
-// send 串行化同一条 stream 上的 RuntimeMessage 写入。
-//
-// EventAck、Observe、SubmitAction 都可能从不同 goroutine 触发 Send，
-// sendMu 保证这条 gRPC stream 只有一个 writer。
 func (e *streamEnvironment) send(msg *protocolv1alpha2.RuntimeMessage) error {
 	e.sendMu.Lock()
 	defer e.sendMu.Unlock()
@@ -242,9 +297,6 @@ func (e *streamEnvironment) send(msg *protocolv1alpha2.RuntimeMessage) error {
 	return e.stream.Send(msg)
 }
 
-// failAllPending 在 Adapter stream 断开时唤醒仍在等待的 Observe / SubmitAction。
-//
-// 先在锁内取出 waiter，再在锁外发送错误，避免持锁写 channel 导致极端时序卡住。
 func (e *streamEnvironment) failAllPending(err error) {
 	e.pendingMu.Lock()
 
@@ -254,9 +306,9 @@ func (e *streamEnvironment) failAllPending(err error) {
 		delete(e.pendingObservations, id)
 	}
 
-	actionChs := make([]chan actionResult, 0, len(e.pendingActions))
-	for id, ch := range e.pendingActions {
-		actionChs = append(actionChs, ch)
+	actionWaiters := make([]*pendingAction, 0, len(e.pendingActions))
+	for id, pending := range e.pendingActions {
+		actionWaiters = append(actionWaiters, pending)
 		delete(e.pendingActions, id)
 	}
 
@@ -269,12 +321,46 @@ func (e *streamEnvironment) failAllPending(err error) {
 		}
 	}
 
-	for _, ch := range actionChs {
+	for _, pending := range actionWaiters {
 		select {
-		case ch <- actionResult{err: err}:
+		case pending.updates <- actionStatusResult{err: err}:
+		default:
+		}
+		select {
+		case pending.results <- actionResult{err: err}:
 		default:
 		}
 	}
+}
+
+func newPendingAction() *pendingAction {
+	return &pendingAction{
+		updates: make(chan actionStatusResult, 8),
+		results: make(chan actionResult, 1),
+	}
+}
+
+func (e *streamEnvironment) setPendingAction(actionID string, pending *pendingAction) {
+	e.pendingMu.Lock()
+	e.pendingActions[actionID] = pending
+	e.pendingMu.Unlock()
+}
+
+func (e *streamEnvironment) getPendingAction(actionID string) *pendingAction {
+	e.pendingMu.Lock()
+	defer e.pendingMu.Unlock()
+	return e.pendingActions[actionID]
+}
+
+func (e *streamEnvironment) deletePendingAction(actionID string) {
+	e.pendingMu.Lock()
+	delete(e.pendingActions, actionID)
+	e.pendingMu.Unlock()
+}
+
+func isActionStartStatus(status protocolv1alpha2.ActionStatus) bool {
+	return status == protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED ||
+		status == protocolv1alpha2.ActionStatus_ACTION_STATUS_RUNNING
 }
 
 type observationScopeMismatchError struct {

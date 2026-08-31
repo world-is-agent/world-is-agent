@@ -9,6 +9,7 @@ import (
 	"time"
 
 	protocolv1alpha2 "gameagent/protocol/gen/go/gameagent/protocol/v1alpha2"
+	"gameagent/runtime/internal/agent"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -236,6 +237,265 @@ func TestStreamEnvironmentSendTurnCompletion(t *testing.T) {
 	}
 }
 
+func TestStreamEnvironmentStartActionReceivesAcceptedStatus(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
+	env := newStreamEnvironment(stream)
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_async",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+
+	actionMsg := stream.recvSent(t)
+	if action := actionMsg.GetAction(); action == nil || action.ActionId != "act_async" {
+		t.Fatalf("expected async ActionRequest, got %+v", actionMsg.Payload)
+	}
+	env.resolveActionStatusUpdate("act_async", &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: "act_async",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED,
+	})
+
+	started := recvActionStartResult(t, startCh)
+	if started.err != nil {
+		t.Fatalf("StartAction returned error: %v", started.err)
+	}
+	if update := started.start.Update; update == nil || update.Status != protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED {
+		t.Fatalf("start update = %+v, want ACCEPTED", update)
+	}
+	if started.start.Result != nil {
+		t.Fatalf("unexpected fast terminal result: %+v", started.start.Result)
+	}
+
+	env.resolveActionResult("act_async", &protocolv1alpha2.ActionResult{
+		ActionId: "act_async",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+	})
+	result, err := env.WaitActionResult(context.Background(), "act_async")
+	if err != nil {
+		t.Fatalf("WaitActionResult returned error: %v", err)
+	}
+	if result.GetStatus() != protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED {
+		t.Fatalf("wait result status = %s, want SUCCEEDED", result.GetStatus())
+	}
+}
+
+func TestStreamEnvironmentStartActionReturnsFastTerminalResult(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
+	env := newStreamEnvironment(stream)
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_fast",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+
+	_ = stream.recvSent(t)
+	env.resolveActionResult("act_fast", &protocolv1alpha2.ActionResult{
+		ActionId: "act_fast",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+	})
+
+	started := recvActionStartResult(t, startCh)
+	if started.err != nil {
+		t.Fatalf("StartAction returned error: %v", started.err)
+	}
+	if started.start.Result == nil {
+		t.Fatal("expected fast terminal result")
+	}
+	if started.start.Update != nil {
+		t.Fatalf("unexpected status update: %+v", started.start.Update)
+	}
+	assertNoPendingActions(t, env)
+}
+
+func TestStreamEnvironmentWaitActionResultReceivesTerminalResult(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
+	env := newStreamEnvironment(stream)
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_wait",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+	_ = stream.recvSent(t)
+	env.resolveActionStatusUpdate("act_wait", &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: "act_wait",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_RUNNING,
+	})
+	started := recvActionStartResult(t, startCh)
+	if started.err != nil {
+		t.Fatalf("StartAction returned error: %v", started.err)
+	}
+
+	waitCh := make(chan actionResult, 1)
+	go func() {
+		result, err := env.WaitActionResult(context.Background(), "act_wait")
+		waitCh <- actionResult{result: result, err: err}
+	}()
+	env.resolveActionResult("act_wait", &protocolv1alpha2.ActionResult{
+		ActionId: "act_wait",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+	})
+
+	result := recvActionResult(t, waitCh)
+	if result.err != nil {
+		t.Fatalf("WaitActionResult returned error: %v", result.err)
+	}
+	if result.result.GetActionId() != "act_wait" {
+		t.Fatalf("wait action_id = %q, want act_wait", result.result.GetActionId())
+	}
+	assertNoPendingActions(t, env)
+}
+
+func TestStreamEnvironmentStartActionTimeoutSendsCancelAction(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
+	env := newStreamEnvironment(stream)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(ctx, &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_start_timeout",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+
+	_ = stream.recvSent(t)
+	cancelMsg := stream.recvSent(t)
+	cancelReq := cancelMsg.GetCancelAction()
+	if cancelReq == nil {
+		t.Fatalf("expected CancelActionRequest, got %T", cancelMsg.Payload)
+	}
+	if cancelReq.ActionId != "act_start_timeout" || cancelReq.Reason != "action_start_timeout" {
+		t.Fatalf("cancel = %+v, want act_start_timeout/action_start_timeout", cancelReq)
+	}
+
+	started := recvActionStartResult(t, startCh)
+	if !errors.Is(started.err, context.DeadlineExceeded) {
+		t.Fatalf("StartAction error = %v, want deadline exceeded", started.err)
+	}
+	assertNoPendingActions(t, env)
+}
+
+func TestStreamEnvironmentWaitActionResultTimeoutSendsCancelAction(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
+	env := newStreamEnvironment(stream)
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_wait_timeout",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+	_ = stream.recvSent(t)
+	env.resolveActionStatusUpdate("act_wait_timeout", &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: "act_wait_timeout",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_ACCEPTED,
+	})
+	if started := recvActionStartResult(t, startCh); started.err != nil {
+		t.Fatalf("StartAction returned error: %v", started.err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := env.WaitActionResult(ctx, "act_wait_timeout")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitActionResult error = %v, want deadline exceeded", err)
+	}
+	cancelMsg := stream.recvSent(t)
+	cancelReq := cancelMsg.GetCancelAction()
+	if cancelReq == nil {
+		t.Fatalf("expected CancelActionRequest, got %T", cancelMsg.Payload)
+	}
+	if cancelReq.ActionId != "act_wait_timeout" || cancelReq.Reason != "async_action_timeout" {
+		t.Fatalf("cancel = %+v, want act_wait_timeout/async_action_timeout", cancelReq)
+	}
+	assertNoPendingActions(t, env)
+}
+
+func TestStreamEnvironmentLateAsyncResultAfterTimeoutIsIgnored(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 2)}
+	env := newStreamEnvironment(stream)
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_late_async",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+	_ = stream.recvSent(t)
+	env.resolveActionStatusUpdate("act_late_async", &protocolv1alpha2.ActionStatusUpdate{
+		ActionId: "act_late_async",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_RUNNING,
+	})
+	if started := recvActionStartResult(t, startCh); started.err != nil {
+		t.Fatalf("StartAction returned error: %v", started.err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := env.WaitActionResult(ctx, "act_late_async")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WaitActionResult error = %v, want deadline exceeded", err)
+	}
+	_ = stream.recvSent(t)
+	env.resolveActionResult("act_late_async", &protocolv1alpha2.ActionResult{
+		ActionId: "act_late_async",
+		Status:   protocolv1alpha2.ActionStatus_ACTION_STATUS_SUCCEEDED,
+	})
+	assertNoPendingActions(t, env)
+}
+
+func TestStreamEnvironmentFailAllPendingUnblocksAsyncWaiters(t *testing.T) {
+	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
+	env := newStreamEnvironment(stream)
+	wantErr := fmt.Errorf("adapter disconnected")
+
+	startCh := make(chan actionStartResult, 1)
+	go func() {
+		start, err := env.StartAction(context.Background(), &protocolv1alpha2.ActionRequest{
+			ActionId:   "act_disconnect_start",
+			EntityId:   "npc:Linus",
+			Capability: "move_to",
+		})
+		startCh <- actionStartResult{start: start, err: err}
+	}()
+	_ = stream.recvSent(t)
+	env.failAllPending(wantErr)
+	if started := recvActionStartResult(t, startCh); !errors.Is(started.err, wantErr) {
+		t.Fatalf("StartAction error = %v, want %v", started.err, wantErr)
+	}
+
+	waitPending := newPendingAction()
+	env.setPendingAction("act_disconnect_wait", waitPending)
+	env.failAllPending(wantErr)
+	if result := recvActionResult(t, waitPending.results); !errors.Is(result.err, wantErr) {
+		t.Fatalf("WaitActionResult error = %v, want %v", result.err, wantErr)
+	}
+}
+
 func TestStreamEnvironmentRejectsObservationScopeMismatch(t *testing.T) {
 	stream := &captureStream{sent: make(chan *protocolv1alpha2.RuntimeMessage, 1)}
 	env := newStreamEnvironment(stream)
@@ -265,6 +525,11 @@ func TestStreamEnvironmentRejectsObservationScopeMismatch(t *testing.T) {
 	}
 }
 
+type actionStartResult struct {
+	start agent.ActionStart
+	err   error
+}
+
 type captureStream struct {
 	sent chan *protocolv1alpha2.RuntimeMessage
 }
@@ -290,6 +555,37 @@ func (s *captureStream) recvSent(t *testing.T) *protocolv1alpha2.RuntimeMessage 
 	case <-time.After(time.Second):
 		t.Fatal("runtime message was not sent")
 		return nil
+	}
+}
+
+func recvActionStartResult(t *testing.T, ch <-chan actionStartResult) actionStartResult {
+	t.Helper()
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("action start did not return")
+		return actionStartResult{}
+	}
+}
+
+func recvActionResult(t *testing.T, ch <-chan actionResult) actionResult {
+	t.Helper()
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("action result wait did not return")
+		return actionResult{}
+	}
+}
+
+func assertNoPendingActions(t *testing.T, env *streamEnvironment) {
+	t.Helper()
+	env.pendingMu.Lock()
+	defer env.pendingMu.Unlock()
+	if len(env.pendingActions) != 0 {
+		t.Fatalf("expected no pending actions, got %d", len(env.pendingActions))
 	}
 }
 

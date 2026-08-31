@@ -33,10 +33,18 @@ const (
 	ConcurrencyParallelSafe ConcurrencyMode = "parallel_safe"
 )
 
+type ExecutionMode string
+
+const (
+	ExecutionSync  ExecutionMode = "sync"
+	ExecutionAsync ExecutionMode = "async"
+)
+
 type Entry struct {
 	Definition  model.ToolDefinition
 	Kind        Kind
 	Concurrency ConcurrencyMode
+	Execution   ExecutionMode
 	Policy      ToolPolicy
 }
 
@@ -59,9 +67,6 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 			continue
 		}
 		if capability.Name == "" {
-			continue
-		}
-		if capability.GetExecutionMode() == protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC {
 			continue
 		}
 		policy, ok := toolPolicyFromCapability(capability)
@@ -88,6 +93,7 @@ func (r *Registry) RegisterEnvironmentCapabilities(capabilities []*protocolv1alp
 			},
 			Kind:        KindEnvironment,
 			Concurrency: concurrencyModeFromCapability(capability),
+			Execution:   executionModeFromCapability(capability),
 			Policy:      policy,
 		}
 		r.mu.Unlock()
@@ -126,6 +132,13 @@ func concurrencyModeFromCapability(capability *protocolv1alpha2.Capability) Conc
 		return ConcurrencyParallelSafe
 	}
 	return ConcurrencySequential
+}
+
+func executionModeFromCapability(capability *protocolv1alpha2.Capability) ExecutionMode {
+	if capability.GetExecutionMode() == protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC {
+		return ExecutionAsync
+	}
+	return ExecutionSync
 }
 
 func toolPolicyFromCapability(capability *protocolv1alpha2.Capability) (ToolPolicy, bool) {

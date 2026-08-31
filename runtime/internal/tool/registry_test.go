@@ -103,6 +103,9 @@ func TestRegistryLookupFindsEnvironmentTool(t *testing.T) {
 	if entry.Concurrency != ConcurrencySequential {
 		t.Fatalf("Concurrency = %q, want sequential", entry.Concurrency)
 	}
+	if entry.Execution != ExecutionSync {
+		t.Fatalf("Execution = %q, want sync", entry.Execution)
+	}
 	if entry.Definition.Name != "speak" {
 		t.Fatalf("Definition.Name = %q, want speak", entry.Definition.Name)
 	}
@@ -168,24 +171,47 @@ func TestRegistryTreatsParallelSafeAsStrongAdapterCommitment(t *testing.T) {
 	}
 }
 
-func TestRegistryExcludesAsyncCapabilitiesFromPhase5ToolView(t *testing.T) {
+func TestRegistryRegistersAsyncCapabilitiesWithExecutionMetadata(t *testing.T) {
 	registry := NewRegistry()
 	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
 		{
-			Name:            "wait_for_path",
+			Name:            "move_to",
 			InputSchemaJson: `{"type":"object"}`,
 			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_ASYNC,
 		},
 	})
 
-	if registry.HasTool("wait_for_path") {
-		t.Fatal("async capability should not be visible as a Phase5 tool")
+	if !registry.HasTool("move_to") {
+		t.Fatal("async capability should be visible as a Phase6 tool")
 	}
-	if _, ok := registry.Lookup("wait_for_path"); ok {
-		t.Fatal("async capability should not have a registry entry")
+	entry, ok := registry.Lookup("move_to")
+	if !ok {
+		t.Fatal("async capability should have a registry entry")
 	}
-	if got := len(registry.Available()); got != 0 {
-		t.Fatalf("Available count = %d, want 0", got)
+	if entry.Execution != ExecutionAsync {
+		t.Fatalf("Execution = %q, want async", entry.Execution)
+	}
+	if got := len(registry.Available()); got != 1 {
+		t.Fatalf("Available count = %d, want 1", got)
+	}
+}
+
+func TestRegistryMapsUnspecifiedExecutionToSync(t *testing.T) {
+	registry := NewRegistry()
+	registry.RegisterEnvironmentCapabilities([]*protocolv1alpha2.Capability{
+		{
+			Name:            "speak",
+			InputSchemaJson: `{"type":"object"}`,
+			ExecutionMode:   protocolv1alpha2.ExecutionMode_EXECUTION_MODE_UNSPECIFIED,
+		},
+	})
+
+	entry, ok := registry.Lookup("speak")
+	if !ok {
+		t.Fatal("Lookup(speak) = false, want true")
+	}
+	if entry.Execution != ExecutionSync {
+		t.Fatalf("Execution = %q, want sync", entry.Execution)
 	}
 }
 

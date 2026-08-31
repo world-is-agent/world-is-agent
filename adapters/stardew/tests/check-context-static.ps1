@@ -103,6 +103,8 @@ Require-Content 'src/Runtime/RuntimeClient.cs' 'HandleMoveToAction' 'RuntimeClie
 Require-Content 'src/Runtime/RuntimeClient.cs' 'ActionStatusUpdate' 'RuntimeClient must send async ActionStatusUpdate messages.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'BuildMoveToSucceededActionResult' 'RuntimeClient must send terminal move_to ActionResult after movement completes.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'moveToCapability\.Clear\(\)' 'RuntimeClient must stop active movement when the runtime stream ends.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'dispatcher\.Enqueue\(\(\) => this\.ClearRuntimeStreamStateOnMainThread\(\)\)' 'RuntimeClient stream teardown must schedule movement cleanup onto the SMAPI main thread.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'ClearRuntimeStreamStateOnMainThread' 'RuntimeClient must centralize runtime stream state cleanup on the SMAPI main thread.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'moveToCapability\.CancelAll' 'RuntimeClient must cancel active movement with terminal results during local context reset.'
 Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'IsCancelled' 'ActionCancellationRegistry must expose running-action cancellation checks.'
 Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'Clear' 'ActionCancellationRegistry must clear terminal action cancellation markers.'

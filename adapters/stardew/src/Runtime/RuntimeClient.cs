@@ -211,9 +211,8 @@ public sealed class RuntimeClient : IDisposable
         this.stream?.Dispose();
         this.channel?.Dispose();
         this.cancellation?.Dispose();
-        this.moveToCapability.Clear();
+        this.ClearRuntimeStreamStateOnMainThread();
         this.sendMu.Dispose();
-        this.interactionContextStore.Clear();
     }
 
     private async Task RunAsync(CancellationToken cancellationToken)
@@ -240,9 +239,7 @@ public sealed class RuntimeClient : IDisposable
         finally
         {
             this.isReady = false;
-            this.moveToCapability.Clear();
-            this.conversationStore.Clear();
-            this.interactionContextStore.Clear();
+            this.dispatcher.Enqueue(() => this.ClearRuntimeStreamStateOnMainThread());
         }
     }
 
@@ -466,6 +463,13 @@ public sealed class RuntimeClient : IDisposable
 
         this.interactionContextStore.Release(completion);
         this.monitor.Log($"GameAgent TurnCompletion received: {completion.EventId} {completion.Status}", LogLevel.Debug);
+    }
+
+    private void ClearRuntimeStreamStateOnMainThread()
+    {
+        this.moveToCapability.Clear();
+        this.conversationStore.Clear();
+        this.interactionContextStore.Clear();
     }
 
     private NPC RequireNpc(string entityId)

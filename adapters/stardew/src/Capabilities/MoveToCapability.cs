@@ -49,6 +49,9 @@ public sealed class MoveToCapability
         if (controller.pathToEndPoint is null || controller.pathToEndPoint.Count == 0)
             throw new ArgumentException("move_to target tile is not reachable");
 
+        if (isCancelled())
+            throw new OperationCanceledException("action cancelled before movement start");
+
         ActiveMoveToAction active = new(actionId, npc, controller, input, isCancelled, onSucceeded, onCancelled, onFailed);
         controller.endBehaviorFunction = (_, _) => this.CompleteSucceeded(actionId);
         npc.controller = controller;

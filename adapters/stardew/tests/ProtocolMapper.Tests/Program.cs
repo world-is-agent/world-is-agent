@@ -196,10 +196,14 @@ ActionRequest wrongEntityAction = guardedAction.Clone();
 wrongEntityAction.EntityId = "npc:Leah";
 Assert(!interactionContexts.TryResolve(wrongEntityAction, out _, out guardErrorCode, out _), "source context for a different entity should reject interaction-bound action");
 Assert(guardErrorCode == "interaction_context_changed", "wrong entity should use interaction_context_changed");
+interactionContexts.Reserve(interactionSnapshot with { ConversationId = "conv_overwritten" });
+interactionContexts.DiscardPending("event_guard_1");
+committedInteraction = interactionContexts.TryGet("event_guard_1");
+Assert(committedInteraction?.ConversationId == "conv_guard", "duplicate EventAck should not overwrite or release a committed interaction context");
 interactionContexts.Release(new TurnCompletion { EventId = "event_guard_1", Status = TurnCompletionStatus.Completed });
 Assert(interactionContexts.TryGet("event_guard_1") is null, "TurnCompletion should release interaction context");
 interactionContexts.Reserve(interactionSnapshot with { EventId = "event_guard_2" });
-interactionContexts.Discard("event_guard_2");
+interactionContexts.DiscardPending("event_guard_2");
 Assert(interactionContexts.TryGet("event_guard_2") is null, "rejected EventAck should discard reserved interaction context");
 
 GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(

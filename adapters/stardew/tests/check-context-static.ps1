@@ -155,6 +155,21 @@ if (Test-Path -LiteralPath $dialogueControllerPath) {
     }
 }
 
+$moveToCapabilityPath = Join-Path $Root 'src/Capabilities/MoveToCapability.cs'
+if (Test-Path -LiteralPath $moveToCapabilityPath) {
+    $moveToCapabilitySource = Get-Content -LiteralPath $moveToCapabilityPath -Raw
+    $pathPreflightIndex = $moveToCapabilitySource.IndexOf('pathToEndPoint', [StringComparison]::Ordinal)
+    $cancelGuardIndex = if ($pathPreflightIndex -ge 0) {
+        $moveToCapabilitySource.IndexOf('if (isCancelled())', $pathPreflightIndex, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $controllerAssignIndex = $moveToCapabilitySource.IndexOf('npc.controller = controller', [StringComparison]::Ordinal)
+    if ($pathPreflightIndex -lt 0 -or $cancelGuardIndex -lt 0 -or $controllerAssignIndex -lt 0 -or $cancelGuardIndex -gt $controllerAssignIndex) {
+        $failures.Add('MoveToCapability must check cancellation after path preflight and before assigning the NPC controller.') | Out-Null
+    }
+}
+
 $dialogueFlowPath = Join-Path $Root 'src/Dialogue/DialoguePresentationFlow.cs'
 if (Test-Path -LiteralPath $dialogueFlowPath) {
     $dialogueFlowSource = Get-Content -LiteralPath $dialogueFlowPath -Raw

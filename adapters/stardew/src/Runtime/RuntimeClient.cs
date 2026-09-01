@@ -126,7 +126,7 @@ public sealed class RuntimeClient : IDisposable
         catch
         {
             this.conversationStore.DiscardPending(eventId);
-            this.interactionContextStore.Discard(eventId);
+            this.interactionContextStore.DiscardPending(eventId);
             throw;
         }
 
@@ -186,7 +186,7 @@ public sealed class RuntimeClient : IDisposable
         catch
         {
             this.conversationStore.DiscardPending(eventId);
-            this.interactionContextStore.Discard(eventId);
+            this.interactionContextStore.DiscardPending(eventId);
             throw;
         }
 
@@ -449,7 +449,7 @@ public sealed class RuntimeClient : IDisposable
             case EventAckStatus.Rejected:
             case EventAckStatus.Unspecified:
                 this.conversationStore.DiscardPending(ack.EventId);
-                this.interactionContextStore.Discard(ack.EventId);
+                this.interactionContextStore.DiscardPending(ack.EventId);
                 break;
         }
 
@@ -698,6 +698,12 @@ public sealed class RuntimeClient : IDisposable
         {
             this.monitor.Log($"GameAgent move_to rejected: {ex.Message}", LogLevel.Warn);
             this.SendActionResult(ProtocolMapper.BuildRejectedActionResult(request, "invalid_move_target", ex.Message));
+        }
+        catch (OperationCanceledException ex)
+        {
+            this.actionCancellationRegistry.Clear(request.ActionId);
+            this.monitor.Log($"GameAgent move_to cancelled: {ex.Message}", LogLevel.Debug);
+            this.SendActionResult(ProtocolMapper.BuildCancelledActionResult(request, ex.Message));
         }
         catch (Exception ex)
         {

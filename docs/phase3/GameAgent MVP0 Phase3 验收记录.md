@@ -60,7 +60,7 @@ go test -race ./runtime/...
 证据文件：
 
 ```text
-D:/data/project/game-agent/npcore/runtime/.local/traces.jsonl
+D:/data/project/game-agent/world-is-agent/runtime/.local/traces.jsonl
 ```
 
 验证窗口：

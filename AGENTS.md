@@ -1,6 +1,6 @@
 # GameAgent Agent Instructions
 
-本文件是 `npcore` 仓库的项目级常驻指令。所有 agent 在本仓库工作时应遵守这些边界。
+本文件是 `world-is-agent` 仓库的项目级常驻指令。所有 agent 在本仓库工作时应遵守这些边界。
 
 ## 基本工作方式
 

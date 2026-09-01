@@ -26,7 +26,7 @@ MVP0 supports `speak`, `emote`, `present_dialogue`, and `face_player`, plus NPC 
 Use a machine with .NET SDK and Stardew Valley installed at the repository root path used by `GameAgent.Stardew.csproj`.
 
 ```powershell
-dotnet build NPCore/adapters/stardew/GameAgent.Stardew.csproj
+dotnet build world-is-agent/adapters/stardew/GameAgent.Stardew.csproj
 ```
 
 ## Manual Smoke Test

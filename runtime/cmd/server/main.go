@@ -30,7 +30,7 @@ func main() {
 	// 初始化 trace recorder。
 	var traceRecorder trace.Recorder
 	traceRecorder, err = trace.NewJSONLRecorder(
-		// MVP0 trace path 依赖从 npcore/ 作为 cwd 启动；后续由 agent.json 的 trace.path 接管。
+		// MVP0 trace path 依赖从仓库根目录作为 cwd 启动；后续由 agent.json 的 trace.path 接管。
 		"runtime/.local/traces.jsonl",
 		trace.JSONLRecorderOptions{},
 	)

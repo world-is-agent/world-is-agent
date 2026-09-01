@@ -42,6 +42,9 @@ public sealed class InteractionContextStore
 
         lock (this.gate)
         {
+            if (this.contexts.TryGetValue(eventId, out PendingInteractionContext? existing) && existing.Committed)
+                return;
+
             this.contexts[eventId] = new PendingInteractionContext(snapshot, Committed: false);
         }
     }
@@ -59,12 +62,15 @@ public sealed class InteractionContextStore
         }
     }
 
-    public void Discard(string eventId)
+    public void DiscardPending(string eventId)
     {
         string normalizedEventId = RequireNonEmpty(eventId, nameof(eventId));
 
         lock (this.gate)
         {
+            if (!this.contexts.TryGetValue(normalizedEventId, out PendingInteractionContext? pending) || pending.Committed)
+                return;
+
             this.contexts.Remove(normalizedEventId);
         }
     }
@@ -74,7 +80,10 @@ public sealed class InteractionContextStore
         if (completion?.EventId is null || string.IsNullOrWhiteSpace(completion.EventId))
             return;
 
-        this.Discard(completion.EventId);
+        lock (this.gate)
+        {
+            this.contexts.Remove(completion.EventId);
+        }
     }
 
     public InteractionContextSnapshot? TryGet(string eventId)

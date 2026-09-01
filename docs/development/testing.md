@@ -1,0 +1,96 @@
+# Testing
+
+This guide lists the checks used during local development.
+
+Run commands from the repository root unless noted otherwise.
+
+## Go Runtime
+
+```powershell
+go test ./runtime/... ./protocol/gen/go/...
+```
+
+Race detector:
+
+```powershell
+go test -race ./runtime/...
+```
+
+On Windows, the race detector requires a working 64-bit C toolchain. Run it on Linux, CI, or a Windows machine with the required compiler installed.
+
+## Protocol
+
+```powershell
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-protocol-static.ps1
+powershell -ExecutionPolicy Bypass -File protocol/tests/check-go-generation.ps1
+```
+
+Run these after editing `protocol/proto/gameagent.proto` or generated bindings.
+
+## Stardew Adapter Tests
+
+```powershell
+dotnet run --project adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj
+dotnet run --project adapters/stardew/tests/ActionCancellationRegistry.Tests/ActionCancellationRegistry.Tests.csproj
+dotnet run --project adapters/stardew/tests/PlayerInteractProbe.Tests/PlayerInteractProbe.Tests.csproj
+```
+
+Adapter context static check:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File adapters/stardew/tests/check-context-static.ps1
+```
+
+## Stardew Adapter Build
+
+For a custom Stardew install path:
+
+```powershell
+$gamePath = "D:\SteamLibrary\steamapps\common\Stardew Valley"
+dotnet build adapters/stardew/GameAgent.Stardew.csproj `
+  --configuration Debug `
+  -p:GamePath="$gamePath"
+```
+
+The install helper can build and install when the project default `GamePath` resolves:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install-stardew-adapter.ps1 -GamePath "$gamePath"
+```
+
+The helper's `-GamePath` argument controls the install target and the project file still owns its build-time `GamePath` property. Use the explicit `dotnet build -p:GamePath=...` command when the default project path differs from your Stardew install.
+
+## Manual Stardew Smoke Test
+
+1. Start the Runtime:
+
+   ```powershell
+   go run ./runtime/cmd/server
+   ```
+
+2. Build and install the Stardew adapter.
+3. Launch Stardew Valley through `StardewModdingAPI.exe`.
+4. Load a save with at least one reachable villager NPC.
+5. Interact with an NPC.
+6. Confirm SMAPI logs show Runtime connection, `GameEvent`, `EventAck`, `Observation`, `ActionRequest`, `ActionResult`, and `TurnCompletion`.
+7. Confirm `runtime/.local/traces.jsonl` contains the matching AgentTurn trace.
+
+For dialogue validation, confirm the NPC line appears through Stardew's native dialogue flow, then reply choices or free text appear afterward.
+
+## Architecture Check
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/check-architecture.ps1
+```
+
+This is a local architecture guardrail for dependency and naming drift. Treat failures in docs or test fixtures as review signals until the check is promoted into a stricter CI gate.
+
+## Documentation
+
+For documentation-only changes:
+
+```powershell
+git diff --check
+```
+
+Also verify touched Markdown links manually or with a local link checker if available.

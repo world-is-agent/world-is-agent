@@ -118,6 +118,8 @@ Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext\(requ
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext\(request,\s*requireProximity:\s*true' 'move_to must retain proximity guard for physical action execution.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'QueueWaitingForNpc' 'RuntimeClient must request a waiting dialogue surface after source-time interaction admission.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseWaitingForNpc' 'RuntimeClient must close the waiting dialogue surface when the interaction resolves or fails.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'tile=\(' 'RuntimeClient must include move_to target tile coordinates in ActionRequest logs.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'KindOneofCase\.NumberValue' 'RuntimeClient move_to tile logging must only render numeric tile fields.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseInteractionConversation' 'RuntimeClient must close matching conversations after interaction guard failure.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'interaction context released' 'RuntimeClient must log released interaction contexts.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'interactionContextStore\.Clear\(\)' 'RuntimeClient must clear interaction contexts when local runtime state is cleared.'
@@ -146,6 +148,7 @@ Require-Content 'src/Runtime/InteractionContextStore.cs' 'requireProximity\s*&&'
 Require-Content 'src/Runtime/InteractionPolicy.cs' 'MaxInteractionDistance' 'InteractionPolicy must define the shared max interaction distance.'
 Require-Content 'src/Events/PlayerInteractProbe.cs' 'TrySendPlayerInteracted' 'PlayerInteractProbe must call RuntimeClient gate before suppressing input.'
 Require-Content 'src/Events/PlayerInteractProbe.cs' 'reason=' 'PlayerInteractProbe must log ignored interaction reasons.'
+Require-Content 'src/Events/PlayerInteractProbe.cs' 'interaction_in_flight' 'PlayerInteractProbe must suppress in-flight interactions without sending a duplicate GameEvent.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'turn_id=' 'RuntimeClient must log TurnCompletion turn_id.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'InteractionContextStore' 'ProtocolMapper tests must cover interaction context lifecycle.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId\)' 'RuntimeClient must let delayed dialogue display honor CancelAction.'
@@ -224,6 +227,39 @@ if (Test-Path -LiteralPath $dialogueFlowPath) {
 
     if ($dialogueFlowSource -match 'shouldShowReplyMenu[\s\S]{0,120}MarkDisplayed') {
         $failures.Add('present_dialogue ActionResult must not be gated on reply menu availability; sync action timeout is shorter than player reading time.') | Out-Null
+    }
+}
+
+$runtimeClientPath = Join-Path $Root 'src/Runtime/RuntimeClient.cs'
+if (Test-Path -LiteralPath $runtimeClientPath) {
+    $runtimeClientSource = Get-Content -LiteralPath $runtimeClientPath -Raw
+    $handleActionIndex = $runtimeClientSource.IndexOf('private void HandleActionOnMainThread', [StringComparison]::Ordinal)
+    $closeWaitingOnActionIndex = if ($handleActionIndex -ge 0) {
+        $runtimeClientSource.IndexOf('this.presentDialogueCapability.CloseWaitingForNpc(request.EntityId)', $handleActionIndex, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $presentRouteIndex = if ($handleActionIndex -ge 0) {
+        $runtimeClientSource.IndexOf('request.Capability == "present_dialogue"', $handleActionIndex, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $moveRouteIndex = if ($handleActionIndex -ge 0) {
+        $runtimeClientSource.IndexOf('request.Capability == "move_to"', $handleActionIndex, [StringComparison]::Ordinal)
+    } else {
+        -1
+    }
+    $firstActionRouteIndex = @($presentRouteIndex, $moveRouteIndex) | Where-Object { $_ -ge 0 } | Sort-Object | Select-Object -First 1
+    if ($closeWaitingOnActionIndex -lt 0 -or $firstActionRouteIndex -eq $null -or $closeWaitingOnActionIndex -gt $firstActionRouteIndex) {
+        $failures.Add('RuntimeClient must close the waiting menu before routing any ActionRequest, so move_to can advance world ticks.') | Out-Null
+    }
+}
+
+$playerInteractProbePath = Join-Path $Root 'src/Events/PlayerInteractProbe.cs'
+if (Test-Path -LiteralPath $playerInteractProbePath) {
+    $probeSource = Get-Content -LiteralPath $playerInteractProbePath -Raw
+    if ($probeSource -notmatch 'reason\s*==\s*"interaction_in_flight"[\s\S]{0,200}input\.Suppress\(e\.Button\)') {
+        $failures.Add('PlayerInteractProbe must suppress interaction_in_flight clicks while avoiding duplicate GameEvents.') | Out-Null
     }
 }
 

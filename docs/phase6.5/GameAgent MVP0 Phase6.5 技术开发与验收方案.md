@@ -320,9 +320,9 @@ Source-time gate 由 `PlayerInteractProbe` 调用 `RuntimeClient` 的同步 gate
 - 同一 NPC interaction in-flight 时不发送事件。
 ```
 
-source-time gate 成功后，Adapter 展示本地 waiting menu。waiting menu 使用 `Game1.activeClickableMenu` 锁住玩家输入，直到对应 interaction 展示 `present_dialogue`、被 reject / duplicate、发送失败、Turn failed / cancelled、断线或 world reset。
+source-time gate 成功后，Adapter 展示本地 waiting menu。waiting menu 使用 `Game1.activeClickableMenu` 锁住玩家输入，直到 Runtime 返回对应 interaction 的 `ActionRequest`，或该 interaction 被 reject / duplicate、发送失败、Turn failed / cancelled、断线或 world reset。
 
-waiting menu 是 Stardew Adapter 的 UX surface，不改变 Runtime / Protocol 契约，也不承诺暂停整个游戏世界或冻结 NPC 对象。
+waiting menu 是 Stardew Adapter 的 UX surface，不改变 Runtime / Protocol 契约，也不承诺暂停整个游戏世界或冻结 NPC 对象。Adapter 收到任何 `ActionRequest` 后先关闭 waiting，再执行 capability；`present_dialogue` 会接着打开 Stardew 对话 UI，`move_to` 会让游戏世界继续 tick 以推进 NPC pathfinding。
 
 Interaction context snapshot 只保存 source-time facts，例如 world、entity、conversation、location、tile 和距离阈值。是否执行 proximity guard 是 effect-time action policy，由 action handler 显式传入。
 
@@ -545,10 +545,12 @@ adapters/stardew/tests/check-context-static.ps1
 - queued / reserved event 立即进入 pending in-flight，阻止 ACK 前快速连点重复发送；
 - source-time gate 成功后请求 waiting menu；
 - player_said_to_npc handoff reserve 成功后请求 waiting menu；
-- present_dialogue 展示前关闭对应 waiting menu；
+- 收到 ActionRequest 后、执行 capability 前关闭对应 waiting menu；
+- present_dialogue 关闭 waiting 后打开对话 UI；
+- move_to 关闭 waiting 后执行移动；
 - ACK rejected / duplicate、发送失败、failed / cancelled TurnCompletion、断线和 world reset 会关闭对应 waiting menu；
 - player_said_to_npc 在同一 conversation 内使用 handoff reserve，不被原 player_interacted_with_npc in-flight 误吞；
-- 同一 NPC pending 或 committed in-flight 未释放时不发送重复 player_interacted_with_npc；
+- 同一 NPC pending 或 committed in-flight 未释放时 suppress 输入，但不发送重复 player_interacted_with_npc；
 - Duplicate EventAck 不删除已 committed interaction context；
 - TurnCompletion 是释放 committed context 的正式信号；
 - Close / Escape abandon 关闭 active conversation 并释放匹配 in-flight；
@@ -575,7 +577,7 @@ dotnet build adapters/stardew/GameAgent.Stardew.csproj
 - ACK(ACCEPTED) 后同一 NPC 重复点击被 committed in-flight suppress；
 - 初次点击 gate 成功后出现 waiting menu；
 - 玩家提交回复 handoff 成功后出现 waiting menu；
-- present_dialogue 展示前关闭对应 waiting menu；
+- 收到 ActionRequest 后、执行 present_dialogue 或 move_to 前关闭对应 waiting menu；
 - 玩家提交回复早于原 TurnCompletion 时，player_said_to_npc 通过 handoff 发送；
 - player_said_to_npc 后续 NPC 回复允许同场景内距离漂移；
 - move_to 继续拒绝 effect-time 距离漂移；
@@ -700,7 +702,7 @@ go test ./runtime/...
 13. 按 Escape 或 Close。
 14. 确认 active conversation 关闭，后续点击创建新对话。
 15. 对 NPC 说“走到我身边”一类意图。
-16. 确认 Runtime trace 出现 move_to，或模型用 present_dialogue 明确回应无法移动；该检查不要求自然语言地点解析或每次移动成功。
+16. 确认 Runtime trace 出现 move_to，或模型用 present_dialogue 明确回应无法移动；若出现 move_to，确认 Thinking waiting menu 在动作执行前关闭，NPC 能移动或返回明确失败。
 17. 触发单句结束型 NPC 台词时，确认 ActionRequest 显式包含 allow_free_text=false 且 reply_options 为空。
 ```
 
@@ -715,9 +717,10 @@ go test ./runtime/...
 - 玩家选择 option 后对话是否继续由后续 Runtime 决策决定；
 - 玩家可以通过 Close / Escape 主动结束对话；
 - 连点 NPC 不产生多个并发 dialogue UI；
+- in-flight 期间再次点击 NPC 不发送新 GameEvent，也不触发 Stardew 原生对话；
 - present_dialogue rejected 时日志有具体 code/message；
 - 单句结束型 present_dialogue 不遗留 active conversation；
-- move_to 的调用、拒绝或失败原因可从 trace 与 Adapter 日志复盘。
+- move_to 的调用、目标 tile、拒绝或失败原因可从 trace 与 Adapter 日志复盘。
 ```
 
 ---
@@ -799,12 +802,33 @@ Phase6.5 完成时应满足：
 5. 选项与自由输入入口可以稳定同时显示。
 6. 玩家可以主动关闭 conversation。
 7. 连点 NPC 不产生重复 GameEvent、乱序回复或叠 UI。
-8. Runtime 返回前 waiting menu 锁住玩家输入，并在对话展示或终态失败时关闭。
+8. Runtime 返回 ActionRequest 前 waiting menu 锁住玩家输入；收到 ActionRequest 后、执行 capability 前关闭。
 9. source-time gate 校验启动距离；present_dialogue effect-time 允许同场景内距离漂移；move_to 保留 proximity guard。
 10. ActionResult 日志足以解释 rejected / failed / cancelled。
 11. Runtime Core 没有新增 game-specific 执行策略。
 12. 自动测试通过。
 13. 实机 smoke 通过。
+```
+
+验收记录：
+
+```text
+2026-09-02 Phase6.5 验收通过。
+
+自动化验收：
+- ProtocolMapper.Tests 通过。
+- PlayerInteractProbe.Tests 通过。
+- adapters/stardew/tests/check-context-static.ps1 通过。
+- adapters/stardew/GameAgent.Stardew.csproj Debug build 通过。
+- go test ./runtime/... ./protocol/gen/go/... 通过。
+- git diff --check 通过。
+
+实机 smoke：
+- 普通点击 NPC 能进入 present_dialogue。
+- 玩家回复后能继续收到 NPC 响应。
+- move_to 能进入 Accepted / Running / Succeeded，并在完成后继续 present_dialogue。
+- Thinking waiting menu 不再阻塞 move_to 的世界 tick。
+- in-flight 期间点击 NPC 不产生重复 GameEvent 或 Stardew 原生对话。
 ```
 
 ---

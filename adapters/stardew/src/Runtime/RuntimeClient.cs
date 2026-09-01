@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using GameAgent.Protocol.V1Alpha2;
@@ -432,6 +433,7 @@ public sealed class RuntimeClient : IDisposable
     private void HandleActionOnMainThread(ActionRequest request)
     {
         ActionResult result;
+        this.presentDialogueCapability.CloseWaitingForNpc(request.EntityId);
 
         if (!RuntimeWorldScope.Matches(request.WorldId, this.currentWorldId))
         {
@@ -955,9 +957,17 @@ public sealed class RuntimeClient : IDisposable
         {
             "emote" => $"emote=\"{FormatStringArgument(request, "emote")}\"",
             "present_dialogue" => $"text=\"{FormatStringArgument(request, "text")}\"",
-            "move_to" => $"location=\"{FormatStringArgument(request, "location")}\"",
+            "move_to" => FormatMoveToArguments(request),
             _ => string.Empty,
         };
+    }
+
+    private static string FormatMoveToArguments(ActionRequest? request)
+    {
+        string location = FormatStringArgument(request, "location");
+        string tileX = FormatIntegerArgument(request, "tile", "x");
+        string tileY = FormatIntegerArgument(request, "tile", "y");
+        return $"location=\"{location}\" tile=({tileX},{tileY})";
     }
 
     private static string FormatStringArgument(ActionRequest? request, string name)
@@ -967,6 +977,25 @@ public sealed class RuntimeClient : IDisposable
 
         string text = value.StringValue ?? string.Empty;
         return text.Length <= 80 ? text : $"{text[..80]}...";
+    }
+
+    private static string FormatIntegerArgument(ActionRequest? request, string structName, string name)
+    {
+        if (request?.Arguments is null || !request.Arguments.Fields.TryGetValue(structName, out var value))
+            return "?";
+
+        var fields = value.StructValue?.Fields;
+        if (fields is null || !fields.TryGetValue(name, out var number))
+            return "?";
+
+        if (number.KindCase != Value.KindOneofCase.NumberValue)
+            return "?";
+
+        double coordinate = number.NumberValue;
+        if (double.IsNaN(coordinate) || double.IsInfinity(coordinate) || Math.Truncate(coordinate) != coordinate)
+            return "?";
+
+        return coordinate.ToString("0", CultureInfo.InvariantCulture);
     }
 
     private void SendFireAndForget(Task task, string operation)

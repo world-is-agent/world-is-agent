@@ -1,0 +1,51 @@
+# Documentation
+
+This directory contains current status documents, architecture notes, ADRs, phase plans, acceptance records, and exploratory design material.
+
+## Public Sources Of Truth
+
+Start here when you want the current repository state:
+
+- [Project README](../README.md)
+- [Architecture](../ARCHITECTURE.md)
+- [Status](STATUS.md)
+- [Roadmap](../ROADMAP.md)
+- [Contributing](../CONTRIBUTING.md)
+- [Testing Guide](development/testing.md)
+
+## Architecture And Decisions
+
+- [Runtime Architecture Baseline](<summary/GameAgent Runtime 整体架构设计规范.md>)
+- [Multi-game Compatibility and Agent Binding](<summary/GameAgent 多游戏兼容性与 Agent Binding 决策.md>)
+- [Phase6 Async Action Protocol Strategy ADR](<phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md>)
+
+These documents preserve detailed architectural reasoning and constraints. Use the public sources above for the current GitHub-facing summary.
+
+## Phase Plans And Acceptance Records
+
+Phase documents are implementation planning and validation records:
+
+- [Phase1](phase1/)
+- [Phase2](phase2/)
+- [Phase3](phase3/)
+- [Phase4](phase4/)
+- [Phase5](phase5/)
+- [Phase5.5](phase5.5/)
+- [Phase5.6](phase5.6/)
+- [Phase6](phase6/)
+- [Phase6.5](phase6.5/)
+
+The root [ROADMAP.md](../ROADMAP.md) is the public roadmap. Phase documents can contain internal terminology, temporary implementation plans, and historical acceptance details.
+
+## Exploratory Notes
+
+Exploratory documents may contain older names, open questions, or draft ideas:
+
+- [Context Architecture](Context架构设计.md)
+- [Context Ideas](Context借鉴思路及亮点.md)
+- [Compatibility Discussion](兼容性探讨.md)
+- [Adapter Notes](adapter/)
+- [Archive](archive/)
+- [Project Progress Notes](pro/)
+
+Treat these as design notes unless a public source of truth links to them as a current decision.

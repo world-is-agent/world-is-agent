@@ -12,7 +12,6 @@ $requiredFiles = @(
     'src/State/StardewObservation.cs',
     'src/State/StardewObservationFactory.cs',
     'src/State/ObservationBuilder.cs',
-    'src/Capabilities/SpeakCapability.cs',
     'src/Capabilities/EmoteCapability.cs',
     'src/Capabilities/PresentDialogueCapability.cs',
     'src/Capabilities/FacePlayerCapability.cs',
@@ -25,8 +24,10 @@ $requiredFiles = @(
     'src/Dialogue/DialogueResponseMenuLayout.cs',
     'src/Dialogue/DialogueInteractionController.cs',
     'src/Dialogue/DialogueInteractionMenu.cs',
+    'src/Dialogue/DialogueWaitingMenu.cs',
     'src/Runtime/CapabilityCatalog.cs',
     'src/Runtime/InteractionContextStore.cs',
+    'src/Runtime/InteractionPolicy.cs',
     'src/Runtime/ProtocolMapper.Core.cs',
     'src/Runtime/RuntimeClient.cs',
     'src/Runtime/RuntimeWorldScope.cs',
@@ -39,6 +40,17 @@ foreach ($file in $requiredFiles) {
     $path = Join-Path $Root $file
     if (-not (Test-Path -LiteralPath $path)) {
         $failures.Add("missing file: $file") | Out-Null
+    }
+}
+
+$forbiddenFiles = @(
+    'src/Runtime/InteractionContextGuardPolicy.cs'
+)
+
+foreach ($file in $forbiddenFiles) {
+    $path = Join-Path $Root $file
+    if (Test-Path -LiteralPath $path) {
+        $failures.Add("forbidden file: $file") | Out-Null
     }
 }
 
@@ -87,6 +99,10 @@ Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'conversation_id' 'Protocol
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' 'ContextFacts' 'ProtocolMapper must attach model-visible context facts to player dialogue events.'
 Require-Content 'src/Runtime/ProtocolMapper.Core.cs' '"utterance"' 'ProtocolMapper must mark player dialogue context facts as utterance.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'present_dialogue' 'CapabilityCatalog must register present_dialogue.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'maxItems.:3|maxItems\\":3' 'present_dialogue schema must cap reply_options at three.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'allow_free_text.*default.*true' 'present_dialogue schema must document allow_free_text default true.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'allow_free_text=false' 'present_dialogue description must require explicit allow_free_text=false for ending dialogue.'
+Require-Content 'src/Runtime/CapabilityCatalog.cs' 'up to three reply options' 'present_dialogue description must document the option display limit.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'face_player' 'CapabilityCatalog must register face_player.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'move_to' 'CapabilityCatalog must register move_to.'
 Require-Content 'src/Runtime/CapabilityCatalog.cs' 'ExecutionMode\.Async' 'move_to must be registered as an async capability.'
@@ -96,8 +112,14 @@ Require-Content 'src/Runtime/CapabilityCatalog.cs' 'settle_after_success' 'prese
 Require-Content 'src/Runtime/RuntimeClient.cs' 'EventAckStatus\.Accepted' 'RuntimeClient must commit conversation state after accepted EventAck.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TurnCompletion' 'RuntimeClient must handle TurnCompletion lifecycle messages.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'InteractionContextStore' 'RuntimeClient must retain accepted interaction context snapshots.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TrySendPlayerInteracted' 'RuntimeClient must expose a synchronous source-time interaction gate.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext' 'RuntimeClient must use ActionRequest.source_event_id for interaction context guards.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext\(request,\s*requireProximity:\s*false' 'present_dialogue must ignore same-location distance drift at effect time.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'TryGuardInteractionContext\(request,\s*requireProximity:\s*true' 'move_to must retain proximity guard for physical action execution.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'QueueWaitingForNpc' 'RuntimeClient must request a waiting dialogue surface after source-time interaction admission.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseWaitingForNpc' 'RuntimeClient must close the waiting dialogue surface when the interaction resolves or fails.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'CloseInteractionConversation' 'RuntimeClient must close matching conversations after interaction guard failure.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'interaction context released' 'RuntimeClient must log released interaction contexts.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'interactionContextStore\.Clear\(\)' 'RuntimeClient must clear interaction contexts when local runtime state is cleared.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'HandleMoveToAction' 'RuntimeClient must route move_to through the async adapter action handler.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'ActionStatusUpdate' 'RuntimeClient must send async ActionStatusUpdate messages.'
@@ -109,12 +131,27 @@ Require-Content 'src/Runtime/RuntimeClient.cs' 'moveToCapability\.CancelAll' 'Ru
 Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'IsCancelled' 'ActionCancellationRegistry must expose running-action cancellation checks.'
 Require-Content 'src/Runtime/ActionCancellationRegistry.cs' 'Clear' 'ActionCancellationRegistry must clear terminal action cancellation markers.'
 Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_missing' 'InteractionContextStore must reject interaction-bound actions without source context.'
-Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_changed' 'InteractionContextStore must reject stale interaction-bound actions.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_world_changed' 'InteractionContextStore must report world context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_entity_changed' 'InteractionContextStore must report entity context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_player_changed' 'InteractionContextStore must report player context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_conversation_changed' 'InteractionContextStore must report conversation context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_npc_location_changed' 'InteractionContextStore must report NPC location context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_player_location_changed' 'InteractionContextStore must report player location context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'interaction_context_distance_changed' 'InteractionContextStore must report distance context drift precisely.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'TryReserve' 'InteractionContextStore must support source-time pending reserve.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'TryReserveHandoff' 'InteractionContextStore must support dialogue submission handoff.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'IsInFlight' 'InteractionContextStore must support per-NPC in-flight checks.'
 Require-Content 'src/Runtime/InteractionContextStore.cs' 'MaxInteractionDistance' 'InteractionContextStore must preserve max interaction distance in snapshots.'
-Require-Content 'src/Runtime/InteractionContextStore.cs' 'TryValidateCurrentState' 'InteractionContextStore must validate effect-time world, conversation, location, and distance.'
+Require-Content 'src/Runtime/InteractionContextStore.cs' 'requireProximity\s*&&' 'InteractionContextStore must validate effect-time proximity from action policy, not stored interaction facts.'
+Require-Content 'src/Runtime/InteractionPolicy.cs' 'MaxInteractionDistance' 'InteractionPolicy must define the shared max interaction distance.'
+Require-Content 'src/Events/PlayerInteractProbe.cs' 'TrySendPlayerInteracted' 'PlayerInteractProbe must call RuntimeClient gate before suppressing input.'
+Require-Content 'src/Events/PlayerInteractProbe.cs' 'reason=' 'PlayerInteractProbe must log ignored interaction reasons.'
+Require-Content 'src/Runtime/RuntimeClient.cs' 'turn_id=' 'RuntimeClient must log TurnCompletion turn_id.'
 Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'InteractionContextStore' 'ProtocolMapper tests must cover interaction context lifecycle.'
 Require-Content 'src/Runtime/RuntimeClient.cs' 'TryConsumeCancelled\(request\.ActionId\)' 'RuntimeClient must let delayed dialogue display honor CancelAction.'
 Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'Game1\.DrawDialogue\(new StardewValley\.Dialogue' 'Dialogue UI must show the NPC line through Stardew native dialogue first.'
+Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'QueueWaitingForNpc' 'DialogueInteractionController must expose an adapter-local waiting surface for admitted interactions.'
+Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'DialogueWaitingMenu' 'DialogueInteractionController must show waiting through a Stardew activeClickableMenu surface.'
 Require-Content 'src/Dialogue/DialogueInteractionController.cs' 'new DialogueInteractionMenu' 'Dialogue UI must show reply choices in the adapter bottom response menu after the native NPC dialogue advances.'
 Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'IKeyboardSubscriber' 'Dialogue response menu must own a keyboard subscriber for inline free-text input.'
 Require-Content 'src/Dialogue/DialogueInteractionMenu.cs' 'keyboardDispatcher\.Subscriber' 'Dialogue response menu must route keyboard input to its inline free-text row.'
@@ -136,6 +173,14 @@ Require-Content 'tests/ProtocolMapper.Tests/Program.cs' 'move_to' 'ProtocolMappe
 Require-Content 'tests/ActionCancellationRegistry.Tests/Program.cs' 'IsCancelled' 'ActionCancellationRegistry tests must cover running-action cancellation checks.'
 
 Reject-Content 'src/State/StardewObservationFactory.cs' 'using StardewValley|StardewValley\.|Game1\.|\bNPC\b|\bFarmer\b' 'StardewObservationFactory must not reference Stardew live objects.'
+Reject-Content 'src/Runtime/CapabilityCatalog.cs' 'Name\s*=\s*"speak"' 'Stardew production CapabilityList must not expose speak.'
+Reject-Content 'src/Runtime/CapabilityCatalog.cs' 'up to four reply options|maxItems\\":4' 'present_dialogue must not advertise or allow a fourth reply option.'
+Reject-Content 'src/Runtime/RuntimeClient.cs' 'HandleSpeakAction|request\.Capability\s*==\s*"speak"|\"speak\"\s*=>' 'RuntimeClient must not dispatch production speak actions.'
+Reject-Content 'src/ModEntry.cs' 'SpeakCapability' 'ModEntry must not inject SpeakCapability into production RuntimeClient.'
+Reject-Content 'src/Runtime/InteractionContextStore.cs' 'RequiresProximity' 'InteractionContextSnapshot must contain source-time facts, not effect-time proximity policy.'
+Reject-Content 'src/Runtime/InteractionContextStore.cs' 'WithProximity|ForCapability' 'InteractionContextStore must not depend on a second proximity policy helper.'
+Reject-Content 'src/Runtime/RuntimeClient.cs' 'WithProximity|ForCapability' 'RuntimeClient must pass effect-time proximity policy directly into InteractionContextStore.'
+Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' 'WithProximity|ForCapability|RequiresProximity' 'ProtocolMapper must not encode effect-time proximity policy into protocol mapping.'
 Reject-Content 'src/Capabilities/PresentDialogueCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper' 'PresentDialogueCapability must not depend on Runtime mapper.'
 Reject-Content 'src/Capabilities/MoveToCapability.cs' 'GameAgent\.Stardew\.Runtime|ProtocolMapper|ActionRequest|ActionResult|ActionStatusUpdate' 'MoveToCapability must not depend on Runtime protocol mapping.'
 Reject-Content 'src/Runtime/ProtocolMapper.Core.cs' '\["agent_id"\]|\["agent_tile_x"\]|\["player_tile_x"\]|\["friendship"\]' 'ProtocolMapper must not write legacy flat observation state.'

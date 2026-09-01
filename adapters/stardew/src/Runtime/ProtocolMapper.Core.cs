@@ -11,7 +11,7 @@ namespace GameAgent.Stardew.Runtime;
 public static partial class ProtocolMapper
 {
     public const int MaxDialogueTextChars = 240;
-    public const int MaxReplyOptions = 4;
+    public const int MaxReplyOptions = 3;
     public const int MaxReplyOptionChars = 80;
 
     private const string NpcEntityPrefix = "npc:";
@@ -363,6 +363,7 @@ public static partial class ProtocolMapper
 
     public static string RequireTextArgument(ActionRequest request)
     {
+        // Parser for the adapter-local one-line dialogue helper; production capabilities do not expose speak.
         if (request.Arguments is null || !request.Arguments.Fields.TryGetValue("text", out Value? value))
             throw new ArgumentException("missing required speak argument: text");
 
@@ -401,7 +402,7 @@ public static partial class ProtocolMapper
                 .ToArray();
         }
 
-        bool allowFreeText = false;
+        bool allowFreeText = true;
         if (request.Arguments.Fields.TryGetValue("allow_free_text", out Value? allowFreeTextValue))
         {
             if (allowFreeTextValue.KindCase != Value.KindOneofCase.BoolValue)

@@ -23,6 +23,21 @@ public sealed class PresentDialogueCapability
         this.dialogueController.CloseForNpc(npcEntityId);
     }
 
+    public void QueueWaitingForNpc(string npcEntityId)
+    {
+        this.dialogueController.QueueWaitingForNpc(npcEntityId);
+    }
+
+    public void CloseWaitingForNpc(string npcEntityId)
+    {
+        this.dialogueController.CloseWaitingForNpc(npcEntityId);
+    }
+
+    public void CloseAll()
+    {
+        this.dialogueController.CloseAll();
+    }
+
     public void Present(
         NPC npc,
         Farmer player,
@@ -32,7 +47,8 @@ public sealed class PresentDialogueCapability
         Action onCancelled,
         Action<string> onDisplayed,
         Action<Exception> onFailed,
-        Action<PlayerDialogueSubmission> onSubmitted
+        Action<PlayerDialogueSubmission> onSubmitted,
+        Action onAbandoned
     )
     {
         string npcEntityId = ToNpcEntityId(npc.Name);
@@ -55,7 +71,11 @@ public sealed class PresentDialogueCapability
                     conversationId,
                     input,
                     onSubmitted,
-                    OnAbandoned: () => this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, conversationId)
+                    OnAbandoned: () =>
+                    {
+                        this.conversationStore.CloseIfConversation(worldId, npcEntityId, PlayerEntityId, conversationId);
+                        onAbandoned();
+                    }
                 );
             },
             onDisplayed: () =>

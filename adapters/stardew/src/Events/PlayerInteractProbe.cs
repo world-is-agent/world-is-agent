@@ -34,27 +34,38 @@ public sealed class PlayerInteractProbe
 
     public bool HandleButtonPressed(ButtonPressedEventArgs e)
     {
-        if (!Context.IsWorldReady || Game1.activeClickableMenu is not null || Game1.dialogueUp)
-            return false;
-
         if (!this.IsCandidateInteractionButton(e.Button))
             return false;
+
+        if (!Context.IsWorldReady)
+            return false;
+
+        if (Game1.activeClickableMenu is not null || Game1.dialogueUp)
+        {
+            this.LogIgnored("active_menu/dialogue");
+            return false;
+        }
 
         NPC? target = this.FindClickedTarget(e.Cursor, allowAdjacentTile: e.Button != SButton.MouseLeft);
         if (target is null)
             return false;
 
-        if (!this.runtimeClient.IsReady)
+        if (!this.runtimeClient.TrySendPlayerInteracted(target, Game1.player, TriggerForButton(e.Button), out string reason))
         {
-            this.monitor.Log("GameAgent Runtime is not ready; letting Stardew handle the click.", LogLevel.Warn);
+            this.LogIgnored(reason, target.Name);
             return false;
         }
 
         this.input.Suppress(e.Button);
-        this.runtimeClient.SendPlayerInteracted(target, Game1.player, TriggerForButton(e.Button));
         this.monitor.Log($"GameAgent interaction event queued for {target.Name}.", LogLevel.Debug);
 
         return true;
+    }
+
+    private void LogIgnored(string reason, string? npcName = null)
+    {
+        string target = string.IsNullOrWhiteSpace(npcName) ? string.Empty : $" target={npcName}";
+        this.monitor.Log($"GameAgent player_interacted_with_npc ignored: reason={reason}{target}", LogLevel.Debug);
     }
 
     private bool IsCandidateInteractionButton(SButton button)

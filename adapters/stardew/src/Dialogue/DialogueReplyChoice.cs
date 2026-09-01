@@ -10,16 +10,15 @@ public sealed record DialogueReplyChoice(
     int SelectedOptionIndex
 )
 {
-    private const int MaxVisibleChoices = 4;
+    private const int MaxVisibleChoices = 3;
     private const string OptionResponseKeyPrefix = "gameagent_option_";
 
     public static IReadOnlyList<DialogueReplyChoice> BuildVisibleChoices(PresentDialogueInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        int generatedLimit = input.AllowFreeText ? MaxVisibleChoices - 1 : MaxVisibleChoices;
         List<DialogueReplyChoice> choices = input.ReplyOptions
-            .Take(generatedLimit)
+            .Take(MaxVisibleChoices)
             .Select((text, index) => new DialogueReplyChoice(BuildOptionResponseKey(index), text, index))
             .ToList();
 

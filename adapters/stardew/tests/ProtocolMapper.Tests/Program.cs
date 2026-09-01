@@ -108,6 +108,9 @@ store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", 
 store.CommitPending("event_player_1");
 activeConversation = store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local");
 Assert(activeConversation?.RecentLines.Single().Text == "Let's go fishing.", "accepted player line should enter conversation state");
+store.PreparePlayerLine("Farm_123456", "npc:Abigail", "player:local", "conv_1", "event_player_transient", "player:local", "Local Farmer", "Are you still there?", 1820);
+store.DiscardPending("event_player_transient");
+Assert(store.GetActiveConversation("Farm_123456", "npc:Abigail", "player:local") is not null, "discarding a transient rejected player line should keep the active conversation");
 string activeDialogueId = store.EnsureConversationId("Farm_123456", "npc:Abigail", "player:local");
 Assert(activeDialogueId == "conv_1", "dialogue display should reuse active conversation id");
 store.CloseIfConversation("Farm_123456", "npc:Abigail", "player:local", "conv_missing");
@@ -149,8 +152,11 @@ InteractionContextSnapshot interactionSnapshot = new(
     PlayerTileY: 12,
     MaxInteractionDistance: 2
 );
-interactionContexts.Reserve(interactionSnapshot);
+Assert(interactionContexts.TryReserve(interactionSnapshot, out string inFlightReason), "first interaction reserve should succeed");
+Assert(inFlightReason == "", "successful reserve should not report a failure reason");
 Assert(interactionContexts.TryGet("event_guard_1") is null, "interaction context should not be visible before EventAck.ACCEPTED");
+Assert(!interactionContexts.TryReserve(interactionSnapshot with { EventId = "event_guard_pending_2", ConversationId = "conv_guard_pending_2" }, out inFlightReason), "same NPC should be gated while a pending interaction is in flight");
+Assert(inFlightReason == "interaction_in_flight", "pending in-flight reserve should report interaction_in_flight");
 interactionContexts.Commit("event_guard_1");
 InteractionContextSnapshot? committedInteraction = interactionContexts.TryGet("event_guard_1");
 Assert(committedInteraction?.ConversationId == "conv_guard", "accepted event should expose interaction context snapshot");
@@ -181,13 +187,35 @@ InteractionContextCurrentState currentInteraction = new(
     PlayerTileX: 11,
     PlayerTileY: 12
 );
-Assert(interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction, out guardErrorCode, out _), "unchanged interaction context should pass effect-time guard");
-Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { ConversationId = "conv_changed" }, out guardErrorCode, out _), "changed conversation should fail effect-time guard");
-Assert(guardErrorCode == "interaction_context_changed", "changed conversation should use interaction_context_changed");
-Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerLocation = "Farm" }, out guardErrorCode, out _), "changed player location should fail effect-time guard");
-Assert(guardErrorCode == "interaction_context_changed", "changed location should use interaction_context_changed");
-Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerTileX = 20 }, out guardErrorCode, out _), "distance beyond max interaction distance should fail effect-time guard");
-Assert(guardErrorCode == "interaction_context_changed", "changed distance should use interaction_context_changed");
+Assert(interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction, requireProximity: true, out guardErrorCode, out _), "unchanged interaction context should pass effect-time guard");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { ConversationId = "conv_changed" }, requireProximity: true, out guardErrorCode, out _), "changed conversation should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_conversation_changed", "changed conversation should use interaction_context_conversation_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerLocation = "Farm" }, requireProximity: true, out guardErrorCode, out _), "changed player location should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_player_location_changed", "changed player location should use interaction_context_player_location_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerTileX = 20 }, requireProximity: true, out guardErrorCode, out string guardMessage), "distance beyond max interaction distance should fail effect-time guard");
+Assert(guardErrorCode == "interaction_context_distance_changed", "changed distance should use interaction_context_distance_changed");
+Assert(guardMessage.Contains("distance", StringComparison.OrdinalIgnoreCase), "distance guard failure should explain the concrete reason");
+Assert(interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerTileX = 20 }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should tolerate distance drift after source-time interaction gate");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { WorldId = "Farm_999999" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject world drift");
+Assert(guardErrorCode == "interaction_context_world_changed", "present_dialogue world drift should use interaction_context_world_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { NpcEntityId = "npc:Robin" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject npc entity drift");
+Assert(guardErrorCode == "interaction_context_entity_changed", "present_dialogue entity drift should use interaction_context_entity_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerEntityId = "player:remote" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject player entity drift");
+Assert(guardErrorCode == "interaction_context_player_changed", "present_dialogue player drift should use interaction_context_player_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { ConversationId = "conv_changed" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject conversation drift");
+Assert(guardErrorCode == "interaction_context_conversation_changed", "present_dialogue conversation drift should use interaction_context_conversation_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { NpcLocation = "Farm" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject npc location drift");
+Assert(guardErrorCode == "interaction_context_npc_location_changed", "present_dialogue npc location drift should use interaction_context_npc_location_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerLocation = "Farm" }, requireProximity: false, out guardErrorCode, out _), "present_dialogue should still reject player location drift");
+Assert(guardErrorCode == "interaction_context_player_location_changed", "present_dialogue player location drift should use interaction_context_player_location_changed");
+Assert(!interactionContexts.TryValidateCurrentState(committedInteraction, currentInteraction with { PlayerTileX = 20 }, requireProximity: true, out guardErrorCode, out _), "move_to should keep proximity guard for physical movement actions");
+Assert(guardErrorCode == "interaction_context_distance_changed", "move_to distance drift should use interaction_context_distance_changed");
+InteractionContextSnapshot dialogueContinuation = committedInteraction with { EventId = "event_player_reply" };
+Assert(interactionContexts.TryValidateCurrentState(dialogueContinuation, currentInteraction with { PlayerTileX = 20 }, requireProximity: false, out guardErrorCode, out _), "player dialogue continuation should tolerate distance drift after reply submission");
+Assert(!interactionContexts.TryValidateCurrentState(dialogueContinuation, currentInteraction with { PlayerLocation = "Farm" }, requireProximity: false, out guardErrorCode, out _), "player dialogue continuation should still reject location drift");
+Assert(guardErrorCode == "interaction_context_player_location_changed", "changed continuation location should use interaction_context_player_location_changed");
+Assert(!interactionContexts.TryReserve(interactionSnapshot with { EventId = "event_guard_committed_2", ConversationId = "conv_guard_committed_2" }, out inFlightReason), "same NPC should remain gated while a committed interaction is in flight");
+Assert(inFlightReason == "interaction_in_flight", "committed in-flight reserve should report interaction_in_flight");
 ActionRequest missingSourceAction = guardedAction.Clone();
 missingSourceAction.SourceEventId = "";
 Assert(!interactionContexts.TryResolve(missingSourceAction, out _, out guardErrorCode, out _), "missing source_event_id should reject interaction-bound action");
@@ -195,16 +223,34 @@ Assert(guardErrorCode == "interaction_context_missing", "missing source_event_id
 ActionRequest wrongEntityAction = guardedAction.Clone();
 wrongEntityAction.EntityId = "npc:Leah";
 Assert(!interactionContexts.TryResolve(wrongEntityAction, out _, out guardErrorCode, out _), "source context for a different entity should reject interaction-bound action");
-Assert(guardErrorCode == "interaction_context_changed", "wrong entity should use interaction_context_changed");
+Assert(guardErrorCode == "interaction_context_entity_changed", "wrong entity should use interaction_context_entity_changed");
+ActionRequest wrongWorldAction = guardedAction.Clone();
+wrongWorldAction.WorldId = "Farm_654321";
+Assert(!interactionContexts.TryResolve(wrongWorldAction, out _, out guardErrorCode, out _), "source context for a different world should reject interaction-bound action");
+Assert(guardErrorCode == "interaction_context_world_changed", "wrong world should use interaction_context_world_changed");
 interactionContexts.Reserve(interactionSnapshot with { ConversationId = "conv_overwritten" });
 interactionContexts.DiscardPending("event_guard_1");
 committedInteraction = interactionContexts.TryGet("event_guard_1");
 Assert(committedInteraction?.ConversationId == "conv_guard", "duplicate EventAck should not overwrite or release a committed interaction context");
 interactionContexts.Release(new TurnCompletion { EventId = "event_guard_1", Status = TurnCompletionStatus.Completed });
 Assert(interactionContexts.TryGet("event_guard_1") is null, "TurnCompletion should release interaction context");
+Assert(interactionContexts.TryReserve(interactionSnapshot with { EventId = "event_guard_after_completion", ConversationId = "conv_guard_after_completion" }, out inFlightReason), "released interaction should allow a new interaction for the same NPC");
+interactionContexts.DiscardPending("event_guard_after_completion");
 interactionContexts.Reserve(interactionSnapshot with { EventId = "event_guard_2" });
 interactionContexts.DiscardPending("event_guard_2");
 Assert(interactionContexts.TryGet("event_guard_2") is null, "rejected EventAck should discard reserved interaction context");
+InteractionContextStore handoffContexts = new();
+Assert(handoffContexts.TryReserve(interactionSnapshot, out inFlightReason), "handoff source interaction should reserve");
+handoffContexts.Commit("event_guard_1");
+InteractionContextSnapshot handoffSnapshot = interactionSnapshot with { EventId = "event_player_handoff", ConversationId = "conv_guard" };
+Assert(handoffContexts.TryReserveHandoff(handoffSnapshot, out inFlightReason), "player dialogue submission should hand off from the committed source interaction");
+Assert(handoffContexts.TryGet("event_guard_1") is null, "handoff should make the source interaction release a no-op");
+handoffContexts.Release(new TurnCompletion { EventId = "event_guard_1", Status = TurnCompletionStatus.Completed });
+Assert(!handoffContexts.TryReserve(interactionSnapshot with { EventId = "event_click_before_reply_done" }, out inFlightReason), "late source TurnCompletion should not release the submitted dialogue interaction");
+handoffContexts.Commit("event_player_handoff");
+handoffContexts.Release(new TurnCompletion { EventId = "event_player_handoff", Status = TurnCompletionStatus.Completed });
+Assert(handoffContexts.TryReserve(interactionSnapshot with { EventId = "event_after_handoff_done", ConversationId = "conv_after_handoff_done" }, out inFlightReason), "submitted dialogue TurnCompletion should release the interaction key");
+handoffContexts.DiscardPending("event_after_handoff_done");
 
 GameEvent gameEvent = ProtocolMapper.BuildPlayerInteractedWithNpcEvent(
     npcEntityId: "npc:Abigail",
@@ -486,20 +532,21 @@ Assert(!unknownRelationshipState.Fields.ContainsKey("hearts"), "unknown relation
 Assert(!RequireStruct(unknownRelationshipObservation.State, "stardew").Fields.ContainsKey("schedule"), "null schedule should be omitted");
 
 CapabilityList capabilities = CapabilityCatalog.BuildEnvironmentCapabilities();
-Capability speak = capabilities.Capabilities.Single(capability => capability.Name == "speak");
 Capability emote = capabilities.Capabilities.Single(capability => capability.Name == "emote");
 Capability presentDialogue = capabilities.Capabilities.Single(capability => capability.Name == "present_dialogue");
 Capability facePlayer = capabilities.Capabilities.Single(capability => capability.Name == "face_player");
 Capability moveTo = capabilities.Capabilities.Single(capability => capability.Name == "move_to");
-Assert(speak.Description.Contains("dialogue text", StringComparison.OrdinalIgnoreCase), "speak description should describe dialogue text effect");
+Assert(!capabilities.Capabilities.Any(capability => capability.Name == "speak"), "Stardew production capabilities should not expose speak");
 Assert(emote.Description.Contains("emote bubble", StringComparison.OrdinalIgnoreCase), "emote description should describe emote bubble effect");
 Assert(presentDialogue.Description.Contains("reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe reply options");
+Assert(presentDialogue.Description.Contains("up to three reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe the option limit");
+Assert(!presentDialogue.Description.Contains("up to four reply options", StringComparison.OrdinalIgnoreCase), "present_dialogue description should not advertise a fourth option");
 Assert(presentDialogue.Description.Contains("wait for player_said_to_npc", StringComparison.OrdinalIgnoreCase), "present_dialogue description should tell the agent to wait for player input");
 Assert(presentDialogue.Description.Contains("only tool call", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe exclusive tool-call use");
-Assert(presentDialogue.Description.Contains("conversation ends", StringComparison.OrdinalIgnoreCase), "present_dialogue description should describe ending without reply inputs");
+Assert(presentDialogue.Description.Contains("allow_free_text=false", StringComparison.OrdinalIgnoreCase), "present_dialogue description should require explicit free-text disable for ending");
+Assert(presentDialogue.Description.Contains("reply_options=[]", StringComparison.OrdinalIgnoreCase), "present_dialogue description should require empty reply options for ending");
 Assert(facePlayer.Description.Contains("face the player", StringComparison.OrdinalIgnoreCase), "face_player description should describe facing effect");
 Assert(moveTo.Description.Contains("reachable tile", StringComparison.OrdinalIgnoreCase), "move_to description should describe tile movement");
-Assert(speak.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "speak capability should be sequential");
 Assert(emote.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "emote capability should be sequential");
 Assert(presentDialogue.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "present_dialogue capability should be sequential");
 Assert(facePlayer.ConcurrencyMode == CapabilityConcurrencyMode.Sequential, "face_player capability should be sequential");
@@ -509,6 +556,8 @@ Assert(moveTo.InputSchemaJson.Contains("\"location\"", StringComparison.Ordinal)
 Assert(moveTo.InputSchemaJson.Contains("\"tile\"", StringComparison.Ordinal), "move_to schema should require tile");
 Assert(moveTo.InputSchemaJson.Contains("\"x\":{\"type\":\"integer\"}", StringComparison.Ordinal), "move_to tile x schema should require integer coordinates");
 Assert(moveTo.InputSchemaJson.Contains("\"y\":{\"type\":\"integer\"}", StringComparison.Ordinal), "move_to tile y schema should require integer coordinates");
+Assert(presentDialogue.InputSchemaJson.Contains("\"maxItems\":3", StringComparison.Ordinal), "present_dialogue schema should cap reply_options at three");
+Assert(presentDialogue.InputSchemaJson.Contains("\"allow_free_text\":{\"type\":\"boolean\",\"default\":true}", StringComparison.Ordinal), "present_dialogue schema should document allow_free_text default");
 Struct presentDialogueGameAgentExtensions = RequireStruct(presentDialogue.Extensions, "gameagent");
 Struct presentDialogueToolPolicy = RequireStruct(presentDialogueGameAgentExtensions, "tool_policy");
 Assert(presentDialogueToolPolicy.Fields["exclusive_per_step"].BoolValue, "present_dialogue should declare exclusive_per_step policy");
@@ -534,13 +583,32 @@ PresentDialogueInput presentInput = ProtocolMapper.RequirePresentDialogueArgumen
 Assert(presentInput.Text == "Want to explore the mines?", "present_dialogue text should parse");
 Assert(presentInput.ReplyOptions.SequenceEqual(new[] { "Yes", "Maybe later" }), "present_dialogue reply options should parse in order");
 Assert(presentInput.AllowFreeText, "present_dialogue allow_free_text should parse");
+ActionRequest defaultFreeTextRequest = presentDialogueRequest.Clone();
+defaultFreeTextRequest.Arguments.Fields.Remove("allow_free_text");
+PresentDialogueInput defaultFreeTextInput = ProtocolMapper.RequirePresentDialogueArgument(defaultFreeTextRequest);
+Assert(defaultFreeTextInput.AllowFreeText, "present_dialogue should default allow_free_text to true");
+ActionRequest explicitNoFreeTextRequest = presentDialogueRequest.Clone();
+explicitNoFreeTextRequest.Arguments.Fields["allow_free_text"] = Value.ForBool(false);
+PresentDialogueInput explicitNoFreeTextInput = ProtocolMapper.RequirePresentDialogueArgument(explicitNoFreeTextRequest);
+Assert(!explicitNoFreeTextInput.AllowFreeText, "present_dialogue should honor explicit allow_free_text=false");
+ActionRequest tooManyReplyOptionsRequest = presentDialogueRequest.Clone();
+tooManyReplyOptionsRequest.Arguments.Fields["reply_options"] = ValueList(
+    Value.ForString("One"),
+    Value.ForString("Two"),
+    Value.ForString("Three"),
+    Value.ForString("Four")
+);
+ExpectArgumentException(
+    () => ProtocolMapper.RequirePresentDialogueArgument(tooManyReplyOptionsRequest),
+    "3 options or fewer"
+);
 IReadOnlyList<DialogueReplyChoice> inlineTextChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
     "Question?",
     new[] { "One", "Two", "Three", "Four" },
     true
 ));
-Assert(inlineTextChoices.Count == 3, "inline free text should reserve the fourth row without becoming a clickable choice");
-Assert(inlineTextChoices.Select(choice => choice.Text).SequenceEqual(new[] { "One", "Two", "Three" }), "inline free text should only show the first three generated reply options");
+Assert(inlineTextChoices.Count == 3, "dialogue should show at most three generated reply options with free text");
+Assert(inlineTextChoices.Select(choice => choice.Text).SequenceEqual(new[] { "One", "Two", "Three" }), "dialogue should show the first three generated reply options");
 Assert(inlineTextChoices[0].SelectedOptionIndex == 0 && inlineTextChoices[2].SelectedOptionIndex == 2, "generated visible choices should keep their source option indexes");
 IReadOnlyList<DialogueReplyChoice> shortInlineTextChoices = DialogueReplyChoice.BuildVisibleChoices(new PresentDialogueInput(
     "Question?",
@@ -560,7 +628,7 @@ IReadOnlyList<DialogueReplyChoice> generatedOnlyChoices = DialogueReplyChoice.Bu
     new[] { "One", "Two", "Three", "Four" },
     false
 ));
-Assert(generatedOnlyChoices.Count == 4, "without free text all four generated options should remain visible");
+Assert(generatedOnlyChoices.Count == 3, "without free text generated options should still be capped at three");
 int npcLineShows = 0;
 int displayedCallbacks = 0;
 int replyMenuShows = 0;

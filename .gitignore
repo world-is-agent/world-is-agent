@@ -1,6 +1,7 @@
 # Build outputs
 bin/
 obj/
+runtime/server.exe
 
 # IDE/editor state
 .vs/
@@ -27,6 +28,9 @@ coverage.out
 
 # Local private config overrides
 runtime/config/*.local.json
+
+# Agent local instructions
+AGENTS.md
 
 docs/roadmap/
 

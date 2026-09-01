@@ -107,9 +107,9 @@ Common checks:
 go test ./runtime/... ./protocol/gen/go/...
 powershell -ExecutionPolicy Bypass -File protocol/tests/check-protocol-static.ps1
 powershell -ExecutionPolicy Bypass -File protocol/tests/check-go-generation.ps1
-dotnet run --project adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj
-dotnet run --project adapters/stardew/tests/ActionCancellationRegistry.Tests/ActionCancellationRegistry.Tests.csproj
-dotnet run --project adapters/stardew/tests/PlayerInteractProbe.Tests/PlayerInteractProbe.Tests.csproj
+dotnet test adapters/stardew/tests/ProtocolMapper.Tests/ProtocolMapper.Tests.csproj
+dotnet test adapters/stardew/tests/ActionCancellationRegistry.Tests/ActionCancellationRegistry.Tests.csproj
+dotnet test adapters/stardew/tests/PlayerInteractProbe.Tests/PlayerInteractProbe.Tests.csproj
 dotnet build adapters/stardew/GameAgent.Stardew.csproj
 ```
 

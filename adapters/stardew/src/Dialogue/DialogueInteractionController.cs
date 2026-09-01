@@ -18,7 +18,51 @@ public sealed record DialoguePresentation(
 public sealed class DialogueInteractionController
 {
     private readonly Queue<PendingDialoguePresentation> pending = new();
+    private readonly Queue<string> pendingWaiting = new();
+    private readonly HashSet<string> waitingNpcIds = new(StringComparer.Ordinal);
     private ActiveDialoguePresentation? active;
+
+    public void QueueWaitingForNpc(string npcEntityId)
+    {
+        if (string.IsNullOrWhiteSpace(npcEntityId))
+            return;
+
+        if (Game1.activeClickableMenu is DialogueWaitingMenu menu && menu.NpcEntityId == npcEntityId)
+            return;
+
+        if (this.waitingNpcIds.Add(npcEntityId))
+            this.pendingWaiting.Enqueue(npcEntityId);
+
+        this.TryShowWaiting();
+    }
+
+    public void CloseWaitingForNpc(string npcEntityId)
+    {
+        if (string.IsNullOrWhiteSpace(npcEntityId))
+            return;
+
+        this.waitingNpcIds.Remove(npcEntityId);
+        this.RemovePendingWaiting(npcEntityId);
+
+        if (Game1.activeClickableMenu is DialogueWaitingMenu menu && menu.NpcEntityId == npcEntityId)
+            menu.Close();
+
+        this.TryShowWaiting();
+    }
+
+    public void CloseAll()
+    {
+        this.active?.CloseWithoutSubmission();
+        this.active = null;
+        this.pending.Clear();
+        this.pendingWaiting.Clear();
+        this.waitingNpcIds.Clear();
+
+        if (Game1.activeClickableMenu is DialogueInteractionMenu interactionMenu)
+            interactionMenu.CloseWithoutSubmission();
+        else if (Game1.activeClickableMenu is DialogueWaitingMenu waitingMenu)
+            waitingMenu.Close();
+    }
 
     public void QueueOrShow(
         string npcEntityId,
@@ -38,6 +82,7 @@ public sealed class DialogueInteractionController
             this.active = null;
 
         this.TryShowNext();
+        this.TryShowWaiting();
     }
 
     public void CloseForNpc(string npcEntityId)
@@ -50,9 +95,14 @@ public sealed class DialogueInteractionController
 
         if (Game1.activeClickableMenu is DialogueInteractionMenu menu && menu.NpcEntityId == npcEntityId)
             menu.CloseWithoutSubmission();
+        else if (Game1.activeClickableMenu is DialogueWaitingMenu waitingMenu && waitingMenu.NpcEntityId == npcEntityId)
+            waitingMenu.Close();
 
         if (this.pending.Count == 0)
+        {
+            this.CloseWaitingForNpc(npcEntityId);
             return;
+        }
 
         PendingDialoguePresentation[] remaining = this.pending
             .Where(presentation => presentation.NpcEntityId != npcEntityId)
@@ -60,6 +110,8 @@ public sealed class DialogueInteractionController
         this.pending.Clear();
         foreach (PendingDialoguePresentation presentation in remaining)
             this.pending.Enqueue(presentation);
+
+        this.CloseWaitingForNpc(npcEntityId);
     }
 
     private void TryShowNext()
@@ -87,6 +139,32 @@ public sealed class DialogueInteractionController
                 pendingPresentation.OnFailed(ex);
             }
         }
+    }
+
+    private void TryShowWaiting()
+    {
+        while (this.active is null && !IsDialogueUiBusy() && this.pendingWaiting.Count > 0)
+        {
+            string npcEntityId = this.pendingWaiting.Dequeue();
+            if (!this.waitingNpcIds.Contains(npcEntityId))
+                continue;
+
+            Game1.activeClickableMenu = new DialogueWaitingMenu(npcEntityId);
+            return;
+        }
+    }
+
+    private void RemovePendingWaiting(string npcEntityId)
+    {
+        if (this.pendingWaiting.Count == 0)
+            return;
+
+        string[] remaining = this.pendingWaiting
+            .Where(waitingNpcEntityId => !string.Equals(waitingNpcEntityId, npcEntityId, StringComparison.Ordinal))
+            .ToArray();
+        this.pendingWaiting.Clear();
+        foreach (string waitingNpcEntityId in remaining)
+            this.pendingWaiting.Enqueue(waitingNpcEntityId);
     }
 
     private static bool IsDialogueUiBusy()

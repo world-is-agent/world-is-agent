@@ -22,8 +22,15 @@ function Search-Files {
         return @()
     }
 
-    Get-ChildItem -LiteralPath $Path -Recurse -File -Include $Include |
-        Where-Object { $_.FullName -notmatch '\\(\.local|bin|obj)\\' } |
+    Get-ChildItem -LiteralPath $Path -Recurse -File |
+        Where-Object {
+            $file = $_
+            $matchesInclude = ($Include | Where-Object { $file.Name -like $_ }).Count -gt 0
+            $matchesInclude -and
+                $file.FullName -notmatch '\\(\.local|bin|obj)\\' -and
+                $file.FullName -notmatch '\\runtime\\config\\games\\' -and
+                $file.Name -notmatch '_test\.go$'
+        } |
         Select-String -Pattern $Pattern -CaseSensitive:$false
 }
 

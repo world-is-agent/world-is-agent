@@ -1,4 +1,5 @@
 using GameAgent.Stardew.Events;
+using GameAgent.Stardew.Runtime;
 
 static void Assert(bool condition, string message)
 {
@@ -78,5 +79,7 @@ Assert(selected?.Name == "Linus", "left-click mode should still select direct bo
 Assert(PlayerInteractTrigger.FromButton("action") == "action_button", "action trigger should map to action_button");
 Assert(PlayerInteractTrigger.FromButton("mouse_left") == "mouse_left", "left mouse trigger should map to mouse_left");
 Assert(PlayerInteractTrigger.FromButton("mouse_right") == "mouse_right", "right mouse trigger should map to mouse_right");
+Assert(InteractionPolicy.IsWithinMaxInteractionDistance(npcTileX: 10, npcTileY: 10, playerTileX: 11, playerTileY: 11), "interaction policy should allow nearby NPC interactions");
+Assert(!InteractionPolicy.IsWithinMaxInteractionDistance(npcTileX: 10, npcTileY: 10, playerTileX: 13, playerTileY: 10), "interaction policy should reject too-far NPC interactions");
 
 Console.WriteLine("PlayerInteractProbe selector tests passed.");

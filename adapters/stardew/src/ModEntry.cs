@@ -18,7 +18,6 @@ public sealed class ModEntry : Mod
     private ConversationStateStore? conversationStore;
     private DialogueInteractionController? dialogueController;
     private ObservationBuilder? observationBuilder;
-    private SpeakCapability? speakCapability;
     private EmoteCapability? emoteCapability;
     private PresentDialogueCapability? presentDialogueCapability;
     private FacePlayerCapability? facePlayerCapability;
@@ -33,7 +32,6 @@ public sealed class ModEntry : Mod
         this.conversationStore = new ConversationStateStore(new ConversationIdGenerator());
         this.dialogueController = new DialogueInteractionController();
         this.observationBuilder = new ObservationBuilder(this.conversationStore);
-        this.speakCapability = new SpeakCapability();
         this.emoteCapability = new EmoteCapability();
         this.presentDialogueCapability = new PresentDialogueCapability(this.conversationStore, this.dialogueController);
         this.facePlayerCapability = new FacePlayerCapability();
@@ -43,7 +41,6 @@ public sealed class ModEntry : Mod
             this.dispatcher,
             this.observationBuilder,
             this.conversationStore,
-            this.speakCapability,
             this.emoteCapability,
             this.presentDialogueCapability,
             this.facePlayerCapability,

@@ -9,5 +9,6 @@
   <ItemGroup>
     <Compile Include="..\..\src\Events\PlayerInteractTargetSelector.cs" Link="PlayerInteractTargetSelector.cs" />
     <Compile Include="..\..\src\Events\PlayerInteractTrigger.cs" Link="PlayerInteractTrigger.cs" />
+    <Compile Include="..\..\src\Runtime\InteractionPolicy.cs" Link="InteractionPolicy.cs" />
   </ItemGroup>
 </Project>

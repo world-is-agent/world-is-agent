@@ -1,11 +1,11 @@
 # GameAgent Phase3–Phase8 阶段规划
 
-> **Version:** v0.9
+> **Version:** v1.0
 > **Status:** Roadmap Baseline  
-> **Date:** 2026-09-01
-> **Architecture Baseline:** GameAgent Runtime Architecture v0.6
-> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Implementation Complete + Phase6.5 Planning
-> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)（2026-08-27）；[Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）；[Phase6.5 Stardew Dialogue Interaction Convergence](../phase6.5/GameAgent MVP0 Phase6.5 技术开发与验收方案.md)（2026-09-01）
+> **Date:** 2026-09-02
+> **Architecture Baseline:** GameAgent Runtime Architecture v0.7
+> **Current Baseline:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Accepted + Phase6.5 Accepted
+> **Revision Source:** [评审意见](./评审意见.md)（Roadmap Review，2026-08-18）；[Phase3 评估](../phase3/评估.md)（Protocol v1alpha2 Decision，2026-08-20）；[多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[Stardew Adapter 方案对比](../adapter/Stardew Adapter 方案对比.md)（2026-08-27）；[Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）；[Phase6.5 Stardew Dialogue Interaction Convergence](../phase6.5/GameAgent MVP0 Phase6.5 技术开发与验收方案.md)（2026-09-02 Accepted）
 
 ---
 
@@ -21,7 +21,7 @@
 
 每个阶段完成并验收后，必须重新 Review：
 
-- 当前实现事实是否仍符合 Architecture v0.6；
+- 当前实现事实是否仍符合 Architecture v0.7；
 - 下一阶段是否仍是最高优先级；
 - 后续阶段是否需要合并、拆分或调整顺序；
 - 是否需要形成新的 Architecture Decision。
@@ -93,12 +93,12 @@ Accepted 状态的依据不在本文重复展开，以下文档作为当前 Road
 Phase3：用简单 Action 验证 Adapter 泛化。
 Phase5.6：用对话 UI 与 ContextFact 验证玩家输入到 AgentTurn / Recent Memory 的闭环。
 Phase6：用 Tool Policy、ActionRequest source correlation、TurnCompletion、Interaction Guard 和 move_to 验证异步 Action lifecycle 与 Turn resume。
-Phase6.5：用 Stardew Tool View 收敛、present_dialogue 默认输入、source-time gate 和 in-flight gate 验证玩家点击 NPC 的稳定对话体验。
+Phase6.5：用 Stardew Tool View 收敛、present_dialogue 默认输入、source-time gate、in-flight gate 和 waiting menu ActionRequest 边界验证玩家点击 NPC 的稳定对话体验。
 ```
 
 ## 3.3 每阶段结束后重新规划
 
-Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.6 的核心边界。
+Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实际代码和验收结果调整后续阶段，但不得静默破坏 Architecture v0.7 的核心边界。
 
 ---
 
@@ -113,7 +113,7 @@ Phase4–Phase8 都属于初始范围。上一阶段结束后，可以根据实�
 | Phase5.5 | Stardew Adapter Context Enrichment | Stardew Adapter 通过 Observation narrow waist 提供成熟的游戏当前事实 |
 | Phase5.6 | Stardew Dialogue Interaction Surface | 对话会话可以跨 Turn 延续；玩家回复事件、ContextFact、同步 UI 和 Recent Memory 能进入 Runtime 闭环 |
 | Phase6 | Tool Policy、Action Source、TurnCompletion、异步 Action 与 Turn Resume | Runtime 不按具体工具名执行特殊规则；Adapter 能把 Action 绑定回触发事件并释放 Turn 等待态；长时间 Action 不被建模为同步函数；Turn 可以等待并恢复 |
-| Phase6.5 | Stardew Dialogue Interaction Convergence | Stardew 玩家点击 NPC 默认进入稳定对话域；生产 Tool View 收敛到 present_dialogue / emote / face_player / move_to；自由输入、重复点击和对话结束语义稳定 |
+| Phase6.5 | Stardew Dialogue Interaction Convergence | Stardew 玩家点击 NPC 默认进入稳定对话域；生产 Tool View 收敛到 present_dialogue / emote / face_player / move_to；自由输入、重复点击、waiting menu 和对话结束语义稳定 |
 | Phase7 | Environment Recovery 与持久状态 | 连接重建、状态持久化和长期运行失败能够收敛 |
 | Phase8 | Evaluation 与产品化 | 系统可重复评估、定位、交付，并支持新 Adapter 接入 |
 
@@ -332,7 +332,7 @@ Phase5 Entry Gate 必须产出最小 FakeGame / non-Stardew fixture contract tes
 
 ## 完成条件
 
-- Architecture v0.6 已纳入 Agent Binding / Definition / Instance 分离；
+- Architecture v0.7 已纳入 Agent Binding / Definition / Instance 分离；
 - Context Architecture v0.2 已更新 Scope Contract；
 - Phase5 技术方案不再默认 `definition_id == entity_id`；
 - Phase5 技术方案在 AgentContext / AgentDefinition / Context Source 的签名、字段或数据源说明中显式区分 `definition_id` 与 `entity_id`；若 Phase5 仍不实现 AgentDefinition source，也必须写明当前降级策略不依赖 `definition_id == entity_id`；
@@ -597,6 +597,7 @@ Runtime 崩溃后的 continuation 恢复
 - 回复选项和自由输入入口稳定共存；
 - source-time interaction gate 使用与 effect-time guard 一致的距离规则；
 - 同一 NPC pending 或 committed interaction 完成前 suppress 重复点击；
+- waiting menu 只覆盖 Runtime 返回 ActionRequest 前的等待期，ActionRequest 到达后、执行 capability 前关闭；
 - submit close 与 abandon close 的 in-flight 释放语义明确；
 - Adapter 日志可以复盘 ActionRequest source correlation、ActionResult code/message 和 TurnCompletion 释放；
 - Runtime Core 保持 game-agnostic，不新增 Stardew capability name 执行分支。
@@ -624,6 +625,7 @@ capability-driven visible summary metadata
 - 玩家可以选择 option、输入 free text 或 Close / Escape 主动结束；
 - 连点 NPC 不产生重复 GameEvent、乱序回复或叠 UI，ACK 前重复点击也会被 pending in-flight gate 拦截；
 - source-time gate 与 effect-time guard 使用同一距离语义；
+- `move_to` 执行前关闭 waiting menu，不阻塞 Stardew world tick；
 - `present_dialogue` rejected / failed / cancelled 时 Adapter 日志包含 code/message；
 - 单句结束型 `present_dialogue` 不遗留 active conversation；
 - Runtime 默认 prompt 和执行路径不写死 Stardew tool name。
@@ -755,7 +757,7 @@ Trigger admission != hardcoded game-specific event_type
 Runtime tool policy != hardcoded game-specific capability name
 ```
 
-任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.6，并形成正式 Architecture Decision。
+任何 Phase 如果需要破坏这些不变量，必须先 Review Architecture v0.7，并形成正式 Architecture Decision。
 
 ---
 
@@ -802,12 +804,12 @@ Needs Follow-up
     Async Action Protocol Strategy ADR 必须 Accepted。
 
 进入 Phase6.5 implementation 前
-    Phase6 async lifecycle 必须 Implementation Complete。
+    Phase6 async lifecycle 必须 Accepted。
     Stardew 对话 UI 实机问题必须有可复现 trace 或 Adapter log。
     Phase6.5 技术开发与验收方案必须 Accepted。
 
 进入 Phase7 implementation 前
-    Phase6.5 必须 Accepted 或 Accepted with Known Limitations。
+    Phase6.5 必须 Accepted。
     session-scoped capability registry、reconnect recovery、persistent continuation 的优先级必须重新 Review。
 ```
 

@@ -1,9 +1,9 @@
 # GameAgent Runtime 整体架构设计规范
 
-> **Version:** v0.6
+> **Version:** v0.7
 > **Status:** Architecture Baseline
-> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted
-> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）
+> **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Accepted + Phase6.5 Accepted
+> **Revision Source:** [GameAgent 多游戏兼容性与 Agent Binding 决策](./GameAgent 多游戏兼容性与 Agent Binding 决策.md)（2026-08-22）；[GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR](../phase6/GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR.md)（2026-08-31）；[GameAgent MVP0 Phase6.5 技术开发与验收方案](../phase6.5/GameAgent MVP0 Phase6.5 技术开发与验收方案.md)（2026-09-02 Accepted）
 > **Purpose:** 定义 GameAgent 的长期架构边界、核心运行模型、模块职责、依赖方向和演进约束。
 > 本文中的 `MUST / MUST NOT / SHOULD / MAY` 为规范性关键词。
 
@@ -64,7 +64,7 @@ Phase 技术方案原则上 MUST 遵守本文。
 
 # 2. Baseline 来源
 
-Architecture v0.6 不是纯理论设计。
+Architecture v0.7 不是纯理论设计。
 
 它建立在已经完成并验收的多个真实阶段之上。
 
@@ -152,7 +152,7 @@ Memory load failure 可以 fail-open，Memory update failure 不改写已成功 
 确定性 gateway 测试可以覆盖同实体排队、跨 session reconnect、不同实体隔离和断线 drain。
 ```
 
-因此 v0.3 冻结的是：
+因此 v0.7 冻结的是：
 
 > **已经有真实证据支持的核心边界，以及为了后续演进必须提前保持的架构不变量。**
 
@@ -783,16 +783,23 @@ terminal result
 
 具体状态枚举由 Protocol 定义。
 
-当前：
+当前已验证的同步 / 短时 Action：
 
 ```text
-speak
 emote
+present_dialogue
+face_player
 ```
 
 属于短时 Action。
 
-Runtime 当前合法使用：
+当前已验证的异步 Action：
+
+```text
+move_to
+```
+
+Runtime 当前支持短时 Action 的 bounded wait：
 
 ```text
 SubmitAction
@@ -802,35 +809,34 @@ bounded wait
 ActionResult
 ```
 
-但 Architecture MUST NOT 假设：
-
-```text
-Action = synchronous function
-```
-
-未来长 Action，例如：
-
-```text
-move_to
-follow
-wait
-long interaction
-```
-
-必须能够自然演进到：
+Runtime 当前支持 `move_to` 的异步 suspend / resume：
 
 ```text
 ActionRequest
     ↓
 accepted / running
     ↓
-AgentTurn waiting
+AgentTurn suspended
     ↓
-suspend
+terminal ActionResult
     ↓
-Action terminal result
+re-observe
     ↓
 resume AgentTurn
+```
+
+但 Architecture MUST NOT 假设：
+
+```text
+Action = synchronous function
+```
+
+未来更多长 Action，例如：
+
+```text
+follow
+wait
+long interaction
 ```
 
 ## 12.1 ActionRequest Source、ActionResult 与 TurnCompletion
@@ -898,7 +904,7 @@ Memory payload
 
 Adapter MAY 使用 TurnCompletion 释放本地 interaction context、pending lock 或 UI 等待态。
 
-v0.6 冻结这些能力要求。
+v0.7 冻结这些能力要求。
 
 不冻结：
 
@@ -1292,7 +1298,7 @@ Tool Registry
 Model ToolDefinition
 ```
 
-当前 Phase2 尚未实现独立 Policy subsystem。
+当前 MVP0 已实现 capability metadata 驱动的最小 Tool Policy；尚未实现独立 Policy subsystem。
 
 当前 MVP 合法策略：
 
@@ -1466,17 +1472,19 @@ Tool
 └── Runtime Tool
 ```
 
-当前已实际实现：
+当前 Stardew 生产 Tool View 已实际暴露：
 
 ```text
 Environment Tool
-    speak
-    emote
     present_dialogue
+    emote
     face_player
+    move_to
 ```
 
-Phase6 待验证的异步 Environment Tool：
+`speak` 可作为 Adapter 侧 legacy / special capability code 保留，但不属于当前 Stardew 生产 Tool View。
+
+其中当前已实际验证的异步 Environment Tool：
 
 ```text
 move_to
@@ -1985,7 +1993,7 @@ Adapter MUST NOT：
 
 # 31. Stardew Adapter 当前边界
 
-Phase2 后 Stardew Adapter 已形成：
+Phase6.5 后 Stardew Adapter 已形成：
 
 ```text
 RuntimeClient
@@ -2003,8 +2011,14 @@ ObservationBuilder
 PlayerInteractProbe
     game interaction → GameEvent
 
-SpeakCapability
-    speak execution
+PresentDialogueCapability
+    dialogue UI execution
+
+FacePlayerCapability
+    turn-to-player execution
+
+MoveToCapability
+    async pathfinding execution
 
 EmoteCapability
     emote execution
@@ -2194,7 +2208,7 @@ idgen
     Runtime local ID generation
 ```
 
-这是 v0.3 当前实际 Minimal Core。
+这是 v0.7 当前实际 Minimal Core。
 
 ------
 
@@ -2594,7 +2608,7 @@ Dependency impact:
 
 # 45. 当前已验证的架构事实
 
-截至 Phase2 Accepted：
+截至 Phase6.5 Accepted：
 
 ```text
 1. Stardew Adapter 可以通过 gRPC 连接 Go Runtime。
@@ -2642,24 +2656,42 @@ Dependency impact:
 22. Stardew Adapter 可以通过 Observation.state.stardew 提供 namespaced 当前事实。
 
 23. Stardew Adapter 可以通过 conversation_id、present_dialogue、player_said_to_npc 和 face_player 提供正式对话交互面。
+
+24. Runtime Tool Policy 可以来自 Capability.extensions.gameagent.tool_policy。
+
+25. ActionRequest 可以携带 source_event_id / source_turn_id，将 Action 绑定回触发它的 GameEvent 和 AgentTurn。
+
+26. ActionResult 不再等价于 AgentTurn terminal signal。
+
+27. Runtime 可以通过 TurnCompletion 向 Adapter 投影 accepted GameEvent 的 Turn 终态。
+
+28. AgentTurn 可以 suspend / resume 异步 Action，并在 terminal ActionResult 后重新 Observation。
+
+29. Stardew Adapter 可以用 move_to 验证异步 ActionStatusUpdate / ActionResult 生命周期。
+
+30. Adapter 可以用 InteractionContextStore 绑定 source-time interaction facts，并在 effect time 校验 world、entity、conversation、location 与必要距离。
+
+31. Stardew 生产 Tool View 可以收敛为 present_dialogue / emote / face_player / move_to。
+
+32. Stardew present_dialogue 可以承载 NPC 台词、回复选项、free text 输入和单句结束语义。
+
+33. Stardew source-time gate 与 in-flight gate 可以防止重复点击导致的重复 GameEvent、乱序回复或叠 UI。
+
+34. Stardew waiting menu 属于 Adapter UX；它在 Runtime 返回 ActionRequest 前锁住玩家输入，并在执行 capability 前关闭，不进入 Runtime / Protocol 契约。
 ```
 
-这些构成 v0.6 的实际证据基础。
+这些构成 v0.7 的实际证据基础。
 
 ------
 
-# 46. 已确定但尚未实现的 Architecture Contracts
+# 46. 已确定但仍需继续完善的 Architecture Contracts
 
-以下能力尚未完整实现，但架构边界已经确定：
+以下能力已有边界定义，但在 Phase7+ 仍需继续产品化、持久化或泛化：
 
 ```text
 EnvironmentSession != AgentSession
 
 AgentSession 是长期 Agent identity / state boundary
-
-1 AgentTurn 可以包含多个有界 AgentStep
-
-1 AgentStep 可以包含 ordered ToolCall batch
 
 Event Ingress 与 TriggerDecision 应逻辑分离
 
@@ -2667,21 +2699,7 @@ TriggerDecision 与 EventAck 应逻辑分离
 
 Runtime 必须允许 Policy 位于 Capability 与 Tool exposure 之间
 
-Runtime tool policy 必须来自结构化 capability metadata，不来自 game-specific capability name
-
-Tool-specific Turn 收敛语义应由 Capability.extensions.gameagent.tool_policy 承载，不应硬编码在 Runtime Core 的 capability name 分支里
-
-Action 模型必须允许长时间异步执行
-
-ActionRequest 必须能把事件触发的 Action 绑定回 source_event_id / source_turn_id
-
-AgentTurn 必须允许未来 waiting / suspend / resume
-
-ActionResult 不等于 AgentTurn terminal signal
-
-Runtime 必须能通过 TurnCompletion 向 Adapter 投影 accepted GameEvent 的 Turn 终态
-
-TurnCompletion 不暴露 AgentStep、model transcript 或 ToolResult transcript
+Runtime tool policy 必须继续来自结构化 capability metadata，不来自 game-specific capability name
 
 Memory 必须绑定 AgentSession，而不是 EnvironmentSession
 
@@ -2698,6 +2716,10 @@ Observation 必须保持 narrow waist，不因单个游戏字段膨胀 Protocol
 Available Tools 是当前 AgentTurn 的 dynamic capability view
 
 Environment Capability 可以声明 concurrency_mode
+
+session-scoped capability registry 属于 Phase7+ 范围
+
+Runtime restart recovery 与 persistent continuation 属于 Phase7+ 范围
 ```
 
 这些属于：
@@ -2714,7 +2736,7 @@ Current Feature
 
 ------
 
-# 47. v0.3 明确不冻结的内容
+# 47. v0.7 明确不冻结的内容
 
 以下设计必须等对应 Phase 有真实需求后再确定：
 
@@ -2764,7 +2786,7 @@ Trace backend
 Evaluation framework
 ```
 
-这些内容不得因为 Architecture v0.6 存在就被认为已经设计完成。
+这些内容不得因为 Architecture v0.7 存在就被认为已经设计完成。
 
 ------
 
@@ -2862,4 +2884,4 @@ Adapter owns translation.
 Game owns execution.
 ```
 
-这组边界构成 **GameAgent Runtime Architecture v0.6 Baseline**。
+这组边界构成 **GameAgent Runtime Architecture v0.7 Baseline**。

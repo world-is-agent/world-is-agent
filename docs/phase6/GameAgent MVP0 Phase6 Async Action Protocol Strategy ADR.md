@@ -1,6 +1,6 @@
 # GameAgent MVP0 Phase6 Async Action Protocol Strategy ADR
 
-> **Status:** Proposed for Phase6 Implementation
+> **Status:** Accepted
 > **Date:** 2026-08-31
 > **Scope:** Tool Policy Generalization, Async Action Lifecycle, Action Source Correlation and Turn Completion Protocol Strategy
 > **Architecture Baseline:** GameAgent Runtime Architecture v0.6

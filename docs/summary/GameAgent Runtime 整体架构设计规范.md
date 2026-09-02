@@ -1,5 +1,7 @@
 # GameAgent Runtime 整体架构设计规范
 
+> **Public Documentation Note (2026-09-01):** 根目录 [ARCHITECTURE.md](../../ARCHITECTURE.md)、[ROADMAP.md](../../ROADMAP.md) 和 [docs/STATUS.md](../STATUS.md) 是 GitHub 首次读者的公开事实源。本文保留为详细架构基线和设计约束资料。
+>
 > **Version:** v0.7
 > **Status:** Architecture Baseline
 > **Baseline Evidence:** Phase1 Accepted + Phase2 Accepted + Phase3 Accepted + Phase4 Accepted + Phase5 Accepted + Phase5.5 Accepted + Phase5.6 Accepted + Phase6 Accepted + Phase6.5 Accepted

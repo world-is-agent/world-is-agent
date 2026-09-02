@@ -1,5 +1,7 @@
 # GameAgent Phase3–Phase8 阶段规划
 
+> **Public Documentation Note (2026-09-01):** 根目录 [ROADMAP.md](../../ROADMAP.md) 和 [docs/STATUS.md](../STATUS.md) 是当前公开 Roadmap 与能力状态入口。本文保留为阶段规划、阶段验收和内部开发节奏资料。
+>
 > **Version:** v1.0
 > **Status:** Roadmap Baseline  
 > **Date:** 2026-09-02
